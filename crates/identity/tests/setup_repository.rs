@@ -6,9 +6,10 @@
 //! 不接收外部输入，也不使用豁免审计的包装。
 
 use std::{
+    panic::Location,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use newapi_identity::{
@@ -66,7 +67,8 @@ const SETUP_REFUSING_PRIMARY_TABLE: &str = "CREATE TABLE setups (id BIGINT PRIMA
 const SOFT_DELETED_ROOT: &str = "INSERT INTO users(username,password,role,deleted_at,aff_code) VALUES ('管理员','old',100,'2026-01-01 00:00:00','old-aff')";
 const LEGACY_SETUP: &str = "INSERT INTO setups(id) VALUES (42)";
 const DROP_USER_COLUMN: &str = "ALTER TABLE users RENAME COLUMN aff_history TO wrong_aff_history";
-const RESTORE_USER_COLUMN: &str = "ALTER TABLE users RENAME COLUMN wrong_aff_history TO aff_history";
+const RESTORE_USER_COLUMN: &str =
+    "ALTER TABLE users RENAME COLUMN wrong_aff_history TO aff_history";
 const OPTIONS_WITHOUT_KEY: &str = "CREATE TABLE options (\"key\" TEXT, value TEXT)";
 const DROP_OPTIONS: &str = "DROP TABLE options";
 const DROP_SETUPS: &str = "DROP TABLE setups";
@@ -83,55 +85,172 @@ const SELF_USE_MODE: &str = "SELECT value FROM options WHERE \"key\" = 'SelfUseM
 const DEMO_SITE_MODE: &str = "SELECT value FROM options WHERE \"key\" = 'DemoSiteEnabled'";
 const FIRST_OPTION_VALUE: &str = "SELECT value FROM options";
 
-/// 测试专用执行：内容仅为固定常量或由固定表列白名单生成的 DDL。
-async fn execute(db: &Database, statement: &str) {
-    let result = match db {
-        Database::Sqlite(pool) => sqlx::QueryBuilder::new("")
-            .push(statement)
-            .build()
-            .execute(pool)
-            .await
-            .map(|_| ()),
-        Database::Postgres(pool) => sqlx::QueryBuilder::new("")
-            .push(statement)
-            .build()
-            .execute(pool)
-            .await
-            .map(|_| ()),
-    };
-    assert!(result.is_ok(), "测试数据库语句失败");
+// 标签由固定常量映射，绝不打印 SQL、参数、返回值或原始错误消息。
+fn action(statement: &str) -> &'static str {
+    match statement {
+        SQLITE_USERS_TABLE | POSTGRES_USERS_TABLE => "create_users",
+        SETUPS_TABLE => "create_setups",
+        OPTIONS_TABLE => "create_options",
+        MODE_REFUSING_OPTIONS_TABLE => "create_options_mode_failure",
+        SETUP_REFUSING_PRIMARY_TABLE => "create_setups_commit_failure",
+        OPTIONS_WITHOUT_KEY => "create_options_without_key",
+        MODE_SEED => "seed_mode",
+        SOFT_DELETED_ROOT => "seed_soft_deleted_root",
+        LEGACY_SETUP => "seed_legacy_setup",
+        DROP_USER_COLUMN => "rename_aff_history_away",
+        RESTORE_USER_COLUMN => "restore_aff_history",
+        DROP_OPTIONS => "drop_options",
+        DROP_SETUPS => "drop_setups",
+        CREATE_EMAIL_INDEX => "create_email_index",
+        DELETE_SETUPS => "delete_setups",
+        "DELETE FROM users" => "delete_users",
+        "DELETE FROM options" => "delete_options",
+        COUNT_SETUPS | ROOT_SETUP_COUNT => "count_setups",
+        COUNT_USERS | ROOT_USER_COUNT => "count_users",
+        COUNT_OPTIONS => "count_options",
+        USER_PASSWORD => "read_password_without_logging_value",
+        SELF_USE_MODE | DEMO_SITE_MODE | FIRST_OPTION_VALUE => "read_mode",
+        _ => "create_baseline_columns",
+    }
 }
 
-async fn count(db: &Database, statement: &str) -> i64 {
+fn pool_state(db: &Database) -> (&'static str, u32, usize) {
     match db {
-        Database::Sqlite(pool) => sqlx::QueryBuilder::new("")
-            .push(statement)
-            .build_query_scalar()
-            .fetch_one(pool)
-            .await,
-        Database::Postgres(pool) => sqlx::QueryBuilder::new("")
-            .push(statement)
-            .build_query_scalar()
-            .fetch_one(pool)
-            .await,
+        Database::Sqlite(pool) => ("sqlite", pool.size(), pool.num_idle()),
+        Database::Postgres(pool) => ("postgres", pool.size(), pool.num_idle()),
     }
-    .unwrap_or_else(|_| panic!("测试数据库计数失败"))
 }
 
-async fn text(db: &Database, statement: &str) -> String {
-    match db {
-        Database::Sqlite(pool) => sqlx::QueryBuilder::new("")
-            .push(statement)
-            .build_query_scalar()
-            .fetch_one(pool)
-            .await,
-        Database::Postgres(pool) => sqlx::QueryBuilder::new("")
-            .push(statement)
-            .build_query_scalar()
-            .fetch_one(pool)
-            .await,
+fn error_class(error: &sqlx::Error) -> &'static str {
+    match error {
+        sqlx::Error::Database(db) => match db.code().as_deref() {
+            Some("5" | "261" | "517" | "773") => "sqlite_busy",
+            Some("6" | "262" | "518") => "sqlite_locked",
+            Some("17") => "sqlite_schema_changed",
+            Some("1") => "sqlite_sql_error",
+            Some("40P01") => "postgres_deadlock",
+            Some("55P03") => "postgres_lock_unavailable",
+            Some("40001") => "postgres_serialization",
+            Some("42P01" | "42703") => "postgres_schema_missing",
+            _ => "database_other",
+        },
+        sqlx::Error::PoolTimedOut => "pool_timeout",
+        sqlx::Error::PoolClosed => "pool_closed",
+        sqlx::Error::Io(_) => "io",
+        sqlx::Error::Protocol(_) => "protocol",
+        sqlx::Error::RowNotFound => "row_not_found",
+        _ => "sqlx_other",
     }
-    .unwrap_or_else(|_| panic!("测试数据库投影失败"))
+}
+
+fn diagnostic_result<T>(
+    result: Result<T, sqlx::Error>,
+    db: &Database,
+    label: &str,
+    caller: &'static Location<'static>,
+    started: Instant,
+) -> T {
+    let (backend, size, idle) = pool_state(db);
+    let elapsed_ms = started.elapsed().as_millis();
+    match result {
+        Ok(value) => {
+            eprintln!("setup_fixture ok backend={backend} action={label} caller={caller} elapsed_ms={elapsed_ms} pool_size={size} pool_idle={idle}");
+            value
+        }
+        Err(error) => {
+            let class = error_class(&error);
+            // 仅接受 SQLite 数字码或 PG 五位 SQLSTATE，避免输出服务端任意文本。
+            let code = match &error {
+                sqlx::Error::Database(db_error) => db_error.code().and_then(|code| {
+                    let valid = match backend {
+                        "sqlite" => code.len() <= 10 && code.bytes().all(|b| b.is_ascii_digit()),
+                        _ => code.len() == 5 && code.bytes().all(|b| b.is_ascii_alphanumeric()),
+                    };
+                    (valid && !code.is_empty()).then(|| code.into_owned())
+                }),
+                _ => None,
+            };
+            let code = code.as_deref().unwrap_or("unavailable");
+            panic!("setup_fixture failed backend={backend} action={label} caller={caller} class={class} code={code} elapsed_ms={elapsed_ms} pool_size={size} pool_idle={idle}");
+        }
+    }
+}
+
+// track_caller 必须位于同步入口；直接标在 async fn 上不会捕获调用者。
+// 返回 future 前保存调用位置；不主动等待回滚、关闭缓存或增加数据库操作。
+// 日志本身可能影响调度，单次通过不能证明竞态消失。
+#[track_caller]
+fn execute<'a>(db: &'a Database, statement: &'a str) -> impl Future<Output = ()> + 'a {
+    let caller = Location::caller();
+    async move {
+        let started = Instant::now();
+        let label = action(statement);
+        let result = match db {
+            Database::Sqlite(pool) => sqlx::QueryBuilder::new("")
+                .push(statement)
+                .build()
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Postgres(pool) => sqlx::QueryBuilder::new("")
+                .push(statement)
+                .build()
+                .execute(pool)
+                .await
+                .map(|_| ()),
+        };
+        diagnostic_result(result, db, label, caller, started)
+    }
+}
+
+#[track_caller]
+fn count<'a>(db: &'a Database, statement: &'a str) -> impl Future<Output = i64> + 'a {
+    let caller = Location::caller();
+    async move {
+        let started = Instant::now();
+        let result = match db {
+            Database::Sqlite(pool) => {
+                sqlx::QueryBuilder::new("")
+                    .push(statement)
+                    .build_query_scalar()
+                    .fetch_one(pool)
+                    .await
+            }
+            Database::Postgres(pool) => {
+                sqlx::QueryBuilder::new("")
+                    .push(statement)
+                    .build_query_scalar()
+                    .fetch_one(pool)
+                    .await
+            }
+        };
+        diagnostic_result(result, db, action(statement), caller, started)
+    }
+}
+
+#[track_caller]
+fn text<'a>(db: &'a Database, statement: &'a str) -> impl Future<Output = String> + 'a {
+    let caller = Location::caller();
+    async move {
+        let started = Instant::now();
+        let result = match db {
+            Database::Sqlite(pool) => {
+                sqlx::QueryBuilder::new("")
+                    .push(statement)
+                    .build_query_scalar()
+                    .fetch_one(pool)
+                    .await
+            }
+            Database::Postgres(pool) => {
+                sqlx::QueryBuilder::new("")
+                    .push(statement)
+                    .build_query_scalar()
+                    .fetch_one(pool)
+                    .await
+            }
+        };
+        diagnostic_result(result, db, action(statement), caller, started)
+    }
 }
 
 fn input() -> CompleteSetup {
@@ -168,6 +287,9 @@ async fn remaining_columns_fixture(db: &Database) {
             .map(|column| format!("\"{column}\" TEXT"))
             .collect::<Vec<_>>()
             .join(",");
+        // 只输出白名单表名，帮助定位同一调用行上的不同建表操作。
+        let (backend, size, idle) = pool_state(db);
+        eprintln!("setup_fixture begin backend={backend} action=create_baseline_columns table={table} pool_size={size} pool_idle={idle}");
         execute(db, &format!("CREATE TABLE \"{table}\" ({definitions})")).await;
     }
 }
@@ -178,13 +300,22 @@ async fn reset_rows(db: &Database) {
     }
 }
 
+// 快照不获取连接、不清理缓存、不等待回滚；空闲数只是观测，不证明无锁。
+fn checkpoint(db: &Database, second: &Database, phase: &str) {
+    let (backend, size, idle) = pool_state(db);
+    let (_, second_size, second_idle) = pool_state(second);
+    eprintln!("setup_fixture phase={phase} backend={backend} pool_size={size} pool_idle={idle} second_size={second_size} second_idle={second_idle}");
+}
+
 async fn scenarios(db: &Database, second: &Database) {
+    checkpoint(db, second, "empty_schema");
     let repo = SetupRepository::new(db.clone());
     assert_eq!(repo.inspect().await, Err(SetupError::SchemaNotReady));
     assert_eq!(
         repo.complete(input()).await,
         Err(SetupError::SchemaNotReady)
     );
+    checkpoint(db, second, "after_empty_schema_errors_before_ddl");
     core_fixture(db).await;
     // 只有三张表必须拒绝，不能用最小 fixture 宣称系统完成。
     assert_eq!(repo.inspect().await, Err(SetupError::SchemaNotReady));
@@ -193,6 +324,7 @@ async fn scenarios(db: &Database, second: &Database) {
         Err(SetupError::SchemaNotReady)
     );
     assert_eq!(count(db, COUNT_SETUPS).await, 0);
+    checkpoint(db, second, "after_partial_schema_errors_before_ddl");
     remaining_columns_fixture(db).await;
     let initial = repo.inspect().await.expect("读取初始状态");
     assert!(!initial.initialized);
@@ -201,7 +333,9 @@ async fn scenarios(db: &Database, second: &Database) {
 
     // 两个独立连接池模拟独立实例，不能依赖仓储对象或进程互斥锁。
     let other = SetupRepository::new(second.clone());
+    checkpoint(db, second, "before_concurrent_complete");
     let (first, second_result) = tokio::join!(repo.complete(input()), other.complete(input()));
+    checkpoint(db, second, "after_concurrent_complete");
     assert_eq!(
         usize::from(first.is_ok()) + usize::from(second_result.is_ok()),
         1
@@ -263,6 +397,7 @@ async fn scenarios(db: &Database, second: &Database) {
     assert_eq!(count(db, COUNT_OPTIONS).await, 0);
 
     // 第二个模式保存失败：root 及第一个模式更新必须全部回滚。
+    checkpoint(db, second, "before_mode_failure_ddl");
     reset_rows(db).await;
     execute(db, DROP_OPTIONS).await;
     execute(db, MODE_REFUSING_OPTIONS_TABLE).await;
@@ -278,6 +413,7 @@ async fn scenarios(db: &Database, second: &Database) {
     execute(db, OPTIONS_TABLE).await;
 
     // 最后一步失败也不能留下 root 或模式，错误不能被吞成已初始化。
+    checkpoint(db, second, "before_setup_failure_ddl");
     execute(db, DROP_SETUPS).await;
     execute(db, SETUP_REFUSING_PRIMARY_TABLE).await;
     assert_eq!(
@@ -288,6 +424,7 @@ async fn scenarios(db: &Database, second: &Database) {
     assert_eq!(count(db, COUNT_OPTIONS).await, 0);
 
     // 缺列和缺唯一性都拒绝，不偷偷迁移。
+    checkpoint(db, second, "before_column_rename_ddl");
     execute(db, DROP_USER_COLUMN).await;
     assert_eq!(repo.inspect().await, Err(SetupError::SchemaNotReady));
     execute(db, RESTORE_USER_COLUMN).await;

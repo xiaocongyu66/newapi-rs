@@ -1,6 +1,7 @@
 use newapi_security::{
-    ApiKeyGrant, ApiKeyMode, ApiKeyStatus, AuthContext, CredentialKind, Denial, OriginRequest, Role,
-    authorize_role, check_api_key, check_ip_allowlist, check_session_origin, require_browser_session,
+    ApiKeyGrant, ApiKeyMode, ApiKeyStatus, AuthContext, CredentialKind, Denial, OriginRequest,
+    Role, authorize_role, check_api_key, check_ip_allowlist, check_session_origin,
+    require_browser_session,
 };
 
 fn auth(kind: CredentialKind) -> AuthContext<'static> {
@@ -99,7 +100,10 @@ fn api_key_readonly_and_full_boundaries() {
     let context = auth(CredentialKind::RelayApiKey);
     let ip = "127.0.0.1".parse().unwrap();
     let mut key = grant();
-    assert_eq!(check_api_key(&context, &key, ApiKeyMode::Full, 100, ip), Ok(()));
+    assert_eq!(
+        check_api_key(&context, &key, ApiKeyMode::Full, 100, ip),
+        Ok(())
+    );
     assert_eq!(
         check_api_key(&context, &key, ApiKeyMode::Full, 101, ip),
         Err(Denial::ApiKeyExpired)
@@ -111,7 +115,10 @@ fn api_key_readonly_and_full_boundaries() {
         Err(Denial::ApiKeyExhausted)
     );
     key.unlimited_quota = true;
-    assert_eq!(check_api_key(&context, &key, ApiKeyMode::Full, 101, ip), Ok(()));
+    assert_eq!(
+        check_api_key(&context, &key, ApiKeyMode::Full, 101, ip),
+        Ok(())
+    );
     key.allowed_ips = &["192.0.2.0/24"];
     assert_eq!(
         check_api_key(&context, &key, ApiKeyMode::Full, 101, ip),
@@ -156,8 +163,16 @@ fn ipv4_ipv6_and_malformed_networks() {
         (vec!["2001:db8::/32"], "2001:db8::1", Ok(())),
         (vec!["::1"], "::1", Ok(())),
         (vec!["::1"], "127.0.0.1", Err(Denial::IpForbidden)),
-        (vec!["127.0.0.1", "坏配置"], "127.0.0.1", Err(Denial::InvalidIpPolicy)),
-        (vec!["192.0.2.0/33"], "192.0.2.1", Err(Denial::InvalidIpPolicy)),
+        (
+            vec!["127.0.0.1", "坏配置"],
+            "127.0.0.1",
+            Err(Denial::InvalidIpPolicy),
+        ),
+        (
+            vec!["192.0.2.0/33"],
+            "192.0.2.1",
+            Err(Denial::InvalidIpPolicy),
+        ),
     ] {
         assert_eq!(check_ip_allowlist(&entries, ip.parse().unwrap()), expected);
     }

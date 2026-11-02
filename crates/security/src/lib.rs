@@ -261,7 +261,8 @@ fn parse_origin(value: &str, referer: bool) -> Result<Origin, Denial> {
         .unwrap_or((before_fragment, ""));
     let path = unescape(path, false)?;
     let fragment = unescape(fragment, false)?;
-    if !referer && (!matches!(path.as_str(), "" | "/") || !query.is_empty() || !fragment.is_empty()) {
+    if !referer && (!matches!(path.as_str(), "" | "/") || !query.is_empty() || !fragment.is_empty())
+    {
         return Err(Denial::OriginForbidden);
     }
     let (hostname, port) = if let Some(bracketed) = authority.strip_prefix('[') {
@@ -334,7 +335,11 @@ pub fn check_session_origin(request: &OriginRequest<'_>) -> Result<(), Denial> {
     let [host] = request.host_headers else {
         return Err(Denial::OriginForbidden);
     };
-    let scheme = if request.transport_tls { "https" } else { "http" };
+    let scheme = if request.transport_tls {
+        "https"
+    } else {
+        "http"
+    };
     if parse_origin(&format!("{scheme}://{host}"), false).is_ok_and(|local| candidate == local) {
         return Ok(());
     }

@@ -14,9 +14,7 @@ fn boolean(object: &Value, key: &str) -> bool {
 }
 
 fn text<'a>(object: &'a Value, key: &str) -> &'a str {
-    field(object, key)
-        .as_str()
-        .expect("预言机字段必须是字符串")
+    field(object, key).as_str().expect("预言机字段必须是字符串")
 }
 
 fn headers<'a>(object: &'a Value, key: &str) -> Vec<&'a str> {
@@ -109,7 +107,10 @@ fn origin_matches_go_oracle() {
     ] {
         assert!(names.contains(required), "预言机缺少必需回归用例");
     }
-    assert!(allowed_count > 0 && denied_count > 0, "预言机必须覆盖允许与拒绝");
+    assert!(
+        allowed_count > 0 && denied_count > 0,
+        "预言机必须覆盖允许与拒绝"
+    );
     assert!(
         mismatches.is_empty(),
         "Go/Rust 来源判定不一致（序号、Go、Rust）：{mismatches:?}"
