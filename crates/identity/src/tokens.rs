@@ -1,5 +1,5 @@
 //! JWT 编码与用途隔离；时间由调用方注入，禁止读取隐式系统时钟。
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{Engine, alphabet, engine::general_purpose};
 use hmac::Mac;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,11 @@ pub const PROOF_TTL: i64 = 300;
 pub const LEEWAY: i64 = 5;
 const ISSUER: &str = "new-api";
 const AUDIENCE: &str = "new-api-dashboard";
+// Go RawURLEncoding 默认允许未使用位非零，不允许 padding。
+const URL_SAFE_NO_PAD: general_purpose::GeneralPurpose = general_purpose::GeneralPurpose::new(
+    &alphabet::URL_SAFE,
+    general_purpose::NO_PAD.with_decode_allow_trailing_bits(true),
+);
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
@@ -73,7 +78,11 @@ pub enum DashboardAccess {
 }
 
 impl AuthKeys {
-    pub fn issue_access(&self, identity: &AuthIdentity, now: i64) -> Result<IssuedToken, AuthError> {
+    pub fn issue_access(
+        &self,
+        identity: &AuthIdentity,
+        now: i64,
+    ) -> Result<IssuedToken, AuthError> {
         self.issue_access_with_jti(identity, now, &random_uuid()?)
     }
 
@@ -121,9 +130,13 @@ impl AuthKeys {
         }
         let (purpose, key, ttl, method, scopes) = match proof {
             None => ("access", &self.access, ACCESS_TTL, "", &[][..]),
-            Some((method, scopes)) if !method.trim().is_empty() && !scopes.is_empty() => {
-                ("security_proof", &self.proof, PROOF_TTL, method.trim(), scopes)
-            }
+            Some((method, scopes)) if !method.trim().is_empty() && !scopes.is_empty() => (
+                "security_proof",
+                &self.proof,
+                PROOF_TTL,
+                method.trim(),
+                scopes,
+            ),
             Some(_) => return Err(AuthError::Invalid),
         };
         let expires_at = now.checked_add(ttl).ok_or(AuthError::Invalid)?;
@@ -169,7 +182,9 @@ impl AuthKeys {
     pub fn parse_dashboard_access(&self, raw: &str, now: i64) -> DashboardAccess {
         match classify_dashboard(raw) {
             CredentialKind::Opaque => DashboardAccess::Opaque,
-            CredentialKind::InternalDashboard => DashboardAccess::Internal(self.parse_access(raw, now)),
+            CredentialKind::InternalDashboard => {
+                DashboardAccess::Internal(self.parse_access(raw, now))
+            }
         }
     }
 
@@ -184,22 +199,35 @@ impl AuthKeys {
         identity.validate()?;
         let claims = self.parse(raw, "security_proof", &self.proof, now)?;
         let actual = claims.identity()?;
-        let bound = equal(&actual.user_id.to_be_bytes(), &identity.user_id.to_be_bytes())
-            & equal(actual.sid.as_bytes(), identity.sid.as_bytes())
-            & equal(&actual.user_auth_version.to_be_bytes(), &identity.user_auth_version.to_be_bytes())
-            & equal(&actual.session_version.to_be_bytes(), &identity.session_version.to_be_bytes());
+        let bound = equal(
+            &actual.user_id.to_be_bytes(),
+            &identity.user_id.to_be_bytes(),
+        ) & equal(actual.sid.as_bytes(), identity.sid.as_bytes())
+            & equal(
+                &actual.user_auth_version.to_be_bytes(),
+                &identity.user_auth_version.to_be_bytes(),
+            )
+            & equal(
+                &actual.session_version.to_be_bytes(),
+                &identity.session_version.to_be_bytes(),
+            );
         if !bound || claims.method.is_empty() || claims.scopes.is_empty() {
             return Err(AuthError::Invalid);
         }
-        let method_allowed = allowed_methods.iter().fold(allowed_methods.is_empty(), |found, method| {
-            found | equal(method.as_bytes(), claims.method.as_bytes())
-        });
+        let method_allowed = allowed_methods
+            .iter()
+            .fold(allowed_methods.is_empty(), |found, method| {
+                found | equal(method.as_bytes(), claims.method.as_bytes())
+            });
         if !method_allowed {
             return Err(AuthError::ProofMethod);
         }
-        let scope_allowed = claims.scopes.iter().fold(required_scope.is_empty(), |found, scope| {
-            found | equal(scope.as_bytes(), required_scope.as_bytes())
-        });
+        let scope_allowed = claims
+            .scopes
+            .iter()
+            .fold(required_scope.is_empty(), |found, scope| {
+                found | equal(scope.as_bytes(), required_scope.as_bytes())
+            });
         if !scope_allowed {
             return Err(AuthError::ProofScope);
         }
@@ -212,10 +240,12 @@ impl AuthKeys {
         if header.get("alg").and_then(|v| v.as_str()) != Some("HS256") {
             return Err(AuthError::Invalid);
         }
-        let signature = URL_SAFE_NO_PAD.decode(signature).map_err(|_| AuthError::Invalid)?;
+        let signature = decode_segment(signature)?;
         let mut verifier = HmacSha256::new_from_slice(key).map_err(|_| AuthError::Internal)?;
         verifier.update(input.as_bytes());
-        verifier.verify_slice(&signature).map_err(|_| AuthError::Invalid)?;
+        verifier
+            .verify_slice(&signature)
+            .map_err(|_| AuthError::Invalid)?;
         // 必需字段缺失、null、类型不匹配或重复字段由强类型反序列化拒绝。
         let claims: Claims = decode_json(payload)?;
         if now as i128 >= claims.exp as i128 + LEEWAY as i128 {
@@ -245,12 +275,15 @@ pub fn classify_dashboard(raw: &str) -> CredentialKind {
     };
     let audience = value.get("aud");
     let matches_audience = audience.and_then(|v| v.as_str()) == Some(AUDIENCE)
-        || audience.and_then(|v| v.as_array()).is_some_and(|values| {
-            values.iter().any(|v| v.as_str() == Some(AUDIENCE))
-        });
+        || audience
+            .and_then(|v| v.as_array())
+            .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(AUDIENCE)));
     if value.get("iss").and_then(|v| v.as_str()) == Some(ISSUER)
         && matches_audience
-        && matches!(value.get("token_use").and_then(|v| v.as_str()), Some("access" | "security_proof"))
+        && matches!(
+            value.get("token_use").and_then(|v| v.as_str()),
+            Some("access" | "security_proof")
+        )
     {
         CredentialKind::InternalDashboard
     } else {
@@ -259,8 +292,19 @@ pub fn classify_dashboard(raw: &str) -> CredentialKind {
 }
 
 fn decode_json<T: serde::de::DeserializeOwned>(encoded: &str) -> Result<T, AuthError> {
-    let bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| AuthError::Invalid)?;
+    let bytes = decode_segment(encoded)?;
     serde_json::from_slice(&bytes).map_err(|_| AuthError::Invalid)
+}
+
+fn decode_segment(encoded: &str) -> Result<Vec<u8>, AuthError> {
+    // Go base64 忽略 CR/LF；验签输入仍保留原文，不能替换已签名字节。
+    let bytes: Vec<u8> = encoded
+        .bytes()
+        .filter(|b| !matches!(b, b'\r' | b'\n'))
+        .collect();
+    URL_SAFE_NO_PAD
+        .decode(bytes)
+        .map_err(|_| AuthError::Invalid)
 }
 
 fn segments(raw: &str) -> Option<(&str, &str, &str, &str)> {

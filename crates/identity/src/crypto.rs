@@ -43,10 +43,7 @@ pub fn hash_password(password: &[u8]) -> Result<SecretString, AuthError> {
 }
 
 /// 固定盐仅供差分测试；生产调用 hash_password。
-pub fn hash_password_with_salt(
-    password: &[u8],
-    salt: [u8; 16],
-) -> Result<SecretString, AuthError> {
+pub fn hash_password_with_salt(password: &[u8], salt: [u8; 16]) -> Result<SecretString, AuthError> {
     if password.len() > 72 {
         return Err(AuthError::PasswordTooLong);
     }
@@ -93,7 +90,9 @@ pub fn verify_password(password: &[u8], stored: &str) -> Result<bool, AuthError>
 
 pub(crate) fn random_uuid() -> Result<String, AuthError> {
     let mut bytes = [0; 16];
-    OsRng.try_fill_bytes(&mut bytes).map_err(|_| AuthError::Internal)?;
+    OsRng
+        .try_fill_bytes(&mut bytes)
+        .map_err(|_| AuthError::Internal)?;
     Ok(Builder::from_random_bytes(bytes).into_uuid().to_string())
 }
 
@@ -108,7 +107,10 @@ pub struct AuthKeys {
 impl AuthKeys {
     pub fn new(session_secret: &str) -> Self {
         let derive = |purpose: &str| {
-            mac(session_secret.as_bytes(), format!("new-api/auth/{purpose}/v1").as_bytes())
+            mac(
+                session_secret.as_bytes(),
+                format!("new-api/auth/{purpose}/v1").as_bytes(),
+            )
         };
         Self {
             access: derive("access"),
@@ -123,12 +125,21 @@ impl AuthKeys {
     }
 
     pub fn matches_refresh_hash(&self, secret: &str, stored: &str) -> bool {
-        equal(self.refresh_hash(secret).expose_secret().as_bytes(), stored.trim().as_bytes())
+        equal(
+            self.refresh_hash(secret).expose_secret().as_bytes(),
+            stored.trim().as_bytes(),
+        )
     }
 
     pub fn next_refresh(&self, credential: &RefreshCredential) -> RefreshCredential {
-        let secret = hex(&mac(&self.rotate, credential.raw().expose_secret().as_bytes()));
-        RefreshCredential { sid: credential.sid.clone(), secret: SecretString::new(secret) }
+        let secret = hex(&mac(
+            &self.rotate,
+            credential.raw().expose_secret().as_bytes(),
+        ));
+        RefreshCredential {
+            sid: credential.sid.clone(),
+            secret: SecretString::new(secret),
+        }
     }
 }
 
@@ -143,13 +154,18 @@ impl RefreshCredential {
         let mut secret = String::with_capacity(64);
         while secret.len() < 64 {
             let mut byte = [0];
-            OsRng.try_fill_bytes(&mut byte).map_err(|_| AuthError::Internal)?;
+            OsRng
+                .try_fill_bytes(&mut byte)
+                .map_err(|_| AuthError::Internal)?;
             // 拒绝抽样避免取模偏差，248 为 62 的最大单字节倍数。
             if byte[0] < 248 {
                 secret.push(ALPHABET[(byte[0] % 62) as usize] as char);
             }
         }
-        Ok(Self { sid: random_uuid()?, secret: SecretString::new(secret) })
+        Ok(Self {
+            sid: random_uuid()?,
+            secret: SecretString::new(secret),
+        })
     }
 
     pub fn parse(raw: &str) -> Result<Self, AuthError> {
@@ -158,12 +174,19 @@ impl RefreshCredential {
             return Err(AuthError::Invalid);
         }
         // 不规范化 SID：轮换 HMAC 必须保留呈现的原始字节。
-        Ok(Self { sid: sid.to_owned(), secret: SecretString::new(secret.to_owned()) })
+        Ok(Self {
+            sid: sid.to_owned(),
+            secret: SecretString::new(secret.to_owned()),
+        })
     }
 
-    pub fn sid(&self) -> &str { &self.sid }
+    pub fn sid(&self) -> &str {
+        &self.sid
+    }
 
-    pub fn secret(&self) -> &str { self.secret.expose_secret() }
+    pub fn secret(&self) -> &str {
+        self.secret.expose_secret()
+    }
 
     pub fn raw(&self) -> SecretString {
         SecretString::new(format!("{}.{}", self.sid, self.secret.expose_secret()))

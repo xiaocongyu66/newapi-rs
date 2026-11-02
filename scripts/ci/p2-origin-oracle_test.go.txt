@@ -1,0 +1,117 @@
+package security
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/QuantumNous/new-api/internal/common"
+	"github.com/QuantumNous/new-api/internal/transport/fiberadapter"
+)
+
+// 仅供 Actions：将本文件复制到固定上游检出的
+// apps/api/internal/security/p2_origin_oracle_test.go，然后在 apps/api 下执行：
+// go test ./internal/security -run '^TestP2OriginOracle$' -count=1 -v
+// 禁止在开发机运行。输出仅包含下列固定合成数据，不读取或打印真实请求和密钥。
+// 此测试直接调用上游函数，不能用移植后的实现替代预言机。
+func TestP2OriginOracle(t *testing.T) {
+	previousSecure := common.SessionCookieSecure
+	previousTrusted := common.SessionCookieTrustedURLs
+	t.Cleanup(func() {
+		common.SessionCookieSecure = previousSecure
+		common.SessionCookieTrustedURLs = previousTrusted
+	})
+
+	type fixture struct {
+		Name string `json:"name"`
+		Host string `json:"host"`
+		Origins []string `json:"origins"`
+		Referers []string `json:"referers"`
+		Plaintext bool `json:"plaintext"`
+		Insecure bool `json:"insecure"`
+		Trusted []string `json:"trusted"`
+		Allowed bool `json:"allowed"`
+	}
+	cases := []fixture{
+		{Name: "同源", Origins: []string{"https://example.test"}, Allowed: true},
+		{Name: "默认端口", Origins: []string{"https://EXAMPLE.test:443"}, Allowed: true},
+		{Name: "外围空白", Origins: []string{" https://example.test/ "}, Allowed: true},
+		{Name: "空查询", Origins: []string{"https://example.test?"}, Allowed: true},
+		{Name: "空片段", Origins: []string{"https://example.test#"}, Allowed: true},
+		{Name: "空端口", Origins: []string{"https://example.test:"}, Allowed: true},
+		{Name: "转义斜线", Origins: []string{"https://example.test/%2f"}, Allowed: true},
+		{Name: "点段", Origins: []string{"https://example.test/a/.."}},
+		{Name: "转义点", Origins: []string{"https://example.test/%2e"}},
+		{Name: "转义双点", Origins: []string{"https://example.test/%2E%2e/"}},
+		{Name: "单点", Origins: []string{"https://example.test/./"}},
+		{Name: "无效转义", Origins: []string{"https://example.test/%"}},
+		{Name: "用户信息", Origins: []string{"https://evil.test@example.test"}},
+		{Name: "空用户信息", Origins: []string{"https://@example.test"}},
+		{Name: "邮箱查询", Referers: []string{"https://example.test/page?email=a@b.test"}, Allowed: true},
+		{Name: "路径逗号", Referers: []string{"https://example.test/a@b,c?values=1,2"}, Allowed: true},
+		{Name: "来源页点段", Referers: []string{"https://example.test/a/.."}, Allowed: true},
+		{Name: "来源页用户信息", Referers: []string{"https://evil.test@example.test/page"}},
+		{Name: "忽略重复来源页", Origins: []string{"https://example.test"}, Referers: []string{"not a URL", "https://evil.test/page"}, Allowed: true},
+		{Name: "重复来源页", Referers: []string{"https://example.test/a", "https://example.test/b"}},
+		{Name: "重复来源", Origins: []string{"https://example.test", "https://example.test"}},
+		{Name: "拼接来源", Origins: []string{"https://example.test,https://example.test"}},
+		{Name: "非法来源不回退", Origins: []string{"null"}, Referers: []string{"https://example.test/page"}},
+		{Name: "空来源不回退", Origins: []string{""}, Referers: []string{"https://example.test/page"}},
+		{Name: "缺失来源"},
+		{Name: "非安全配置", Insecure: true, Allowed: true},
+		{Name: "不信转发协议", Plaintext: true, Origins: []string{"https://example.test"}},
+		{Name: "显式可信来源", Plaintext: true, Origins: []string{"https://example.test"}, Trusted: []string{"https://example.test"}, Allowed: true},
+		{Name: "IPv6不压缩", Host: "[2001:db8::1]:8443", Origins: []string{"https://[2001:0db8::1]:8443"}},
+		{Name: "IPv6小写", Host: "[2001:db8::1]:8443", Origins: []string{"https://[2001:DB8::1]:8443"}, Allowed: true},
+		{Name: "IPv6端口", Host: "[2001:db8::1]:8443", Origins: []string{"https://[2001:db8::1]"}},
+		{Name: "IPv4缩写不等价", Host: "127.0.0.1", Origins: []string{"https://127.1"}},
+		{Name: "IPv4整数不等价", Host: "127.0.0.1", Origins: []string{"https://2130706433"}},
+		{Name: "IPv4十六进制不等价", Host: "127.0.0.1", Origins: []string{"https://0x7f000001"}},
+		{Name: "IPv4缩写原样", Host: "127.1", Origins: []string{"https://127.1"}, Allowed: true},
+		{Name: "国际域名不转码", Host: "xn--bcher-kva.test", Origins: []string{"https://bücher.test"}},
+		{Name: "国际域名小写", Host: "bücher.test", Origins: []string{"https://BÜCHER.test"}, Allowed: true},
+		{Name: "端口前导零不等价", Origins: []string{"https://example.test:0443"}},
+		{Name: "端口前导零原样", Host: "example.test:0443", Origins: []string{"https://example.test:0443"}, Allowed: true},
+		{Name: "端口范围不收紧", Host: "example.test:70000", Origins: []string{"https://example.test:70000"}, Allowed: true},
+	}
+	for _, test := range cases {
+		t.Run(test.Name, func(t *testing.T) {
+			if test.Host == "" {
+				test.Host = "example.test"
+			}
+			common.SessionCookieSecure = !test.Insecure
+			common.SessionCookieTrustedURLs = test.Trusted
+			scheme := "https"
+			if test.Plaintext {
+				scheme = "http"
+			}
+			request := httptest.NewRequest(http.MethodPost, scheme+"://example.test/api/user/auth/refresh", nil)
+			request.Host = test.Host
+			request.Header["Origin"] = test.Origins
+			request.Header["Referer"] = test.Referers
+			request.Header.Set("X-Forwarded-Proto", "https")
+			context, _ := fiberadapter.NewSyntheticContext(request)
+			origin, valid := requestBrowserOrigin(context)
+			allowed := valid && isAllowedSessionOrigin(context, origin)
+			if test.Insecure {
+				allowed = true
+			}
+			SessionCookieOriginGuard()(context)
+			if allowed != test.Allowed || context.IsAborted() == test.Allowed {
+				t.Errorf("预言机结果与冻结预期不符：判定=%v，期望=%v", allowed, test.Allowed)
+			}
+			result := struct {
+				Input fixture `json:"input"`
+				BrowserOrigin string `json:"browser_origin"`
+				Valid bool `json:"valid"`
+				Allowed bool `json:"allowed"`
+			}{test, origin, valid, allowed}
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal("合成夹具序列化失败")
+			}
+			t.Logf("P2_ORIGIN_ORACLE %s", encoded)
+		})
+	}
+}

@@ -1,0 +1,216 @@
+package identity
+
+// 仅由 Actions 复制到固定上游 apps/api/internal/identity/p2_crypto_oracle_test.go。
+// 在 apps/api 运行 go test ./internal/identity -run '^TestP2CryptoOracle$' -count=1。
+// P2_CRYPTO_ORACLE_PATH 为已有目录中的输出文件；不打印凭据，不连接数据库。
+// 只使用下列公开合成 secret；禁止从环境或真实配置读取生产 secret。
+import (
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/QuantumNous/new-api/internal/authtoken"
+	"github.com/QuantumNous/new-api/internal/common"
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+)
+
+const p2Secret = "test-session-secret-with-sufficient-entropy"
+const p2Now int64 = 1700000000
+const p2JTI = "11111111-2222-4333-8444-555555555555"
+const p2SID = "123e4567-e89b-42d3-a456-426614174000"
+
+// 与上游 authClaims 字段顺序及标签一致；唯一替换是注入时间和 jti。
+type p2Claims struct {
+	TokenUse string `json:"token_use"`
+	SID string `json:"sid"`
+	UV int64 `json:"uv"`
+	SV int64 `json:"sv"`
+	Method string `json:"method,omitempty"`
+	Scopes []string `json:"scopes,omitempty"`
+	jwt.RegisteredClaims
+}
+
+func p2ClaimsFor(purpose string) p2Claims {
+	ttl := int64(900)
+	c := p2Claims{TokenUse: purpose, SID: "session-1", UV: 3, SV: 2}
+	if purpose == "security_proof" {
+		ttl = 300
+		c.Method = "totp"
+		c.Scopes = []string{"password:update"}
+	}
+	c.RegisteredClaims = jwt.RegisteredClaims{
+		Issuer: "new-api", Subject: "42", Audience: jwt.ClaimStrings{"new-api-dashboard"},
+		ExpiresAt: jwt.NewNumericDate(time.Unix(p2Now+ttl, 0)),
+		NotBefore: jwt.NewNumericDate(time.Unix(p2Now-5, 0)),
+		IssuedAt: jwt.NewNumericDate(time.Unix(p2Now, 0)), ID: p2JTI,
+	}
+	return c
+}
+
+// 原 parseAuthClaims 的验证选项，仅增加固定时钟，不改库或密码学实现。
+func p2Status(raw, purpose string, now int64) string {
+	c := &p2Claims{}
+	parsed, err := jwt.ParseWithClaims(strings.TrimSpace(raw), c, func(token *jwt.Token) (any, error) {
+		return authtoken.SigningKey(purpose), nil
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer("new-api"),
+		jwt.WithAudience("new-api-dashboard"), jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(), jwt.WithLeeway(5*time.Second),
+		jwt.WithTimeFunc(func() time.Time { return time.Unix(now, 0) }))
+	if errors.Is(err, jwt.ErrTokenExpired) { return "expired" }
+	if err != nil || parsed == nil || !parsed.Valid { return "invalid" }
+	uid, err := strconv.ParseInt(c.Subject, 10, 64)
+	if err != nil || uid <= 0 || c.SID == "" || c.UV <= 0 || c.SV <= 0 ||
+		c.TokenUse != purpose || c.ID == "" || c.IssuedAt == nil || c.NotBefore == nil {
+		return "invalid"
+	}
+	return "ok"
+}
+
+func TestP2CryptoOracle(t *testing.T) {
+	path := os.Getenv("P2_CRYPTO_ORACLE_PATH")
+	if path == "" { t.Fatal("P2_CRYPTO_ORACLE_PATH is required") }
+	old := common.SessionSecret
+	common.SessionSecret = p2Secret
+	t.Cleanup(func() { common.SessionSecret = old })
+	out := map[string]any{"schema": 1, "session_secret": p2Secret, "now": p2Now, "jti": p2JTI}
+
+	// 真正调用旧 common.Password2Hash；随机盐输出给 Rust 重建字节金标准。
+	generation := []map[string]any{}
+	verification := []map[string]any{}
+	addVerify := func(name string, password []byte, hash string) {
+		verification = append(verification, map[string]any{
+			"name": name, "password_hex": hex.EncodeToString(password), "hash": hash,
+			"valid": common.ValidatePasswordAndHash(string(password), hash),
+		})
+	}
+	passwords := []string{"allmine", "", "a\x00b", "密码\x00尾部 ", strings.Repeat("x", 72),
+		strings.Repeat("x", 73), strings.Repeat("密", 24), strings.Repeat("密", 24)+"a"}
+	encoding := base64.NewEncoding("./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789").WithPadding(base64.NoPadding)
+	for i, password := range passwords {
+		hash, err := common.Password2Hash(password)
+		if err != nil && !errors.Is(err, bcrypt.ErrPasswordTooLong) { t.Fatal("bcrypt generation failed") }
+		row := map[string]any{"password_hex": hex.EncodeToString([]byte(password)), "too_long": err != nil, "hash": hash, "salt_hex": ""}
+		if err == nil {
+			salt, err := encoding.DecodeString(hash[7:29])
+			if err != nil { t.Fatal("bcrypt salt decode failed") }
+			row["salt_hex"] = hex.EncodeToString(salt)
+			addVerify("generated-"+strconv.Itoa(i), []byte(password), hash)
+			addVerify("wrong-"+strconv.Itoa(i), []byte("wrong-"+password), hash)
+			if len(password) == 72 {
+				addVerify("over72-"+strconv.Itoa(i), []byte(password+"Z"), hash)
+				addVerify("under72-"+strconv.Itoa(i), []byte(password[:71]), hash)
+			}
+		}
+		generation = append(generation, row)
+	}
+	for _, cost := range []int{4, 10} {
+		hash, err := bcrypt.GenerateFromPassword([]byte("legacy\x00密码"), cost)
+		if err != nil { t.Fatal("legacy generation failed") }
+		for _, version := range []string{"2", "2a", "2b", "2x", "2y", "2z", "1a", "3a"} {
+			changed := "$"+version+"$"+string(hash[4:])
+			addVerify("version-"+version+"-"+strconv.Itoa(cost), []byte("legacy\x00密码"), changed)
+		}
+		addVerify("nul-tail", []byte("legacy"), string(hash))
+	}
+	addVerify("empty-storage", []byte(""), "")
+	addVerify("plaintext", []byte("password"), "password")
+	out["generation"], out["verification"] = generation, verification
+
+	// 直接调用旧用途派生和刷新函数，非 Rust 公式复制生成期望。
+	derived := map[string]string{}
+	for _, purpose := range []string{"access", "security_proof", "refresh", "refresh-rotate"} {
+		derived[purpose] = hex.EncodeToString(authtoken.SigningKey(purpose))
+	}
+	out["derived"] = derived
+	refresh := []map[string]any{}
+	raws := []string{p2SID+".public-secret", strings.ToUpper(p2SID)+".public-secret",
+		strings.ReplaceAll(p2SID, "-", "")+".s", "{"+p2SID+"}.s", "["+p2SID+"].s",
+		"URN:UUID:"+p2SID+".s", " \t"+p2SID+".密码\x00 secret\n", p2SID+".",
+		p2SID+".a.b", "session-1.s", "", p2SID, "urn:uuid:bad.s"}
+	for _, raw := range raws {
+		sid, secret, ok := splitRefreshToken(raw)
+		row := map[string]any{"raw": raw, "valid": ok, "sid": sid, "secret": secret, "hash": "", "next": "", "next_hash": ""}
+		if ok {
+			next := deriveNextRefreshSecret(sid, secret)
+			row["hash"], row["next"], row["next_hash"] = hashRefreshSecret(secret), next, hashRefreshSecret(next)
+		}
+		refresh = append(refresh, row)
+	}
+	out["refresh"] = refresh
+
+	tokens := []map[string]any{}
+	sign := func(c jwt.Claims, alg jwt.SigningMethod, key any) string {
+		raw, err := jwt.NewWithClaims(alg, c).SignedString(key)
+		if err != nil { t.Fatal("JWT signing failed") }
+		return raw
+	}
+	addToken := func(name, raw, purpose string, now int64, exact bool, sid string) {
+		_, internal, _ := authtoken.ParseDashboardAccessToken(raw)
+		tokens = append(tokens, map[string]any{
+			"name": name, "raw": raw, "purpose": purpose, "now": now,
+			"status": p2Status(raw, purpose, now), "internal": internal,
+			"exact": exact, "sid": sid,
+		})
+	}
+	for _, purpose := range []string{"access", "security_proof"} {
+		c := p2ClaimsFor(purpose)
+		raw := sign(c, jwt.SigningMethodHS256, authtoken.SigningKey(purpose))
+		if p2Status(raw, purpose, p2Now) != "ok" { t.Fatal("Go oracle baseline JWT is invalid") }
+		addToken(purpose, raw, purpose, p2Now, true, c.SID)
+		parts := strings.Split(raw, ".")
+		signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil { t.Fatal("Go signature decode failed") }
+		signature[0] ^= 1
+		addToken(purpose+"-tampered", parts[0]+"."+parts[1]+"."+base64.RawURLEncoding.EncodeToString(signature), purpose, p2Now, false, c.SID)
+		addToken(purpose+"-before-leeway", raw, purpose, p2Now-5, false, c.SID)
+		addToken(purpose+"-future", raw, purpose, p2Now-6, false, c.SID)
+		addToken(purpose+"-expiry-before", raw, purpose, c.ExpiresAt.Unix()+4, false, c.SID)
+		addToken(purpose+"-expiry-at", raw, purpose, c.ExpiresAt.Unix()+5, false, c.SID)
+		other := "access"
+		if purpose == other { other = "security_proof" }
+		addToken(purpose+"-wrong-purpose", raw, other, p2Now, false, c.SID)
+		addToken(purpose+"-wrong-key", sign(c, jwt.SigningMethodHS256, []byte("public-wrong-key")), purpose, p2Now, false, c.SID)
+		addToken(purpose+"-hs384", sign(c, jwt.SigningMethodHS384, authtoken.SigningKey(purpose)), purpose, p2Now, false, c.SID)
+		addToken(purpose+"-none", sign(c, jwt.SigningMethodNone, jwt.UnsafeAllowNoneSignatureType), purpose, p2Now, false, c.SID)
+		// 非规范未使用位以及 CR/LF 仍由原 Go 库决定接受与否。
+		alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+		last := strings.IndexByte(alphabet, raw[len(raw)-1])
+		addToken(purpose+"-unused-bits", raw[:len(raw)-1]+string(alphabet[last|1]), purpose, p2Now, false, c.SID)
+		addToken(purpose+"-crlf", raw[:len(raw)-8]+"\r\n"+raw[len(raw)-8:], purpose, p2Now, false, c.SID)
+		addToken(purpose+"-padding", raw+"=", purpose, p2Now, false, c.SID)
+		c.SID = "session<&>\u2028\u2029"
+		addToken(purpose+"-json-escape", sign(c, jwt.SigningMethodHS256, authtoken.SigningKey(purpose)), purpose, p2Now, true, c.SID)
+	}
+	// 用真正的 Go JSON/JWT 库生成缺失、类型错误和时间边界，而非 Rust 自签。
+	encoded, err := json.Marshal(p2ClaimsFor("access"))
+	if err != nil { t.Fatal("claims encoding failed") }
+	for _, field := range []string{"exp", "nbf", "iat", "jti", "iss", "aud", "sub", "sid", "uv", "sv"} {
+		var m jwt.MapClaims
+		if err := json.Unmarshal(encoded, &m); err != nil { t.Fatal("claims decoding failed") }
+		delete(m, field)
+		addToken("missing-"+field, sign(m, jwt.SigningMethodHS256, authtoken.SigningKey("access")), "access", p2Now, false, "session-1")
+	}
+	for _, field := range []string{"iat", "nbf"} {
+		for _, offset := range []int64{5, 6} {
+			var m jwt.MapClaims
+			if err := json.Unmarshal(encoded, &m); err != nil { t.Fatal("claims decoding failed") }
+			m[field] = p2Now+offset
+			addToken(field+"-"+strconv.FormatInt(offset, 10), sign(m, jwt.SigningMethodHS256, authtoken.SigningKey("access")), "access", p2Now, false, "session-1")
+		}
+	}
+	var audience jwt.MapClaims
+	if err := json.Unmarshal(encoded, &audience); err != nil { t.Fatal("claims decoding failed") }
+	audience["aud"] = "new-api-dashboard"
+	addToken("aud-string", sign(audience, jwt.SigningMethodHS256, authtoken.SigningKey("access")), "access", p2Now, false, "session-1")
+	out["tokens"] = tokens
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil { t.Fatal("oracle encoding failed") }
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil { t.Fatal("oracle writing failed") }
+}

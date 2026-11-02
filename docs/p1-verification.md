@@ -1,5 +1,17 @@
 # P1 Rust 远程验证与集成交接
 
+## P2 共享 Go oracle 增量
+
+新增 `prepare → oracle → verify(pg96, pg17)` 依赖链；原 P1 process job 保持。oracle job 仅构建一次两个 Go 包，固定上游 SHA `17970da4571e81308f176a0e61a38276e5771606`，注入模板到 RUNNER_TEMP 副本，不修改上游 checkout 或生产 crate。仍使用 P0 固定 checkout/setup-go/upload/download SHA、contents:read。
+
+实际已读取 Origin 作者模板：包 `internal/security`、测试 `TestP2OriginOracle`，通过 `t.Logf("P2_ORIGIN_ORACLE %s", ...)` 输出真实调用结果。CI 从 `go test -json` Output 事件抽取前缀后的对象，每行一个 JSON，**不转成数组、不使用模板的手写 Allowed 值替代实际结果**。Rust `P2_ORIGIN_ORACLE_PATH` 指向该 JSONL。每个 verify job 在 workspace test 外另执行 `cargo test --locked -p newapi-security --test origin_oracle origin_matches_go_oracle -- --exact` 并要求正测试数；至少40条、唯一名称及关键case由该 Rust 测试检查。
+
+crypto 模板在本次读取时尚未出现在主集成目录，且 SendMessage 未在工具注册表提供，不能声称已与作者直接确认。当前接线约定为 `internal/common` 包、模板中唯一 `TestP2*Oracle*` 入口（从实际文本提取，不猜测名称以免零执行假绿），输出二选一：直接写入 `P2_CRYPTO_ORACLE_PATH` 指定文件（JSON 或 JSONL，保持原字节），或日志 `P2_CRYPTO_ORACLE <JSON>`（抽取为 JSONL）。同时写文件与 marker 会拒绝。主代理须转告 crypto 作者确认此接口；若实际模板采用另一 env/包/格式，必须在远程触发前对齐，不能跳过 oracle。
+
+Go 两命令保存真实退出码、顶层 pass、子测试 pass/fail/skip、原始事件、模板和 fixture；任一失败、skip、空文件、无顶层通过即 job 失败。artifact `p2-oracle-<SHA>-<run>-<attempt>` 经 always seal/upload 保留。verify 下载同一 artifact，核对 SHA/run/attempt、上游身份、执行成功记录及 fixture SHA256，然后通过 GITHUB_ENV 为所有后续 Cargo 测试注入 `P2_CRYPTO_ORACLE_PATH` 与 `P2_ORIGIN_ORACLE_PATH`。verify 再检查两路径必须存在非空，缺失不 skip。两个矩阵不重复 Go 编译。
+
+工作流路径过滤新增 `scripts/ci/p2-*`。本次仅编辑 `p1-rust.yml`、`p1-ci.py`、本文，未编辑作者模板；未本地执行任何代码或测试，新增流程仍待远程验证。若 security 新 dev 依赖导致 lock 过期，必须遵循下述显式 refresh/回收/locked 重跑流程，不在普通 job 自动更新。
+
 ## P2 首批 CI 增量（最新约定，覆盖下文 P1 历史描述）
 
 主代理已确认 P1 PASS，进入 migration/p2。本次仅修改 workflow、CI driver、driver tests 和本文，未修改生产 crate，未本地运行任何测试。本次新增 CI 尚待远程验证。

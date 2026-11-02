@@ -176,7 +176,15 @@ fn origin_request<'a>(origins: &'a [&'a str]) -> OriginRequest<'a> {
 
 #[test]
 fn origin_normalization_and_hostile_inputs() {
-    for origin in ["https://example.test", "https://EXAMPLE.test:443"] {
+    for origin in [
+        "https://example.test",
+        "https://EXAMPLE.test:443",
+        " https://example.test/ ",
+        "https://example.test/%2f",
+        "https://example.test?",
+        "https://example.test#",
+        "https://example.test:",
+    ] {
         assert_eq!(check_session_origin(&origin_request(&[origin])), Ok(()));
     }
     for origin in [
@@ -191,6 +199,12 @@ fn origin_normalization_and_hostile_inputs() {
         "https://example.test,https://example.test",
         "https://example.test https://evil.test",
         "https://example.test/path",
+        "https://example.test/a/..",
+        "https://example.test/%2e",
+        "https://example.test/%2E%2e/",
+        "https://example.test/./",
+        "https://example.test/%",
+        "https://example.test:0443",
         "https://example.test?query=1",
         "https://example.test#fragment",
         "https:///example.test",
@@ -208,7 +222,20 @@ fn origin_normalization_and_hostile_inputs() {
 fn origin_duplicates_fallback_and_insecure_compatibility() {
     let mut request = origin_request(&[]);
     assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
-    request.referer_headers = &["https://example.test/page?x=1"];
+    for referer in [
+        "https://example.test/page?email=a@b.test",
+        "https://example.test/a@b,c?values=1,2",
+        "https://example.test/a/..",
+    ] {
+        let referers = [referer];
+        let mut fallback = origin_request(&[]);
+        fallback.referer_headers = &referers;
+        assert_eq!(check_session_origin(&fallback), Ok(()));
+    }
+    request.referer_headers = &["https://evil.test@example.test/page"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.origin_headers = &["https://example.test"];
+    request.referer_headers = &["not a URL", "https://evil.test/page"];
     assert_eq!(check_session_origin(&request), Ok(()));
     request.origin_headers = &["null"];
     assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
@@ -222,17 +249,40 @@ fn origin_duplicates_fallback_and_insecure_compatibility() {
 }
 
 #[test]
+fn raw_host_and_port_equivalence_matches_go() {
+    for (host, origin, allowed) in [
+        ("127.0.0.1", "https://127.1", false),
+        ("127.0.0.1", "https://2130706433", false),
+        ("127.0.0.1", "https://0x7f000001", false),
+        ("xn--bcher-kva.test", "https://bücher.test", false),
+        ("bücher.test", "https://BÜCHER.test", true),
+        ("example.test", "https://example.test:0443", false),
+        ("example.test:0443", "https://example.test:0443", true),
+        ("example.test:70000", "https://example.test:70000", true),
+        ("127.1", "https://127.1", true),
+    ] {
+        let hosts = [host];
+        let origins = [origin];
+        let mut request = origin_request(&origins);
+        request.host_headers = &hosts;
+        assert_eq!(check_session_origin(&request).is_ok(), allowed);
+    }
+}
+
+#[test]
 fn transport_scheme_ports_ipv6_and_trusted_urls() {
     let mut request = origin_request(&["https://example.test"]);
     // 即使请求声称经过安全代理，非加密连接也不自动成为安全来源。
     request.transport_tls = false;
     assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
-    request.trusted_urls = &["https://example.test/app"];
+    request.trusted_urls = &["https://example.test"];
     assert_eq!(check_session_origin(&request), Ok(()));
     request.trusted_urls = &[];
     request.transport_tls = true;
     request.host_headers = &["[2001:db8::1]:8443"];
     request.origin_headers = &["https://[2001:0db8::1]:8443"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.origin_headers = &["https://[2001:DB8::1]:8443"];
     assert_eq!(check_session_origin(&request), Ok(()));
     request.origin_headers = &["https://[2001:db8::1]"];
     assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));

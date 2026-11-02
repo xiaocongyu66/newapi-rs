@@ -224,7 +224,106 @@ def restore():
     return True
 
 
+UPSTREAM_SHA = "17970da4571e81308f176a0e61a38276e5771606"
+
+
+def p2_oracle():
+    reference = ROOT / "upstream-reference"
+    actual = subprocess.check_output(["git", "-C", str(reference), "rev-parse", "HEAD"], text=True).strip()
+    if actual != UPSTREAM_SHA:
+        raise RuntimeError("upstream SHA mismatch")
+    source = Path(os.environ["RUNNER_TEMP"]) / "p2-oracle-source"
+    shutil.copytree(reference, source)
+    module = source / "apps/api"
+    (module / "web/dist").mkdir(parents=True, exist_ok=True)
+    (module / "web/dist/index.html").touch()
+    success = True
+    for kind, package in (("crypto", "identity"), ("origin", "security")):
+        template = ROOT / f"scripts/ci/p2-{kind}-oracle_test.go.txt"
+        text = template.read_text()
+        if not re.search(r"(?m)^package\s+" + package + r"\s*$", text):
+            raise RuntimeError("oracle template package mismatch")
+        names = re.findall(r"(?m)^func\s+(TestP2\w*Oracle\w*)\s*\(t\s+\*testing.T\)", text)
+        if len(names) != 1:
+            raise RuntimeError("oracle requires exactly one P2 oracle entry test")
+        test = names[0]
+        shutil.copyfile(template, module / f"internal/{package}/p2_{kind}_oracle_test.go")
+        shutil.copyfile(template, evidence() / template.name)
+        destination = evidence() / f"p2-{kind}-oracle.jsonl"
+        env = dict(os.environ, GOWORK="off", GOTOOLCHAIN="local", GOFLAGS="-mod=readonly",
+                   UPSTREAM_SHA=UPSTREAM_SHA)
+        env[f"P2_{kind.upper()}_ORACLE_PATH"] = str(destination)
+        command = ["go", "test", "-json", "-count=1", "-tags", "with_gvisor,with_wireguard,with_utls",
+                   f"./internal/{package}", "-run", "^" + test + "$"]
+        result = subprocess.run(command, cwd=module, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, check=False)
+        (evidence() / f"p2-{kind}-go.log").write_text(redact(result.stdout))
+        events = []
+        for line in result.stdout.splitlines():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        counts = {action: sum(event.get("Action") == action and "Test" in event for event in events)
+                  for action in ("pass", "fail", "skip")}
+        root_pass = any(event.get("Action") == "pass" and event.get("Test") == test for event in events)
+        # The actual Origin template exports t.Logf records. Preserve actual values.
+        marker = f"P2_{kind.upper()}_ORACLE "
+        records = []
+        for event in events:
+            output = event.get("Output", "")
+            if marker in output:
+                records.append(json.loads(output.split(marker, 1)[1].strip()))
+        if records:
+            if destination.exists():
+                raise RuntimeError("ambiguous oracle output: both file and markers")
+            destination.write_text("".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records))
+        valid = destination.exists() and bool(destination.read_text().strip())
+        if valid:
+            raw = destination.read_text()
+            try:
+                valid = bool(json.loads(raw))
+            except json.JSONDecodeError:
+                valid = bool([json.loads(line) for line in raw.splitlines() if line.strip()])
+        ok = result.returncode == 0 and root_pass and counts["fail"] == 0 and counts["skip"] == 0 and valid
+        write_json(f"p2-{kind}-oracle-command.json", {
+            "upstream_sha": actual, "package": package, "test": test, "command": command,
+            "exit_code": result.returncode, "tests": counts, "fixture_valid": valid,
+            "marker_records": len(records), "policy_ok": ok,
+        })
+        success = ok and success
+    write_json("p2-oracle-source.json", {"upstream_sha": actual, "policy_ok": success})
+    return success
+
+
+def p2_restore_oracle():
+    prepared = Path(os.environ["RUNNER_TEMP"]) / "p2-oracle"
+    identity = json.loads((prepared / "identity.json").read_text())
+    for key, env in (("sha", "GITHUB_SHA"), ("run_id", "GITHUB_RUN_ID"), ("attempt", "GITHUB_RUN_ATTEMPT")):
+        if identity[key] != os.environ[env]:
+            raise RuntimeError("oracle artifact identity mismatch")
+    source = json.loads((prepared / "p2-oracle-source.json").read_text())
+    if source != {"upstream_sha": UPSTREAM_SHA, "policy_ok": True}:
+        raise RuntimeError("oracle source or execution failed")
+    checksums = dict(line.split("  ", 1)[::-1] for line in (prepared / "SHA256SUMS").read_text().splitlines())
+    for kind in ("crypto", "origin"):
+        name = f"p2-{kind}-oracle.jsonl"
+        path = prepared / name
+        if hashlib.sha256(path.read_bytes()).hexdigest() != checksums[name] or not path.stat().st_size:
+            raise RuntimeError("oracle checksum mismatch or empty fixture")
+        shutil.copyfile(path, evidence() / name)
+        with open(os.environ["GITHUB_ENV"], "a") as output:
+            output.write(f"P2_{kind.upper()}_ORACLE_PATH={path}\n")
+    shutil.copyfile(prepared / "p2-oracle-source.json", evidence() / "p2-oracle-source.json")
+    write_json("p2-oracle-restore.json", {"exit_code": 0, "identity": identity, "upstream_sha": UPSTREAM_SHA})
+    return True
+
+
 def verify():
+    for kind in ("CRYPTO", "ORIGIN"):
+        path = os.environ.get(f"P2_{kind}_ORACLE_PATH")
+        if not path or not Path(path).is_file() or not Path(path).stat().st_size:
+            raise RuntimeError("verified P2 oracle fixture is mandatory")
     if not os.environ.get("TEST_POSTGRES_DSN"):
         raise RuntimeError("PostgreSQL fixture DSN is mandatory, not a skip condition")
     print("::add-mask::" + os.environ["TEST_POSTGRES_DSN"], flush=True)
@@ -246,6 +345,8 @@ def verify():
     ):
         ok = run(label, command) and ok
     ok = run("workspace-tests", cargo("test", "--locked", "--workspace"), True) and ok
+    ok = run("origin-oracle-tests", cargo("test", "--locked", "-p", "newapi-security",
+             "--test", "origin_oracle", "origin_matches_go_oracle", "--", "--exact"), True) and ok
     # Positive counts per backend AND owning module prevent all-filtered false greens.
     for package in ("newapi-storage", "newapi-catalog", "newapi-identity"):
         for backend in ("sqlite", "postgres"):
@@ -265,6 +366,10 @@ def finalize():
         "newapi-identity-sqlite", "newapi-identity-postgres"]
     if os.environ["GITHUB_JOB"] == "process":
         expected = ["go-oracle", "server-build", "process-tests"]
+    elif os.environ["GITHUB_JOB"] == "oracle":
+        expected = ["p2-crypto-oracle-command", "p2-origin-oracle-command"]
+    elif os.environ["GITHUB_JOB"] == "verify":
+        expected.extend(["p2-oracle-restore", "origin-oracle-tests"])
     write_json("command-status.json", {name: "recorded" if (evidence() / (name + ".json")).exists()
                                       else "not-executed (see steps/lock-status)" for name in expected})
     lines = []
@@ -279,7 +384,8 @@ def main():
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise SystemExit("P1 driver is restricted to GitHub-hosted Actions; no local execution")
     handlers = {"init": init, "prepare": prepare, "images": images,
-                "restore": restore, "verify": verify, "finalize": finalize}
+                "restore": restore, "verify": verify, "finalize": finalize,
+                "p2-oracle": p2_oracle, "p2-restore-oracle": p2_restore_oracle}
     try:
         result = handlers[sys.argv[1]]()
     except Exception as error:
