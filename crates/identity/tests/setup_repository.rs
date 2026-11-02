@@ -127,6 +127,11 @@ fn error_class(error: &sqlx::Error) -> &'static str {
             Some("5" | "261" | "517" | "773") => "sqlite_busy",
             Some("6" | "262" | "518") => "sqlite_locked",
             Some("17") => "sqlite_schema_changed",
+            Some("1") if db.message().starts_with("no such column:") => "sqlite_no_such_column",
+            Some("1") if db.message().starts_with("duplicate column name:") => {
+                "sqlite_duplicate_column"
+            }
+            Some("1") if db.message().starts_with("error in table ") => "sqlite_schema_parse",
             Some("1") => "sqlite_sql_error",
             Some("40P01") => "postgres_deadlock",
             Some("55P03") => "postgres_lock_unavailable",
@@ -315,6 +320,63 @@ fn checkpoint(db: &Database, second: &Database, phase: &str) {
     );
 }
 
+// 固定两次 DDL 的连接，避免把连接本地 schema 状态混入仓储门禁测试。
+async fn missing_column_round_trip(db: &Database, repo: &SetupRepository) {
+    if let Database::Sqlite(pool) = db {
+        let started = Instant::now();
+        let mut conn = diagnostic_result(
+            pool.acquire().await,
+            db,
+            "acquire_schema_ddl_connection",
+            Location::caller(),
+            started,
+        );
+        let started = Instant::now();
+        diagnostic_result(
+            sqlx::query(DROP_USER_COLUMN).execute(&mut *conn).await,
+            db,
+            "rename_aff_history_away_pinned",
+            Location::caller(),
+            started,
+        );
+        assert_eq!(repo.inspect().await, Err(SetupError::SchemaNotReady));
+        let started = Instant::now();
+        let restored = sqlx::query(RESTORE_USER_COLUMN).execute(&mut *conn).await;
+        // 恢复尝试之后才探测，不提前刷新 schema；只记录固定列是否存在。
+        let columns: Result<(bool, bool), sqlx::Error> = sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('users') WHERE name = 'aff_history'), EXISTS(SELECT 1 FROM pragma_table_info('users') WHERE name = 'wrong_aff_history')",
+        )
+        .fetch_one(&mut *conn)
+        .await;
+        if let Ok((original, renamed)) = &columns {
+            eprintln!(
+                "setup_fixture schema_after_restore aff_history={original} wrong_aff_history={renamed}"
+            );
+        }
+        diagnostic_result(
+            restored,
+            db,
+            "restore_aff_history_pinned",
+            Location::caller(),
+            started,
+        );
+        let columns = diagnostic_result(
+            columns,
+            db,
+            "probe_restored_columns",
+            Location::caller(),
+            started,
+        );
+        assert_eq!(columns, (true, false));
+        drop(conn);
+    } else {
+        execute(db, DROP_USER_COLUMN).await;
+        assert_eq!(repo.inspect().await, Err(SetupError::SchemaNotReady));
+        execute(db, RESTORE_USER_COLUMN).await;
+    }
+    assert!(repo.inspect().await.is_ok(), "恢复列后结构检查仍失败");
+}
+
 async fn scenarios(db: &Database, second: &Database) {
     checkpoint(db, second, "empty_schema");
     let repo = SetupRepository::new(db.clone());
@@ -433,9 +495,7 @@ async fn scenarios(db: &Database, second: &Database) {
 
     // 缺列和缺唯一性都拒绝，不偷偷迁移。
     checkpoint(db, second, "before_column_rename_ddl");
-    execute(db, DROP_USER_COLUMN).await;
-    assert_eq!(repo.inspect().await, Err(SetupError::SchemaNotReady));
-    execute(db, RESTORE_USER_COLUMN).await;
+    missing_column_round_trip(db, &repo).await;
     execute(db, DROP_OPTIONS).await;
     execute(db, OPTIONS_WITHOUT_KEY).await;
     assert_eq!(repo.inspect().await, Err(SetupError::SchemaNotReady));
