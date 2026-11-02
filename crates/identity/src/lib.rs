@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod crypto;
+pub mod sessions;
 pub mod setup;
 pub mod tokens;
 pub mod users;
