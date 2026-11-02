@@ -137,7 +137,7 @@ S=源码字段/标签登记；O=已有读写归属及阶段；V=真实schema、�
 - [x] schema §7核清DropLegacySchedulingColumns固定4个table/column组合及dropIndexesOnColumn运行时目录索引名来源；不要求枚举用户自建所有索引名。内部引号转义、PG同名跨schema索引选择是具体P8fixture债务。
 - [x] data-jobs §10核清QQ签到/掉落/红包/偷取/转账、网页签到、文本及实时采样、退款session、用户与token缓存闭包；另完整读取余额/订阅通知两函数，明确阈值/默认Email/失败仅日志。
 
-当前尚需P0静态确认的具名入口（这些是有限代码项，不含后阶段运行验证）：
+以下为本轮收口前的具名入口清单（历史状态）。现已分别由 config-final-audit.md、async-final-audit.md、migration-final-audit.md 完成静态核查，具体证据及纠正以这三份补充文档为准；仍需独立 P0 验收，不代表后续运行测试通过：
 
 | 工作项 | 具体文件/函数或声明 | 所有权/阶段 |
 |---|---|---|
