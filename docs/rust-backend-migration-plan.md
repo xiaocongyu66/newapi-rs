@@ -6,6 +6,10 @@
 
 当前状态：2026-11-02 已批准；P0 进行中，P1–P10 未开始，尚未编写 Rust 实现。上游基线 commit：`17970da4571e81308f176a0e61a38276e5771606`。Rust 工具链已存在。旧 README 与源码存在偏差，所有兼容判断以当前源码及可执行契约测试为准。`apps/api/main.go` 使用 Fiber adapter，不能按旧文档描述的 Gin 架构推断现状。
 
+## 已批准范围修订（2026-11-02）
+
+用户明确要求尽量兼容原数据库，但不支持 MySQL。Rust 主库目标仅 SQLite、PostgreSQL；不启用 SQLx MySQL feature，不建设 MySQL 实现或验收矩阵。上游 MySQL schema/测试保留为历史事实并标记不迁移，既有 Go 基线不为此删改。优先兼容原表名、字段、主键、额度单位、时间和软删除语义；不可兼容项逐项记录，任何有损转换或生产迁移另行确认。本次不删除 ClickHouse 独立日志库及 TimescaleDB 日志扩展的既有范围，不将它们视作主库。
+
 ## 1. 执行约束与变更控制
 
 1. 批准后在 `/root/newapi-rs` 初始化独立 Git 仓库，将本计划落地至 `/root/newapi-rs/docs/rust-backend-migration-plan.md`，作为唯一主计划；不以聊天记录代替计划。`/root/newapi` 只读参考，禁止向 `xiaocongyu66/new-api` 推送。不继承原仓库 origin，不在原仓库提交或改写文件。用户已授权在 `gh` 当前登录账号下创建公开 GitHub 仓库 `newapi-rs`，并向该新仓库提交、推送开发分支用于 CI；执行前核对身份与同名仓库状态。
@@ -19,8 +23,9 @@
 ## 2. 目标架构
 
 - 新实现目录：`/root/newapi-rs/`，采用 Rust + Axum + Tokio 的模块化单体架构，Cargo workspace 按业务域分 crate，一个可部署服务，不拆微服务。`apps/server` 为 Axum composition root；`crates/identity`、`catalog`、`relay`、`billing`、`usage`、`integrations` 等按阶段创建，不预建空壳。业务域拥有自己的业务逻辑、持久化实现和测试，通过显式公开接口交互；传输层与领域逻辑分离，禁止跨模块直接读写内部表或导入私有实现。公共基础能力限于配置、数据库连接、错误/观测等稳定边界，禁止形成无边界的 common 巨型模块。P0 固定依赖图，Cargo DAG 禁止循环依赖；跨域协作用显式应用服务/端口编排。
-- HTTP 中间件：Tower/Tower HTTP；JSON：Serde；上游 HTTP：Reqwest；日志与追踪：tracing。具体依赖版本在 P0 核查兼容性后锁定 `Cargo.lock`。
-- 数据访问采用 SQLx，为 SQLite、MySQL、PostgreSQL 使用明确的数据库实现与方言测试；不假设任意 SQL 可以跨库通用。依赖版本能否支持当前数据库最低版本必须实测；不能满足时先提出计划修订，不静默提高门槛。
+- 缓存保持最小依赖：用户已决定不引入 Moka；公共配置使用标准库 Arc/锁保护的快照，不能用 TTL 淘汰替代最后有效配置。跨实例一致性仍按对应业务的 Redis/数据库契约实现。
+- HTTP 中间件：Tower/Tower HTTP；JSON：Serde；上游 HTTP：Reqwest；日志与追踪：tracing。用户于 2026-11-02 明确批准 P0 先解析依赖：允许建立用于依赖解析的最小清单与必要 target，由 GitHub Actions 解析、验证并回收 Cargo.lock；该材料不是业务实现，不以空 target 宣称完成 P1。P1 将锁定依赖纳入真实模块化 workspace，并重新运行完整远程检查。所有解析、生成与编译仅远程执行。
+- 数据访问采用 SQLx，为 SQLite、PostgreSQL 使用明确的数据库实现与方言测试；不假设任意 SQL 可以跨库通用。依赖版本能否支持当前数据库最低版本必须实测；不能满足时先提出计划修订，不静默提高门槛。
 - 按 `config / transport / identity / security / catalog / relay / billing / usage / jobs / integrations / storage` 分层。路由只做协议适配，业务规则不绑定 Axum extractor，外部 HTTP/时钟等边界可替换测试。
 - 前端继续使用 `apps/web`，保持现有接口路径、字段、错误响应、鉴权语义和流协议。不得以大规模修改前端掩盖兼容性问题。
 - Rust 后端初期使用独立监听端口与测试数据库，不连接生产库，不主动自动迁移现有数据库。
@@ -52,11 +57,11 @@ P0 建立并冻结以下台账；全部实际条目应逐项映射至 P1–P9，
 
 ### P1 — 可运行基础与公共配置垂直切片
 
-**交付：**建立 `Cargo.toml`、`Cargo.lock`、启动入口、配置解析、日志脱敏、错误边界、请求大小限制、优雅退出、存活/就绪检查；实现三类数据库连接与 options 读取；移植 `/api/notice`、`/api/about`、`/api/home_page_content` 的真实持久化读取，以及法律文档接口的配置映射。缺少配置与数据库错误必须区分处理；不自动创建或修改旧库。
+**交付：**建立 `Cargo.toml`、`Cargo.lock`、启动入口、配置解析、日志脱敏、错误边界、请求大小限制、优雅退出、存活/就绪检查；实现 SQLite、PostgreSQL 数据库连接与 options 读取；移植 `/api/notice`、`/api/about`、`/api/home_page_content` 的真实持久化读取，以及法律文档接口的配置映射。缺少配置与数据库错误在加载层、日志和就绪检查中区分处理；不自动创建或修改旧库。用户于 2026-11-02 确认保持公共 GET 的原有缓存行为：配置从数据库加载到内存，GET 不逐请求查库；运行时数据库故障保留最后有效配置并维持原响应 envelope，不向公共 GET 注入新的数据库错误响应。首次加载失败不得伪装初始化成功，就绪检查应失败；后续同步失败标记未就绪但保留已有快照。缺少配置使用原默认值，外部删除配置行的语义按 Go 基线核查并保留，不擅自改成自动清空。
 
 **参考：**`apps/api/internal/transport/compose/register_api.go:19`，`apps/api/internal/transport/handler/handle_misc.go:177–235`，`apps/api/internal/dbinfra/store_options.go:42–76`。复用其字段与默认值语义而非复制 Go 实现。
 
-**验收：**可独立启动 Axum；已迁移接口与 Go fixture 对比通过；空配置、合法配置、数据库不可用、非法环境配置、方法错误、未实现路由均有测试；三数据库集成测试分别报告结果。未实现接口不能意外进入 SPA 并返回成功页面。
+**验收：**可独立启动 Axum；已迁移接口与 Go fixture 对比通过；空配置、合法配置、数据库不可用、非法环境配置、方法错误、未实现路由均有测试；SQLite/PostgreSQL 两数据库集成测试分别报告结果。未实现接口不能意外进入 SPA 并返回成功页面。
 
 ### P2 — 初始化、身份认证与权限
 
@@ -68,7 +73,7 @@ P0 建立并冻结以下台账；全部实际条目应逐项映射至 P1–P9，
 
 **交付：**用户/令牌管理、渠道/模型/分组/供应商、定价配置、系统设置、权限管理、导入导出、缓存刷新及渠道健康配置等现有管理路由；迁移前端所依赖的查询、分页、过滤和聚合语义。涉及资金变更的写操作明确归入 P4，本阶段只验收非资金业务；资金动作保持未实现状态，不能临时无账务更新。
 
-**验收：**前端初始化、登录、日常管理流程贯通；三数据库 CRUD、唯一约束、软删除和授权回归通过；每项未完成动作明确失败，不返回假成功。
+**验收：**前端初始化、登录、日常管理流程贯通；SQLite/PostgreSQL 两数据库 CRUD、唯一约束、软删除和授权回归通过；每项未完成动作明确失败，不返回假成功。
 
 ### P4 — 账务核心与一致性
 
@@ -136,7 +141,7 @@ P0 建立并冻结以下台账；全部实际条目应逐项映射至 P1–P9，
 3. 每阶段先确定模块契约、文件所有权及任务依赖，再并行分发可独立任务；接口、Cargo 清单/lock、公共模型、CI 文件由指定集成者负责。阶段内并行，阶段间仍遵守验收依赖，不以并行为由跳过账务/鉴权前置条件。
 4. Agent 交付改动、契约测试和静态检查说明，不声称本地验证通过。集成者审查后按获得授权的 Git 策略整合到集成分支并推送新仓库，远程 CI 对集成结果验证；独立 verification 代理读取该精确 SHA 的 CI 日志并审查实现。
 5. 仅使用账号确认可免费使用的标准 GitHub-hosted Linux runner；不启用 larger runner、付费服务或自托管本机 runner。确认新仓库可见性和账号额度后再冻结 runner 配置；免费额度耗尽则暂停报告，不自动付费。
-6. 使用最小 `contents: read` 权限、锁定 Actions 版本、Cargo 依赖缓存、按分支 concurrency 取消过期运行及合理 timeout。普通改动先快速 fmt/check/clippy/unit，再运行受影响集成测试；阶段验收必须全量三库和契约矩阵，不能因路径过滤或跳过得出假绿。
+6. 使用最小 `contents: read` 权限、锁定 Actions 版本、Cargo 依赖缓存、按分支 concurrency 取消过期运行及合理 timeout。普通改动先快速 fmt/check/clippy/unit，再运行受影响集成测试；阶段验收必须全量SQLite/PostgreSQL 两库和契约矩阵，不能因路径过滤或跳过得出假绿。
 7. 通过 `gh run list/view/watch` 获取状态与失败日志，按失败证据定向修复；不循环无意义重跑。CI 中生成并验证 Cargo.lock，随后通过受控方式回收至新仓库；不得为生成 lockfile 本地构建。Go 基线也仅在 Actions 中从固定上游 commit 检出并运行，不对上游仓库发起任何写操作。
 8. 用户已明确授权：在 `gh` 当前登录账号下创建公开 `newapi-rs`，向该新仓库提交和推送开发分支以运行 CI。计划批准后先核对 `gh` 身份及同名仓库是否已存在；如已存在则停止确认，不覆盖。该授权不包含原仓库写入、force-push、生产部署、付费 runner 或真实付费上游测试。
 

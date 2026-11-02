@@ -1,0 +1,115 @@
+name: P0 dependencies (not service acceptance)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/dependency-probe/**'
+      - '.github/workflows/p0-dependencies.yml'
+  pull_request:
+    paths:
+      - 'tools/dependency-probe/**'
+      - '.github/workflows/p0-dependencies.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-dependencies-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUST_TOOLCHAIN: '1.99.1'
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+      SQLX_OFFLINE: 'true'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize evidence
+        run: |
+          mkdir -p "$RUNNER_TEMP/p0-dependencies"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/p0-dependencies/event-sha.txt"
+          printf 'run_id=%s\nattempt=%s\nref=%s\ntoolchain=%s\nimage=%s\nimage_version=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_REF" "$RUST_TOOLCHAIN" \
+            "$ImageOS" "$ImageVersion" > "$RUNNER_TEMP/p0-dependencies/environment.txt"
+      - name: Checkout exact event revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Record source identity
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/p0-dependencies/checkout-sha.txt"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          cp tools/dependency-probe/Cargo.toml "$RUNNER_TEMP/p0-dependencies/Cargo.toml"
+          cp tools/dependency-probe/src/lib.rs "$RUNNER_TEMP/p0-dependencies/lib.rs"
+          cp .github/workflows/p0-dependencies.yml "$RUNNER_TEMP/p0-dependencies/workflow.yml"
+      - name: Install fixed released Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+          rustc +"$RUST_TOOLCHAIN" --version --verbose > "$RUNNER_TEMP/p0-dependencies/rustc.txt"
+          cargo +"$RUST_TOOLCHAIN" --version --verbose > "$RUNNER_TEMP/p0-dependencies/cargo.txt"
+      - name: Cache registry downloads only
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+          key: p0-deps-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ hashFiles('tools/dependency-probe/Cargo.toml', 'tools/dependency-probe/Cargo.lock') }}
+          restore-keys: |
+            p0-deps-${{ runner.os }}-${{ runner.arch }}-1.99.1-
+      - name: Resolve lockfile remotely if not yet recovered
+        id: resolve
+        working-directory: tools/dependency-probe
+        run: |
+          if test -f Cargo.lock; then
+            printf '%s\n' 'Recovered lockfile retained; no regeneration.' > "$RUNNER_TEMP/p0-dependencies/resolve.log"
+          else
+            cargo +"$RUST_TOOLCHAIN" generate-lockfile 2>&1 | tee "$RUNNER_TEMP/p0-dependencies/resolve.log"
+          fi
+          cp Cargo.lock "$RUNNER_TEMP/p0-dependencies/Cargo.lock"
+      - name: Check locked dependency probe
+        id: check
+        working-directory: tools/dependency-probe
+        run: cargo +"$RUST_TOOLCHAIN" check --locked 2>&1 | tee "$RUNNER_TEMP/p0-dependencies/check.log"
+      - name: Export locked tree and metadata
+        id: export
+        if: ${{ !cancelled() && hashFiles('tools/dependency-probe/Cargo.lock') != '' }}
+        working-directory: tools/dependency-probe
+        run: |
+          cargo +"$RUST_TOOLCHAIN" tree --locked > "$RUNNER_TEMP/p0-dependencies/tree.txt" 2> "$RUNNER_TEMP/p0-dependencies/tree.stderr"
+          cargo +"$RUST_TOOLCHAIN" tree --locked --edges features > "$RUNNER_TEMP/p0-dependencies/features.txt" 2> "$RUNNER_TEMP/p0-dependencies/features.stderr"
+          cargo +"$RUST_TOOLCHAIN" metadata --locked --format-version 1 > "$RUNNER_TEMP/p0-dependencies/metadata.json" 2> "$RUNNER_TEMP/p0-dependencies/metadata.stderr"
+      - name: Record outcomes and evidence checksums
+        if: always()
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          printf '%s\n' "$STEPS_JSON" > "$RUNNER_TEMP/p0-dependencies/steps.json"
+          printf '%s\n' "$JOB_STATUS" > "$RUNNER_TEMP/p0-dependencies/job-status.txt"
+          if test -f tools/dependency-probe/Cargo.lock; then
+            cp tools/dependency-probe/Cargo.lock "$RUNNER_TEMP/p0-dependencies/Cargo.lock"
+          fi
+          cd "$RUNNER_TEMP/p0-dependencies"
+          for file in ./*; do
+            if [[ -f "$file" && "$file" != ./SHA256SUMS ]]; then
+              sha256sum -- "$file"
+            fi
+          done > "$RUNNER_TEMP/p0-dependencies-SHA256SUMS.tmp"
+          mv "$RUNNER_TEMP/p0-dependencies-SHA256SUMS.tmp" SHA256SUMS
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p0-dependencies-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p0-dependencies/
+          retention-days: 14
+          if-no-files-found: error
