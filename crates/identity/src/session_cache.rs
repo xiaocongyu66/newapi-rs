@@ -1,6 +1,16 @@
 //! 共享 Redis 会话缓存；不承担用户认证栅栏，也不直接访问数据库。
 //! 调用方必须在权威读取或修改前捕获期限；命中拒绝态绝不能回源放行。
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// 连接建立（含握手）及每次完整命令的有限上限。
+pub const IO_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn system_now_ms() -> Result<i64, CacheError> {
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| CacheError::Invalid)?;
+    i64::try_from(elapsed.as_millis()).map_err(|_| CacheError::Invalid)
+}
 
 use hmac::{Hmac, Mac};
 use redis::aio::MultiplexedConnection;
@@ -54,6 +64,7 @@ pub struct RedisSessionCache {
     connection: MultiplexedConnection,
     key_mac: Hmac<Sha256>,
     window_ms: i64,
+    clock: Arc<dyn Fn() -> Result<i64, CacheError> + Send + Sync>,
 }
 
 // 版本使用十进制字符串比较，避免 Lua 浮点数丢失 i64 高位。
@@ -87,12 +98,12 @@ return 1
 "#;
 
 impl RedisSessionCache {
-    /// 连接失败不会隐式切换为无缓存模式。建议调用端施加连接和请求超时。
+    /// 连接及握手整体限时，失败不会隐式切换为无缓存模式。
     pub async fn connect(url: &str, secret: &[u8], cache_seconds: i64) -> Result<Self, CacheError> {
         let client = redis::Client::open(url).map_err(redis_error)?;
-        let connection = client
-            .get_multiplexed_async_connection()
+        let connection = tokio::time::timeout(IO_TIMEOUT, client.get_multiplexed_async_connection())
             .await
+            .map_err(|_| CacheError::Unavailable)?
             .map_err(redis_error)?;
         Self::from_connection(connection, secret, cache_seconds)
     }
@@ -110,7 +121,17 @@ impl RedisSessionCache {
         let mut key = b"user-session-cache-v1:".to_vec();
         key.extend_from_slice(secret);
         let key_mac = Hmac::<Sha256>::new_from_slice(&key).map_err(|_| CacheError::Invalid)?;
-        Ok(Self { connection, key_mac, window_ms })
+        Ok(Self { connection, key_mac, window_ms, clock: Arc::new(system_now_ms) })
+    }
+
+    /// 注入发布时毫秒时钟；与 fence 参数的业务审计秒时间相互独立。
+    /// 生产默认使用系统时间；测试可捕获原子时钟，不允许返回过期的业务时间。
+    pub fn with_clock<F>(mut self, clock: F) -> Self
+    where
+        F: Fn() -> Result<i64, CacheError> + Send + Sync + 'static,
+    {
+        self.clock = Arc::new(clock);
+        self
     }
 
     pub fn cache_key(&self, sid: &str) -> String {
@@ -143,18 +164,31 @@ impl RedisSessionCache {
             return Err(CacheError::Invalid);
         }
         let mut connection = self.connection.clone();
-        let fields: HashMap<String, String> = redis::cmd("HGETALL")
-            .arg(self.cache_key(sid))
-            .query_async(&mut connection)
-            .await
-            .map_err(redis_error)?;
+        // 一次读取同一快照，禁止先整体解码 UTF-8 或另发命令查询状态。
+        let fields: HashMap<Vec<u8>, Vec<u8>> = tokio::time::timeout(IO_TIMEOUT, async {
+            redis::cmd("HGETALL")
+                .arg(self.cache_key(sid))
+                .query_async(&mut connection)
+                .await
+        })
+        .await
+        .map_err(|_| CacheError::Unavailable)?
+        .map_err(redis_error)?;
         if fields.is_empty() {
             return Ok(CacheRead::Miss);
         }
-        // 即使损坏 schema，已观察到的墓碑仍须闭锁，不能误当普通 miss。
-        if matches!(fields.get("Status").map(String::as_str), Some("revoking" | "revoked")) {
+        // Go 元数据可能含非法 UTF-8；墓碑不能被任意其他字段的解码失败绕过。
+        if fields.get(b"Status".as_slice()).is_some_and(|status| {
+            status.as_slice() == b"revoking" || status.as_slice() == b"revoked"
+        }) {
             return Ok(CacheRead::Denied);
         }
+        let fields: Result<HashMap<String, String>, _> = fields.into_iter()
+            .map(|(key, value)| Ok((String::from_utf8(key)?, String::from_utf8(value)?)))
+            .collect::<Result<_, std::string::FromUtf8Error>>();
+        let Ok(fields) = fields else {
+            return Ok(CacheRead::InvalidEntry);
+        };
         let Some(m) = decode(&fields, sid) else {
             return Ok(CacheRead::InvalidEntry);
         };
@@ -209,15 +243,20 @@ impl RedisSessionCache {
 
     async fn write(&self, m: &SessionMetadata, expiration: i64) -> Result<(), CacheError> {
         let mut connection = self.connection.clone();
-        let result: i64 = redis::Script::new(WRITE)
-            .key(self.cache_key(&m.sid))
-            .arg(&m.sid).arg(m.user_id).arg(m.version).arg(m.user_auth_version)
-            .arg(&m.status).arg(&m.login_method).arg(&m.ip).arg(&m.user_agent)
-            .arg(m.created_at).arg(m.last_active_at).arg(m.expires_at)
-            .arg(m.revoked_at).arg(&m.revoked_reason).arg(expiration)
-            .invoke_async(&mut connection)
-            .await
-            .map_err(redis_error)?;
+        // 限制整个脚本调用，包括首次缺少脚本时的加载及重试；外部连接同样受限。
+        let result: i64 = tokio::time::timeout(IO_TIMEOUT, async {
+            redis::Script::new(WRITE)
+                .key(self.cache_key(&m.sid))
+                .arg(&m.sid).arg(m.user_id).arg(m.version).arg(m.user_auth_version)
+                .arg(&m.status).arg(&m.login_method).arg(&m.ip).arg(&m.user_agent)
+                .arg(m.created_at).arg(m.last_active_at).arg(m.expires_at)
+                .arg(m.revoked_at).arg(&m.revoked_reason).arg(expiration)
+                .invoke_async(&mut connection)
+                .await
+        })
+        .await
+        .map_err(|_| CacheError::Unavailable)?
+        .map_err(redis_error)?;
         match result {
             1 => Ok(()),
             0 => Err(CacheError::Inactive),
@@ -230,8 +269,13 @@ impl RedisSessionCache {
         if now <= 0 {
             return Err(CacheError::Invalid);
         }
-        let remaining = m.expires_at.checked_sub(now)
-            .and_then(|v| v.checked_mul(1000)).ok_or(CacheError::Invalid)?;
+        // now 只用于业务审计及输入校验，不能作为已延迟发布的 TTL 起点。
+        let published_ms = (self.clock)()?;
+        if published_ms <= 0 {
+            return Err(CacheError::Invalid);
+        }
+        let remaining = m.expires_at.checked_mul(1000)
+            .and_then(|expiry| expiry.checked_sub(published_ms)).ok_or(CacheError::Invalid)?;
         let ttl = remaining.min(self.window_ms);
         self.write(m, if ttl <= 0 { 1000 } else { ttl }).await
     }

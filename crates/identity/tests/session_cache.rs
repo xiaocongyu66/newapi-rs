@@ -1,6 +1,11 @@
 //! 仅运行于显式配置的真实 Redis；环境缺失必须失败，不允许忽略或内存替代。
 //! 集成者需先导出 sessions 与 session_cache 模块，并补齐精确依赖。
 use std::collections::HashMap;
+use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
+use std::time::{Duration, Instant};
+
+use newapi_identity::session_cache::IO_TIMEOUT;
+use tokio::net::{TcpListener, TcpStream};
 
 use newapi_identity::session_cache::{CacheError, CacheRead, FillOutcome, RedisSessionCache};
 use newapi_identity::sessions::{RevocationFence, SessionError, SessionMetadata};
@@ -107,10 +112,16 @@ async fn versions_schema_projection_and_deadlines() {
     let t = now(&mut control).await;
     let mut m = session(t);
     // 超过 Lua 浮点精确整数范围，仍必须保护相邻 i64 版本。
-    m.version = 9_007_199_254_740_993;
+    m.version = i64::MAX;
     let key = a.cache_key(&m.sid);
     assert!(key.starts_with("auth:session:"));
     assert_eq!(key.len(), "auth:session:".len() + 64);
+    assert!(matches!(a.capture_deadline(i64::MAX), Err(CacheError::Invalid)));
+    let mut overflow = m.clone();
+    overflow.expires_at = i64::MAX;
+    assert_eq!(a.fill_active(&overflow, a.capture_deadline(t).unwrap(), t, || t).await,
+        Err(CacheError::Invalid));
+    assert_eq!(b.revoking(&overflow, t / 1000, "溢出输入").await, Err(SessionError::Fence));
     let deadline = a.capture_deadline(t - 50_000).unwrap();
     assert_eq!(a.fill_active(&m, deadline, t, || t).await, Ok(FillOutcome::Stored));
     let remaining = ttl(&mut control, &key).await;
@@ -152,10 +163,132 @@ async fn versions_schema_projection_and_deadlines() {
     assert_eq!(b.read(&m.sid, m.expires_at * 1000).await.unwrap(), CacheRead::Denied);
     assert_eq!(a.fill_active(&m, deadline, m.expires_at * 1000, || t).await,
         Err(CacheError::Inactive));
+    let expired_ms = m.expires_at * 1000;
+    let b = b.with_clock(move || Ok(expired_ms));
     b.revoking(&m, m.expires_at, "到期").await.unwrap();
     let remaining = ttl(&mut control, &key).await;
     assert!(remaining > 0 && remaining <= 1000, "非正剩余期限使用一秒墓碑");
     cleanup(&mut control, &key).await;
+}
+
+#[tokio::test]
+async fn binary_metadata_cannot_bypass_deny() {
+    let (a, b, mut control) = connections(60).await;
+    let t = now(&mut control).await;
+    let m = session(t);
+    let key = a.cache_key(&m.sid);
+    for status in ["revoking", "revoked"] {
+        for field in ["UserAgent", "ExtraField"] {
+            b.revoking(&m, t / 1000, "logout").await.unwrap();
+            let _: i64 = redis::cmd("HSET").arg(&key)
+                .arg("Status").arg(status).arg(field).arg(&[0xff_u8][..])
+                .query_async(&mut control).await.unwrap();
+            assert_eq!(a.read(&m.sid, t).await.unwrap(), CacheRead::Denied);
+            cleanup(&mut control, &key).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn deny_ttl_uses_publication_milliseconds_not_audit_seconds() {
+    let (a, b, mut control) = connections(60).await;
+    let t = now(&mut control).await;
+    let mut m = session(t);
+    m.expires_at = t / 1000 + 10;
+    let expiry_ms = m.expires_at * 1000;
+    let clock = Arc::new(AtomicI64::new(expiry_ms - 1750));
+    let injected = clock.clone();
+    let b = b.with_clock(move || Ok(injected.load(Ordering::SeqCst)));
+    let key = a.cache_key(&m.sid);
+    // 审计时间保持不变，发布时钟包含毫秒且已晚于审计时间。
+    b.revoking(&m, t / 1000, "延迟发布").await.unwrap();
+    let remaining = ttl(&mut control, &key).await;
+    assert!(remaining > 0 && remaining <= 1750);
+    let audited: i64 = redis::cmd("HGET").arg(&key).arg("RevokedAt")
+        .query_async(&mut control).await.unwrap();
+    assert_eq!(audited, t / 1000);
+    clock.store(expiry_ms - 750, Ordering::SeqCst);
+    b.revoked(&m, t / 1000).await.unwrap();
+    let remaining = ttl(&mut control, &key).await;
+    assert!(remaining > 0 && remaining <= 750);
+    clock.store(expiry_ms + 500, Ordering::SeqCst);
+    b.revoking(&m, t / 1000, "已到期").await.unwrap();
+    let remaining = ttl(&mut control, &key).await;
+    assert!(remaining > 0 && remaining <= 1000);
+    cleanup(&mut control, &key).await;
+}
+
+#[tokio::test]
+async fn handshake_without_response_has_finite_timeout() {
+    // 仍强制真实 Redis 环境；黑洞仅用于传输故障注入，不伪装缓存实现。
+    let _real = connections(60).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let started = Instant::now();
+    let result = tokio::time::timeout(IO_TIMEOUT + Duration::from_secs(2),
+        RedisSessionCache::connect(&format!("redis://{address}/"), SECRET, 60)).await;
+    task.abort();
+    let _ = task.await;
+    assert!(matches!(result, Ok(Err(CacheError::Unavailable))));
+    assert!(started.elapsed() >= IO_TIMEOUT);
+}
+
+#[tokio::test]
+async fn established_connection_without_command_responses_times_out() {
+    let (_a, _b, mut control) = connections(60).await;
+    let t = now(&mut control).await;
+    let m = session(t);
+    let url = std::env::var("TEST_REDIS_URL").unwrap();
+    let client = redis::Client::open(url).unwrap();
+    let mut info = client.get_connection_info().clone();
+    // 故障代理转发真实 Redis 协议，需 CI 提供普通 TCP Redis；不模拟任何响应。
+    let upstream = match &info.addr {
+        redis::ConnectionAddr::Tcp(host, port) => (host.clone(), *port),
+        _ => panic!("传输故障测试要求 TEST_REDIS_URL 使用普通 TCP"),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    info.addr = redis::ConnectionAddr::Tcp(address.ip().to_string(), address.port());
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let (stalled_tx, stalled_rx) = tokio::sync::oneshot::channel::<()>();
+    let proxy = tokio::spawn(async move {
+        let (mut downstream, _) = listener.accept().await.unwrap();
+        let mut upstream = TcpStream::connect(upstream).await.unwrap();
+        tokio::select! {
+            result = tokio::io::copy_bidirectional(&mut downstream, &mut upstream) => {
+                panic!("真实 Redis 转发意外结束：{result:?}");
+            }
+            _ = stop_rx => {}
+        }
+        stalled_tx.send(()).unwrap();
+        // 保持两端连接存活，仅停止转发，区别于 CLIENT KILL。
+        std::future::pending::<()>().await;
+        drop((downstream, upstream));
+    });
+    let connection = tokio::time::timeout(Duration::from_secs(5),
+        redis::Client::open(info).unwrap().get_multiplexed_async_connection())
+        .await.unwrap().unwrap();
+    let cache = RedisSessionCache::from_connection(connection, SECRET, 60).unwrap();
+    stop_tx.send(()).unwrap();
+    stalled_rx.await.unwrap();
+    let results = tokio::time::timeout(IO_TIMEOUT * 4 + Duration::from_secs(2), async {
+        let read = cache.read(&m.sid, t).await;
+        let fill = cache.fill_active(&m, cache.capture_deadline(t).unwrap(), t, || t).await;
+        let pending = cache.revoking(&m, t / 1000, "logout").await;
+        let terminal = cache.revoked(&m, t / 1000).await;
+        (read, fill, pending, terminal)
+    }).await;
+    proxy.abort();
+    let _ = proxy.await;
+    let (read, fill, pending, terminal) = results.expect("每个命令必须有限返回");
+    assert_eq!(read, Err(CacheError::Unavailable));
+    assert_eq!(fill, Err(CacheError::Unavailable));
+    assert_eq!(pending, Err(SessionError::Fence));
+    assert_eq!(terminal, Err(SessionError::Fence));
 }
 
 #[tokio::test]

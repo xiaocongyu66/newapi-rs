@@ -19,5 +19,4 @@ newapi-storage.workspace = true
 sqlx.workspace = true
 redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp", "script"] }
 
-[dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
