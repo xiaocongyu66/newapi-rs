@@ -154,7 +154,9 @@ fn diagnostic_result<T>(
     let elapsed_ms = started.elapsed().as_millis();
     match result {
         Ok(value) => {
-            eprintln!("setup_fixture ok backend={backend} action={label} caller={caller} elapsed_ms={elapsed_ms} pool_size={size} pool_idle={idle}");
+            eprintln!(
+                "setup_fixture ok backend={backend} action={label} caller={caller} elapsed_ms={elapsed_ms} pool_size={size} pool_idle={idle}"
+            );
             value
         }
         Err(error) => {
@@ -171,7 +173,9 @@ fn diagnostic_result<T>(
                 _ => None,
             };
             let code = code.as_deref().unwrap_or("unavailable");
-            panic!("setup_fixture failed backend={backend} action={label} caller={caller} class={class} code={code} elapsed_ms={elapsed_ms} pool_size={size} pool_idle={idle}");
+            panic!(
+                "setup_fixture failed backend={backend} action={label} caller={caller} class={class} code={code} elapsed_ms={elapsed_ms} pool_size={size} pool_idle={idle}"
+            );
         }
     }
 }
@@ -289,7 +293,9 @@ async fn remaining_columns_fixture(db: &Database) {
             .join(",");
         // 只输出白名单表名，帮助定位同一调用行上的不同建表操作。
         let (backend, size, idle) = pool_state(db);
-        eprintln!("setup_fixture begin backend={backend} action=create_baseline_columns table={table} pool_size={size} pool_idle={idle}");
+        eprintln!(
+            "setup_fixture begin backend={backend} action=create_baseline_columns table={table} pool_size={size} pool_idle={idle}"
+        );
         execute(db, &format!("CREATE TABLE \"{table}\" ({definitions})")).await;
     }
 }
@@ -304,7 +310,9 @@ async fn reset_rows(db: &Database) {
 fn checkpoint(db: &Database, second: &Database, phase: &str) {
     let (backend, size, idle) = pool_state(db);
     let (_, second_size, second_idle) = pool_state(second);
-    eprintln!("setup_fixture phase={phase} backend={backend} pool_size={size} pool_idle={idle} second_size={second_size} second_idle={second_idle}");
+    eprintln!(
+        "setup_fixture phase={phase} backend={backend} pool_size={size} pool_idle={idle} second_size={second_size} second_idle={second_idle}"
+    );
 }
 
 async fn scenarios(db: &Database, second: &Database) {
