@@ -1,0 +1,20 @@
+[package]
+name = "newapi-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+sqlx.workspace = true
+newapi-config.workspace = true
+newapi-storage.workspace = true
+newapi-catalog.workspace = true
+
+[dev-dependencies]
+tower.workspace = true

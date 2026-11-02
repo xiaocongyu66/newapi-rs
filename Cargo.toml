@@ -1,0 +1,23 @@
+[workspace]
+members = ["crates/config", "crates/storage", "crates/catalog", "apps/server"]
+exclude = ["tools/dependency-probe"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+[workspace.dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "http2", "json", "tokio"] }
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+tower = { version = "=0.5.3", features = ["util", "timeout", "limit"] }
+tower-http = { version = "=0.7.1", features = ["trace", "cors", "request-id", "limit"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json"] }
+newapi-config = { path = "crates/config" }
+newapi-storage = { path = "crates/storage" }
+newapi-catalog = { path = "crates/catalog" }
