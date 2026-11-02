@@ -1,6 +1,29 @@
 # P1 Rust 远程验证与集成交接
 
-## 状态与边界
+## P2 首批 CI 增量（最新约定，覆盖下文 P1 历史描述）
+
+主代理已确认 P1 PASS，进入 migration/p2。本次仅修改 workflow、CI driver、driver tests 和本文，未修改生产 crate，未本地运行任何测试。本次新增 CI 尚待远程验证。
+
+- manifest 白名单现在恰为 `crates/config`、`crates/storage`、`crates/catalog`、`crates/identity`、`crates/security`、`apps/server` 六个成员，probe 继续排除。既有探针精确版本、SQLx defaults/MySQL/Moka 禁用保持。
+- 两个 PG job 各追加 `newapi-identity` 的 `sqlite_` / `postgres_` 筛选测试，分别要求 passed > 0、failed = ignored = 0；模块所有者须采用对应命名和真实数据库。纯 crypto/security 测试随 `cargo test --locked --workspace` 执行。
+- `workflow_dispatch.inputs.refresh_lock` 为布尔值，默认 false。仅事件为 workflow_dispatch 且输入 true 才允许 root lock 更新：存在则 `cargo +1.99.1 update`，不存在则 `generate-lockfile`。普通 push/PR/默认 dispatch 一律不重新解析 lock，缺锁直接失败；过期锁由后续 `metadata --locked` 拒绝，不自动漂移。
+- 显式 refresh 记录原 lock SHA256、真实命令退出码、`refreshed: true` 与 `requires_recovery_and_locked_rerun: true`；现有 artifact 名仍精确绑定 SHA/run/attempt。下游仅在同一授权 dispatch 中允许 prepared lock 与 committed lock 不同，并验证原锁 SHA256。普通运行仍拒绝任何差异。
+- `cargo update` 可能更新允许范围内的传递依赖，须审阅 lock diff、features/metadata 与许可证；既有直接依赖仍被探针精确版本限制。新 crypto 依赖的固定版本由主代理清单审阅负责。
+- driver 新增三项回归测试：push 即使带环境标志也不得更新；默认 dispatch 锁定；显式 dispatch 对存在/缺失 lock 分别选择 update/generate。连同原五项共八项，仅 Actions 执行。
+
+### 首次远程更新操作（主代理执行，本代理未触发）
+
+先集成六模块清单及本次 CI 文件到 `migration/p2`，提交并推送新仓库。普通 push 如因旧 lock 失败是预期门禁，不应删除 `--locked`。
+
+```sh
+gh workflow run p1-rust.yml --ref migration/p2 -f refresh_lock=true
+```
+
+需保证 workflow_dispatch 工作流已存在于默认分支；若该分支本身是默认分支则无额外步骤。若 GitHub 尚未注册该 workflow，先经授权将调度定义同步到默认分支，不能用本地 Cargo 绕过。
+
+从该精确 run/attempt 的 `p1-prepare-<SHA>-<run>-<attempt>` 下载 Cargo.lock 和 SHA256SUMS，核实 source identity、checksum、依赖变更后，将真实 root lock 提交到 migration/p2。再以新 SHA 的普通 push，或 `gh workflow run p1-rust.yml --ref migration/p2 -f refresh_lock=false` 完整 locked 重跑。refresh run 即使绿也只是待回收证据，不可替代该 locked 重跑及独立 verification。不要同时推送新提交取消正在回收的 refresh run。
+
+## 状态与边界（P1 历史记录）
 
 本交付仅实现 P1 CI 编排、证据驱动脚本及脚本回归测试，**尚未运行，不能判定 P1 PASS**。未本地执行构建、测试、自写脚本、服务或容器；未提交或推送。P0 工作流未修改。业务 Rust 与模块测试由各模块所有者提供；本文件不替代主计划或独立 verification。
 

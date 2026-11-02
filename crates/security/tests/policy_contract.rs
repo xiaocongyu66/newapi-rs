@@ -1,0 +1,243 @@
+use newapi_security::{
+    ApiKeyGrant, ApiKeyMode, ApiKeyStatus, AuthContext, CredentialKind, Denial, OriginRequest, Role,
+    authorize_role, check_api_key, check_ip_allowlist, check_session_origin, require_browser_session,
+};
+
+fn auth(kind: CredentialKind) -> AuthContext<'static> {
+    AuthContext {
+        user_id: 7,
+        username: "测试用户",
+        role: Role::User,
+        user_enabled: true,
+        credential: kind,
+        session_id: Some("测试会话"),
+    }
+}
+
+#[test]
+fn role_values_and_thresholds_are_exact() {
+    for invalid in [-1, 0, 2, 9, 11, 99, 101] {
+        assert_eq!(Role::try_from(invalid), Err(Denial::InvalidUser));
+    }
+    for (value, role) in [(1, Role::User), (10, Role::Admin), (100, Role::Root)] {
+        assert_eq!(Role::try_from(value), Ok(role));
+        let mut context = auth(CredentialKind::DashboardSession);
+        context.role = role;
+        for minimum in [Role::User, Role::Admin, Role::Root] {
+            assert_eq!(authorize_role(&context, minimum).is_ok(), role >= minimum);
+        }
+    }
+}
+
+#[test]
+fn credentials_are_not_interchangeable() {
+    for kind in [
+        CredentialKind::DashboardSession,
+        CredentialKind::PersonalAccessToken,
+        CredentialKind::RelayApiKey,
+        CredentialKind::RefreshToken,
+        CredentialKind::SecurityProof,
+        CredentialKind::LoginFlow,
+    ] {
+        let context = auth(kind);
+        assert_eq!(
+            authorize_role(&context, Role::User).is_ok(),
+            matches!(
+                kind,
+                CredentialKind::DashboardSession | CredentialKind::PersonalAccessToken
+            )
+        );
+        assert_eq!(
+            require_browser_session(&context).is_ok(),
+            kind == CredentialKind::DashboardSession
+        );
+        assert_eq!(
+            check_api_key(
+                &context,
+                &grant(),
+                ApiKeyMode::Full,
+                100,
+                "127.0.0.1".parse().unwrap()
+            )
+            .is_ok(),
+            kind == CredentialKind::RelayApiKey
+        );
+    }
+    let mut context = auth(CredentialKind::DashboardSession);
+    context.session_id = None;
+    assert_eq!(
+        require_browser_session(&context),
+        Err(Denial::BrowserSessionRequired)
+    );
+    context.user_enabled = false;
+    assert_eq!(
+        authorize_role(&context, Role::User),
+        Err(Denial::UserDisabled)
+    );
+    context.user_enabled = true;
+    context.username = "  ";
+    assert_eq!(
+        authorize_role(&context, Role::User),
+        Err(Denial::InvalidUser)
+    );
+}
+
+fn grant() -> ApiKeyGrant<'static> {
+    ApiKeyGrant {
+        owner_id: 7,
+        deleted: false,
+        status: ApiKeyStatus::Enabled,
+        expires_at: 100,
+        unlimited_quota: false,
+        remaining_quota: 1,
+        allowed_ips: &[],
+    }
+}
+
+#[test]
+fn api_key_readonly_and_full_boundaries() {
+    let context = auth(CredentialKind::RelayApiKey);
+    let ip = "127.0.0.1".parse().unwrap();
+    let mut key = grant();
+    assert_eq!(check_api_key(&context, &key, ApiKeyMode::Full, 100, ip), Ok(()));
+    assert_eq!(
+        check_api_key(&context, &key, ApiKeyMode::Full, 101, ip),
+        Err(Denial::ApiKeyExpired)
+    );
+    key.expires_at = -1;
+    key.remaining_quota = 0;
+    assert_eq!(
+        check_api_key(&context, &key, ApiKeyMode::Full, 101, ip),
+        Err(Denial::ApiKeyExhausted)
+    );
+    key.unlimited_quota = true;
+    assert_eq!(check_api_key(&context, &key, ApiKeyMode::Full, 101, ip), Ok(()));
+    key.allowed_ips = &["192.0.2.0/24"];
+    assert_eq!(
+        check_api_key(&context, &key, ApiKeyMode::Full, 101, ip),
+        Err(Denial::IpForbidden)
+    );
+    for status in [
+        ApiKeyStatus::Enabled,
+        ApiKeyStatus::Expired,
+        ApiKeyStatus::Exhausted,
+    ] {
+        key.status = status;
+        assert_eq!(
+            check_api_key(&context, &key, ApiKeyMode::ReadOnly, 101, ip),
+            Ok(())
+        );
+    }
+    key.status = ApiKeyStatus::Disabled;
+    for mode in [ApiKeyMode::ReadOnly, ApiKeyMode::Full] {
+        assert_eq!(
+            check_api_key(&context, &key, mode, 101, ip),
+            Err(Denial::ApiKeyDisabled)
+        );
+    }
+    key.status = ApiKeyStatus::Enabled;
+    key.owner_id = 8;
+    assert_eq!(
+        check_api_key(&context, &key, ApiKeyMode::ReadOnly, 101, ip),
+        Err(Denial::InvalidApiKey)
+    );
+    key.owner_id = 7;
+    key.deleted = true;
+    assert_eq!(
+        check_api_key(&context, &key, ApiKeyMode::ReadOnly, 101, ip),
+        Err(Denial::InvalidApiKey)
+    );
+}
+
+#[test]
+fn ipv4_ipv6_and_malformed_networks() {
+    for (entries, ip, expected) in [
+        (vec!["192.0.2.0/24"], "192.0.2.9", Ok(())),
+        (vec!["2001:db8::/32"], "2001:db8::1", Ok(())),
+        (vec!["::1"], "::1", Ok(())),
+        (vec!["::1"], "127.0.0.1", Err(Denial::IpForbidden)),
+        (vec!["127.0.0.1", "坏配置"], "127.0.0.1", Err(Denial::InvalidIpPolicy)),
+        (vec!["192.0.2.0/33"], "192.0.2.1", Err(Denial::InvalidIpPolicy)),
+    ] {
+        assert_eq!(check_ip_allowlist(&entries, ip.parse().unwrap()), expected);
+    }
+}
+
+fn origin_request<'a>(origins: &'a [&'a str]) -> OriginRequest<'a> {
+    OriginRequest {
+        secure_cookie: true,
+        transport_tls: true,
+        host_headers: &["example.test"],
+        origin_headers: origins,
+        referer_headers: &[],
+        trusted_urls: &[],
+    }
+}
+
+#[test]
+fn origin_normalization_and_hostile_inputs() {
+    for origin in ["https://example.test", "https://EXAMPLE.test:443"] {
+        assert_eq!(check_session_origin(&origin_request(&[origin])), Ok(()));
+    }
+    for origin in [
+        "null",
+        "",
+        "https://example.test:444",
+        "http://example.test",
+        "https://example.test.evil.test",
+        "https://example.test@evil.test",
+        "https://evil.test@example.test",
+        "https://@example.test",
+        "https://example.test,https://example.test",
+        "https://example.test https://evil.test",
+        "https://example.test/path",
+        "https://example.test?query=1",
+        "https://example.test#fragment",
+        "https:///example.test",
+        "https://example.test\\@evil.test",
+        "https://example.\ntest",
+    ] {
+        assert_eq!(
+            check_session_origin(&origin_request(&[origin])),
+            Err(Denial::OriginForbidden)
+        );
+    }
+}
+
+#[test]
+fn origin_duplicates_fallback_and_insecure_compatibility() {
+    let mut request = origin_request(&[]);
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.referer_headers = &["https://example.test/page?x=1"];
+    assert_eq!(check_session_origin(&request), Ok(()));
+    request.origin_headers = &["null"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.origin_headers = &["https://example.test", "https://example.test"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.origin_headers = &[];
+    request.referer_headers = &["https://example.test/a", "https://example.test/b"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.secure_cookie = false;
+    assert_eq!(check_session_origin(&request), Ok(()));
+}
+
+#[test]
+fn transport_scheme_ports_ipv6_and_trusted_urls() {
+    let mut request = origin_request(&["https://example.test"]);
+    // 即使请求声称经过安全代理，非加密连接也不自动成为安全来源。
+    request.transport_tls = false;
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.trusted_urls = &["https://example.test/app"];
+    assert_eq!(check_session_origin(&request), Ok(()));
+    request.trusted_urls = &[];
+    request.transport_tls = true;
+    request.host_headers = &["[2001:db8::1]:8443"];
+    request.origin_headers = &["https://[2001:0db8::1]:8443"];
+    assert_eq!(check_session_origin(&request), Ok(()));
+    request.origin_headers = &["https://[2001:db8::1]"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.host_headers = &["example.test", "example.test"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+    request.host_headers = &["evil.test@example.test"];
+    assert_eq!(check_session_origin(&request), Err(Denial::OriginForbidden));
+}

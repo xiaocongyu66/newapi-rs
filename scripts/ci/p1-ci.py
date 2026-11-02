@@ -95,7 +95,8 @@ def init():
 def manifest_policy():
     baseline = tomllib.loads((ROOT / "tools/dependency-probe/Cargo.toml").read_text())["dependencies"]
     root = tomllib.loads((ROOT / "Cargo.toml").read_text())
-    expected = {"crates/config", "crates/storage", "crates/catalog", "apps/server"}
+    expected = {"crates/config", "crates/storage", "crates/catalog", "apps/server",
+                "crates/identity", "crates/security"}
     if set(root["workspace"]["members"]) != expected:
         raise RuntimeError("unexpected P1 workspace membership")
     if "tools/dependency-probe" not in root["workspace"].get("exclude", []):
@@ -123,12 +124,32 @@ def manifest_policy():
     write_json("manifest-policy.json", {"exit_code": 0, "members": sorted(expected)})
 
 
+def refresh_requested():
+    return (os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+            and os.environ.get("P1_REFRESH_LOCK") == "true")
+
+
+def lock_command(exists):
+    if refresh_requested():
+        return "update" if exists else "generate-lockfile"
+    if not exists:
+        raise RuntimeError("root lock missing; explicit refresh_lock dispatch required")
+    return None
+
+
 def prepare():
     manifest_policy()
     lock = ROOT / "Cargo.lock"
-    generated = not lock.exists()
-    write_json("lock-status.json", {"generated": generated, "requires_recovery_and_locked_rerun": generated})
-    if generated and not run("generate-lockfile", cargo("generate-lockfile")):
+    exists = lock.exists()
+    refresh = refresh_requested()
+    write_json("lock-status.json", {
+        "generated": not exists and refresh, "refreshed": refresh,
+        "event": os.environ.get("GITHUB_EVENT_NAME"),
+        "requires_recovery_and_locked_rerun": refresh,
+        "previous_sha256": hashlib.sha256(lock.read_bytes()).hexdigest() if exists else None,
+    })
+    command = lock_command(exists)
+    if command and not run(command, cargo(command)):
         return False
     shutil.copyfile(lock, evidence() / "Cargo.lock")
     ok = True
@@ -190,8 +211,14 @@ def restore():
                          if line.endswith("  Cargo.lock"))
     if hashlib.sha256(source.read_bytes()).hexdigest() != checksum_line.split()[0]:
         raise RuntimeError("artifact lock checksum mismatch")
+    status = json.loads((prepared / "lock-status.json").read_text())
+    if bool(status.get("refreshed")) != refresh_requested():
+        raise RuntimeError("artifact refresh authorization mismatch")
     if (ROOT / "Cargo.lock").exists() and source.read_bytes() != (ROOT / "Cargo.lock").read_bytes():
-        raise RuntimeError("prepared lock differs from committed lock")
+        if not refresh_requested() or not status.get("requires_recovery_and_locked_rerun"):
+            raise RuntimeError("prepared lock differs from committed lock")
+        if status.get("previous_sha256") != hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest():
+            raise RuntimeError("refresh artifact does not match original committed lock")
     shutil.copyfile(source, ROOT / "Cargo.lock")
     shutil.copyfile(prepared / "lock-status.json", evidence() / "lock-status.json")
     return True
@@ -220,7 +247,7 @@ def verify():
         ok = run(label, command) and ok
     ok = run("workspace-tests", cargo("test", "--locked", "--workspace"), True) and ok
     # Positive counts per backend AND owning module prevent all-filtered false greens.
-    for package in ("newapi-storage", "newapi-catalog"):
+    for package in ("newapi-storage", "newapi-catalog", "newapi-identity"):
         for backend in ("sqlite", "postgres"):
             ok = run(f"{package}-{backend}", cargo("test", "--locked", "-p", package,
                      backend + "_", "--", "--test-threads=1"), True) and ok
@@ -232,9 +259,10 @@ def finalize():
     write_json("job-status.json", {"status": os.environ.get("JOB_STATUS", "unknown")})
     if (ROOT / "Cargo.lock").exists():
         shutil.copyfile(ROOT / "Cargo.lock", evidence() / "Cargo.lock")
-    expected = ["generate-lockfile", "metadata", "tree", "features"] if os.environ["GITHUB_JOB"] == "prepare" else [
+    expected = ["generate-lockfile", "update", "metadata", "tree", "features"] if os.environ["GITHUB_JOB"] == "prepare" else [
         "postgres-version", "driver-tests", "rustc", "check", "fmt", "clippy", "metadata", "features", "workspace-tests",
-        "newapi-storage-sqlite", "newapi-storage-postgres", "newapi-catalog-sqlite", "newapi-catalog-postgres"]
+        "newapi-storage-sqlite", "newapi-storage-postgres", "newapi-catalog-sqlite", "newapi-catalog-postgres",
+        "newapi-identity-sqlite", "newapi-identity-postgres"]
     if os.environ["GITHUB_JOB"] == "process":
         expected = ["go-oracle", "server-build", "process-tests"]
     write_json("command-status.json", {name: "recorded" if (evidence() / (name + ".json")).exists()

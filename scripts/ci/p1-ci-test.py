@@ -39,6 +39,25 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(ci.redact('error: "postgresql://other:secret@host/db"'),
                          'error: "postgresql://[REDACTED]"')
 
+    def test_push_cannot_refresh_even_with_environment_flag(self):
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "push", "P1_REFRESH_LOCK": "true"}):
+            self.assertFalse(ci.refresh_requested())
+            self.assertIsNone(ci.lock_command(True))
+            with self.assertRaises(RuntimeError):
+                ci.lock_command(False)
+
+    def test_dispatch_default_is_locked(self):
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_dispatch", "P1_REFRESH_LOCK": "false"}):
+            self.assertIsNone(ci.lock_command(True))
+            with self.assertRaises(RuntimeError):
+                ci.lock_command(False)
+
+    def test_explicit_dispatch_updates_existing_or_generates_missing(self):
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_dispatch", "P1_REFRESH_LOCK": "true"}):
+            self.assertTrue(ci.refresh_requested())
+            self.assertEqual(ci.lock_command(True), "update")
+            self.assertEqual(ci.lock_command(False), "generate-lockfile")
+
     def test_fixed_toolchain_and_locked_command(self):
         self.assertEqual(ci.cargo("test", "--locked", "--workspace"),
                          ["cargo", "+1.99.1", "test", "--locked", "--workspace"])

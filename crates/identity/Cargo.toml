@@ -1,0 +1,22 @@
+[package]
+name = "newapi-identity"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+[dependencies]
+base64 = "=0.22.1"
+bcrypt = "=0.15.1"
+hmac = "=0.12.1"
+sha2 = "=0.10.9"
+subtle = "=2.6.1"
+rand = "=0.8.8"
+uuid = "=1.26.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+newapi-storage.workspace = true
+sqlx.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
