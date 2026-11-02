@@ -15,6 +15,14 @@
 - https://github.com/Calcium-Ion/go-epay/tree/d8c8810761402e9de0320c4b7eed3cfd7fa94461
 - https://api.github.com/repos/Calcium-Ion/go-epay/git/trees/d8c8810761402e9de0320c4b7eed3cfd7fa94461?recursive=1
 
+## 已确认的处理责任与禁止边界
+
+2026-11-02 用户明确批准以下处理路线，P0 来源风险登记已具备责任与时点；不等于授权疑点或发行合规已解决。
+
+- epay：integrations 负责人在 P7 接入前取得可保存的授权证据，或提交基于合法协议资料的独立实现来源审查。此前不复制、翻译许可不明 SDK 及其测试素材，不发布相关产物；支付能力范围不删除。
+- egress：integrations 负责人在相关 P5/P6 切片前提交完整 Rust 协议能力的依赖、来源与许可方案。不得擅自以外部进程、保留 Go 运行时或删能力代替完整目标；这些变化仍需另批。发行合规验收保留在 P8/P9。
+- 主执行者负责在对应阶段入口检查上述门禁，独立 verification 核对来源证据。不重复要求 P0 完成后期实现或全量发行审计。
+
 ## 2. sing-box：实际为进程内路径，不是已证实隔离进程
 
 - **事实（文档矛盾）**：`THIRD-PARTY-LICENSES.md:148–150` 声称 isolated egress process boundary、合规TODO。

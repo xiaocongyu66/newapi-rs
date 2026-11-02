@@ -150,7 +150,7 @@ S=源码字段/标签登记；O=已有读写归属及阶段；V=真实schema、�
 | 连接生命周期 | egress/dial_singbox.go:82；fiberadapter/stream.go:169,296；openai/relay_realtime.go:37,97及§7列出的5家供应商stream闭包 | integrations/transport/relay P5/P6 |
 | 非启动清理/封装检索对账 | common/rate-limit.go clearExpiredItems；对main/internal的time.Sleep/NewTicker/AfterFunc候选与既有30行启动表做差集 | security/jobs P2/P7 |
 
-26组键名分母现已明确，但默认表达式/输入校验不是全部完成；需按config §8各组对应结构初始化及getter/validator逐项续核。此处不把无限用户值列为缺口，也不要求P4/P7故障测试提前通过。
+26组默认表达式/输入校验已由 config-final-audit.md 逐项登记；具名异步与动态迁移闭包分别见 async-final-audit.md、migration-final-audit.md。旧未勾选项作为调查历史，不覆盖专项后续证据。最终固定 env/RouteStats 补项以配置专项最新版本为准；不把无限用户值或 P4/P7 运行测试前置。
 
 ## 5. 仍需远程证据与P0阻塞
 

@@ -94,6 +94,31 @@ DefaultChannelHealthSetting另含Alpha=.3、MinScore=.05、MinRequests=5，**不
 
 未知key先拒绝；空值/非数字拒绝。Alpha/MinScoreFloor对NaN只有大小比较，故ParseFloat("NaN")可通过，不能宣称finite已校验。预算getter注释说0关闭，但**当前option apply把0变成1000**，迁移契约取实际执行行为并保留该差异。普通健康更新复制并atomic替换参数、不重置unit冷却/streak/EWMA；与ChannelHealthEnabled关停reset区别明确。所有键非secret；catalog/relay P3/P5，传播P7。
 
+### 3.5 独立验证补漏：RouteStats全部12个显式键
+
+`catalog/configure_route_stats.go:19–55`安装Is/Validate/Apply hook并保留previousSeed链；seed来源是`routestats.DefaultRouteStatsSetting()`，**不是live getter**。默认表达式位于`catalog/routestats/setting.go:68–96`，bool按FormatBool、整数按Itoa、float按FormatFloat('f', -1, 64)生成字符串。以下12键不是GlobalConfig第27个注册组；其它RouteStatsSetting内部字段不自动成为options键。
+
+| 固定键 | 默认来源字段 / seed值 | ValidateRouteStatsSettingValue范围 |
+|---|---|---|
+| RouteStatsEnabled | Enabled / true | 只接受精确小写字符串true或false，不接受1/TRUE |
+| RouteStatsShareWindowSize | ShareWindowSize / 200 | Atoi整数[0,100000]；0保留，关闭share correction |
+| RouteStatsShareCorrMin | ShareCorrMin / 0.5 | ParseFloat，(0,1] |
+| RouteStatsShareCorrMax | ShareCorrMax / 2 | ParseFloat，>=1，无上限 |
+| RouteStatsMinSamples | MinSamples / 5 | Atoi整数>=1 |
+| RouteStatsTTLSeconds | TTLSeconds / 86400 | Atoi整数>=1，秒 |
+| RouteStatsTTFTTargetMs | TTFTTargetMs / 2000 | Atoi整数>=1，毫秒 |
+| RouteStatsTPSTarget | TPSTarget / 20 | Atoi整数>=1 |
+| RouteStatsQualityFloor | QualityFloor / 0.5 | ParseFloat，[0,1] |
+| RouteStatsQualityCeil | QualityCeil / 1.5 | ParseFloat，>=1，无上限 |
+| RouteStatsComponentFloor | ComponentFloor / 0.2 | ParseFloat，[0,1] |
+| RouteStatsComponentCeil | ComponentCeil / 1.5 | ParseFloat，>=1，无上限 |
+
+校验入口`configure_route_stats.go:82–159`先拒绝未知键；空值、解析失败和上述范围外值报错，未做trim或float→int兼容。六个float键无IsNaN/IsInf检查：NaN均可穿过比较；三个只有>=1下界的Max/Ceil键还接受正无穷，不能写成“必须有限”。
+
+Apply规则（同162–212）：先调用validator，失败不发布；取当前GetRouteStatsSetting（nil才回默认），复制完整结构，仅改命中字段，交给`routestats.SetRouteStatsSetting`。后者（setting.go:116–217）再次复制、normalize整个结构、atomic.Store；不是CAS重试，也没有在此链重置已有统计状态。正常有限合法option值保持不变，ShareWindowSize=0不会被回填200。直接setter/旧内部状态的normalize与option validator不同：负window改0（没有100000上限钳制）；ShareCorrMin非法回.5，ShareCorrMax<1改1；MinSamples<0回5但0保留；TTL<=0回86400；TTFT/TPS<=0回2000/20；两个floor钳制[0,1]，对应ceil低于floor时抬至floor（不是统一抬到1）。normalize还处理内部alpha/tau/weights/caps等字段，但不新增持久化键，且大小比较仍不清除NaN。
+
+结论：12/12默认、校验和apply静态补齐；非secret，catalog配置P3、调度P5、传播P7。热读取由atomic getter取得新配置；并发多键更新是否丢失、统计生命周期及非有限数fixture仍归后续阶段，不声称已运行验证。
+
 ## 4. 动态env实参逐项关闭
 
 | 具名入口与证据 | 固定名/默认与边界 | 归属/生效 |
@@ -104,6 +129,16 @@ DefaultChannelHealthSetting另含Alpha=.3、MinScore=.05、MinRequests=5，**不
 | relay/channel/ali/adaptor.go:27–53 aliAnthropicMessagesModelsEnv | 固定`ALI_ANTHROPIC_MESSAGES_MODELS`；默认`qwen,deepseek-v4,kimi,glm,minimax-m`；GetEnvOrDefaultString缺失或空回默认，逗号split/trim/lowercase/去空，以Contains匹配规范化模型名，非regex。仅空白或逗号可形成空模式列表 | integrations/relay P6；每次getter读取env，非DB覆盖；模型子串是值而不是env名 |
 
 session固定名：USER_SESSION_ACTIVE_LIMIT=50；USER_SESSION_ISSUANCE_LIMIT=100；USER_SESSION_ISSUANCE_WINDOW_SECONDS=24*60*60=86400；USER_SESSION_REVOKED_RETENTION_DAYS=7；USER_SESSION_HOURLY_ALERT_THRESHOLD=5000（common/constants.go:43–47）。common/env.go:9–18缺失/空/非法整数回fallback，positiveUserSessionEnv再将<=0回fallback；retention days超MaxInt64/86400回7，issuance window大于有效retention秒数则截到后者。无secret。只需要这些有限实参与解析fixture，不需要枚举实际容器地址或模型名。
+
+### 4.1 独立验证补漏：上游模型更新最小检查间隔
+
+固定环境名 **CHANNEL_UPSTREAM_MODEL_UPDATE_MIN_CHECK_INTERVAL_SECONDS**，不是动态键。`transport/handler/handle_upstream_update.go:38`声明默认常量`channelUpstreamModelUpdateMinCheckIntervalSeconds = 300`（秒）；`getUpstreamModelUpdateMinCheckIntervalSeconds:255–264`通过多行`common.GetEnvOrDefault`调用读取，先解析为Go int再转int64，负数回300，**0原样保留**，正数无额外上限钳制。
+
+公共解析契约来自`common/env.go:9–18`：环境名为空或Getenv结果为空（含未设置）直接fallback；否则strconv.Atoi，失败记录SysError并fallback。因此本键缺失、空、非整数、超出平台int范围都回300；没有TrimSpace，带空白整数及小数字符串不是合法整数；负整数先解析成功再由专用getter回300。不要套用positiveUserSessionEnv的<=0规则，否则会错误吞掉合法0。
+
+实际读取点`checkAndPersistChannelUpstreamModelUpdates`（同475–491）：仅`!force`时调用getter；若LastCheckTime>0且`now-LastCheckTime < minInterval`，直接返回(false,0,nil)，不抓取上游。force=true绕过读取与间隔门；等于阈值允许继续。0在时钟正常前进时取消正数最小等待，但若LastCheckTime在未来，负时间差仍满足<0并跳过，不能把0描述为无条件绕过所有检查。通过门后调用collectPendingUpstreamModelChanges并更新LastCheckTime；该配置不是另一个任务调度周期。
+
+结论：该遗漏固定名、300默认、负数/0语义、公共解析和消费点已静态闭合。非secret；config解析P1，catalog/integrations模型更新与jobs调度P3/P7。每次非force检查读取进程env，无DB option覆盖或启动缓存；不要求枚举部署环境实际值。本次只补该env和§3.5的12个RouteStats键，未扩大研究或修改主计划/文档状态。
 
 ## 5. 26注册组逐项结论
 
