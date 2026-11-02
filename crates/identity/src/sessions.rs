@@ -53,8 +53,10 @@ impl From<sqlx::Error> for SessionError {
                 // 明确白名单，不匹配错误文本，也不接受任意低八位相同的未知扩展码。
                 // BUSY / LOCKED / BUSY_RECOVERY / BUSY_SNAPSHOT / BUSY_TIMEOUT /
                 // LOCKED_SHAREDCACHE / LOCKED_VTAB。
-                if matches!(sqlite.code().as_deref(),
-                    Some("5" | "6" | "261" | "517" | "773" | "262" | "518")) {
+                if matches!(
+                    sqlite.code().as_deref(),
+                    Some("5" | "6" | "261" | "517" | "773" | "262" | "518")
+                ) {
                     return Self::DatabaseBusy;
                 }
             }
@@ -69,7 +71,11 @@ impl From<sqlx::Error> for SessionError {
 pub struct RefreshHash(String);
 impl RefreshHash {
     pub fn from_lower_hex(value: String) -> Result<Self, SessionError> {
-        if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
             return Err(SessionError::Invalid);
         }
         Ok(Self(value))
@@ -119,21 +125,36 @@ impl SessionRecord {
 /// 终态写失败在提交后单独报告；调用方必须记录，但不能当作数据库回滚。
 /// SQL 失败不得移除 pending fence，应保留有界 deny TTL。
 pub trait RevocationFence: Send + Sync {
-    fn revoking(&self, session: &SessionMetadata, now: i64, reason: &str)
-        -> impl Future<Output = Result<(), SessionError>> + Send;
-    fn revoked(&self, session: &SessionMetadata, now: i64)
-        -> impl Future<Output = Result<(), SessionError>> + Send;
+    fn revoking(
+        &self,
+        session: &SessionMetadata,
+        now: i64,
+        reason: &str,
+    ) -> impl Future<Output = Result<(), SessionError>> + Send;
+    fn revoked(
+        &self,
+        session: &SessionMetadata,
+        now: i64,
+    ) -> impl Future<Output = Result<(), SessionError>> + Send;
 }
 
 /// 仅在整个部署明确禁用 Redis/会话缓存时显式选择。
 /// 不提供默认 fence，真实适配失败时也不自动回退。
-pub struct NoCache { _private: () }
+pub struct NoCache {
+    _private: (),
+}
 impl NoCache {
-    pub fn explicitly_disabled() -> Self { Self { _private: () } }
+    pub fn explicitly_disabled() -> Self {
+        Self { _private: () }
+    }
 }
 impl RevocationFence for NoCache {
-    async fn revoking(&self, _: &SessionMetadata, _: i64, _: &str) -> Result<(), SessionError> { Ok(()) }
-    async fn revoked(&self, _: &SessionMetadata, _: i64) -> Result<(), SessionError> { Ok(()) }
+    async fn revoking(&self, _: &SessionMetadata, _: i64, _: &str) -> Result<(), SessionError> {
+        Ok(())
+    }
+    async fn revoked(&self, _: &SessionMetadata, _: i64) -> Result<(), SessionError> {
+        Ok(())
+    }
 }
 
 pub struct CreateSession {
@@ -152,7 +173,13 @@ pub struct SessionLimits {
     pub issuance_window: i64,
 }
 impl Default for SessionLimits {
-    fn default() -> Self { Self { active: 50, issued: 100, issuance_window: 86400 } }
+    fn default() -> Self {
+        Self {
+            active: 50,
+            issued: 100,
+            issuance_window: 86400,
+        }
+    }
 }
 
 pub enum RefreshOutcome {
@@ -189,34 +216,57 @@ macro_rules! record {
         let r = $r;
         SessionRecord {
             metadata: SessionMetadata {
-                sid: r.try_get("sid")?, user_id: r.try_get("user_id")?,
-                version: r.try_get("version")?, user_auth_version: r.try_get("user_auth_version")?,
-                status: r.try_get("status")?, login_method: r.try_get("login_method")?,
+                sid: r.try_get("sid")?,
+                user_id: r.try_get("user_id")?,
+                version: r.try_get("version")?,
+                user_auth_version: r.try_get("user_auth_version")?,
+                status: r.try_get("status")?,
+                login_method: r.try_get("login_method")?,
                 ip: r.try_get::<Option<String>, _>("ip")?.unwrap_or_default(),
-                user_agent: r.try_get::<Option<String>, _>("user_agent")?.unwrap_or_default(),
-                created_at: r.try_get::<Option<i64>, _>("created_at")?.unwrap_or_default(),
-                last_active_at: r.try_get("last_active_at")?, expires_at: r.try_get("expires_at")?,
+                user_agent: r
+                    .try_get::<Option<String>, _>("user_agent")?
+                    .unwrap_or_default(),
+                created_at: r
+                    .try_get::<Option<i64>, _>("created_at")?
+                    .unwrap_or_default(),
+                last_active_at: r.try_get("last_active_at")?,
+                expires_at: r.try_get("expires_at")?,
                 revoked_at: r.try_get("revoked_at")?,
-                revoked_reason: r.try_get::<Option<String>, _>("revoked_reason")?.unwrap_or_default(),
+                revoked_reason: r
+                    .try_get::<Option<String>, _>("revoked_reason")?
+                    .unwrap_or_default(),
             },
             refresh_hash: r.try_get::<String, _>("refresh_hash")?.trim().to_owned(),
-            previous_refresh_hash: r.try_get::<Option<String>, _>("previous_refresh_hash")?.unwrap_or_default().trim().to_owned(),
+            previous_refresh_hash: r
+                .try_get::<Option<String>, _>("previous_refresh_hash")?
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
             previous_valid_until: r.try_get("previous_valid_until")?,
         }
     }};
 }
 
 #[derive(Clone)]
-pub struct SessionRepository { db: Database }
+pub struct SessionRepository {
+    db: Database,
+}
 impl SessionRepository {
-    pub fn new(db: Database) -> Self { Self { db } }
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
 
     pub async fn authoritative(&self, sid: &str) -> Result<Option<SessionRecord>, SessionError> {
-        if sid.is_empty() { return Err(SessionError::Invalid); }
+        if sid.is_empty() {
+            return Err(SessionError::Invalid);
+        }
         backend!(&self.db, pool, {
             // 列仅来自模块内固定白名单；所有业务值必须绑定。
             let mut query = sqlx::QueryBuilder::new("SELECT ");
-            query.push(COLUMNS).push(" FROM user_sessions WHERE sid=").push_bind(sid);
+            query
+                .push(COLUMNS)
+                .push(" FROM user_sessions WHERE sid=")
+                .push_bind(sid);
             match query.build().fetch_optional(pool).await? {
                 Some(row) => Ok(Some(record!(row))),
                 None => Ok(None),
@@ -234,63 +284,123 @@ impl SessionRepository {
 
     /// 保留 Go 的先计数再插入语义，不保证并发硬上限。
     /// 不暗中引入新 schema 或用户锁策略。
-    pub async fn create(&self, input: CreateSession, limits: SessionLimits, now: i64) -> Result<SessionRecord, SessionError> {
-        if input.user_id <= 0 || input.sid.is_empty() || input.sid.len() > 64 || now <= 0
-            || limits.active <= 0 || limits.issued <= 0 || limits.issuance_window <= 0 {
+    pub async fn create(
+        &self,
+        input: CreateSession,
+        limits: SessionLimits,
+        now: i64,
+    ) -> Result<SessionRecord, SessionError> {
+        if input.user_id <= 0
+            || input.sid.is_empty()
+            || input.sid.len() > 64
+            || now <= 0
+            || limits.active <= 0
+            || limits.issued <= 0
+            || limits.issuance_window <= 0
+        {
             return Err(SessionError::Invalid);
         }
         let expires = now.checked_add(LIFETIME).ok_or(SessionError::Invalid)?;
-        let since = now.checked_sub(limits.issuance_window).ok_or(SessionError::Invalid)?;
+        let since = now
+            .checked_sub(limits.issuance_window)
+            .ok_or(SessionError::Invalid)?;
         let uv = self.user_version(input.user_id).await?;
-        if input.expected_auth_version.is_some_and(|v| v != uv) { return Err(SessionError::UserSecurityChanged); }
+        if input.expected_auth_version.is_some_and(|v| v != uv) {
+            return Err(SessionError::UserSecurityChanged);
+        }
         let method = input.login_method.trim();
         let method = if method.is_empty() { "unknown" } else { method };
-        if method.len() > 32 { return Err(SessionError::Invalid); }
+        if method.len() > 32 {
+            return Err(SessionError::Invalid);
+        }
         let ip = truncate_bytes(&input.ip, 64)?;
         let ua = truncate_bytes(&input.user_agent, 512)?;
         backend!(&self.db, pool, {
             let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1 AND status='active' AND expires_at>$2")
                 .bind(input.user_id).bind(now).fetch_one(pool).await?;
-            if active >= limits.active { return Err(SessionError::ActiveLimit); }
-            let issued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_sessions WHERE user_id=$1 AND created_at>$2")
-                .bind(input.user_id).bind(since).fetch_one(pool).await?;
-            if issued >= limits.issued { return Err(SessionError::IssuanceLimit); }
+            if active >= limits.active {
+                return Err(SessionError::ActiveLimit);
+            }
+            let issued: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM user_sessions WHERE user_id=$1 AND created_at>$2",
+            )
+            .bind(input.user_id)
+            .bind(since)
+            .fetch_one(pool)
+            .await?;
+            if issued >= limits.issued {
+                return Err(SessionError::IssuanceLimit);
+            }
             sqlx::query("INSERT INTO user_sessions (sid,user_id,version,user_auth_version,status,refresh_hash,previous_refresh_hash,previous_valid_until,login_method,ip,user_agent,created_at,last_active_at,expires_at,revoked_at,revoked_reason) VALUES ($1,$2,1,$3,'active',$4,'',0,$5,$6,$7,$8,$8,$9,0,'')")
                 .bind(&input.sid).bind(input.user_id).bind(uv).bind(&input.refresh_hash.0)
                 .bind(method).bind(ip).bind(ua).bind(now).bind(expires).execute(pool).await?;
         });
-        self.authoritative(&input.sid).await?.ok_or(SessionError::NotFound)
+        self.authoritative(&input.sid)
+            .await?
+            .ok_or(SessionError::NotFound)
     }
 
-    pub async fn validate_access(&self, user_id: i64, sid: &str, sv: i64, uv: i64, now: i64) -> Result<SessionRecord, SessionError> {
-        if user_id <= 0 || sv <= 0 || uv <= 0 { return Err(SessionError::Invalid); }
-        let row = self.authoritative(sid).await?.ok_or(SessionError::NotFound)?;
+    pub async fn validate_access(
+        &self,
+        user_id: i64,
+        sid: &str,
+        sv: i64,
+        uv: i64,
+        now: i64,
+    ) -> Result<SessionRecord, SessionError> {
+        if user_id <= 0 || sv <= 0 || uv <= 0 {
+            return Err(SessionError::Invalid);
+        }
+        let row = self
+            .authoritative(sid)
+            .await?
+            .ok_or(SessionError::NotFound)?;
         let m = &row.metadata;
         if m.user_id != user_id || !m.active(now) || m.version != sv || m.user_auth_version != uv {
             return Err(SessionError::Inactive);
         }
-        if self.user_version(user_id).await? != uv { return Err(SessionError::UserSecurityChanged); }
+        if self.user_version(user_id).await? != uv {
+            return Err(SessionError::UserSecurityChanged);
+        }
         Ok(row)
     }
 
     /// 最多三次非事务读/CAS；version 不增加，绝对到期时间不延长。
     /// 未知 hash 不触发 deny fence 或撤销。
     /// 调用方进入前检查用户缓存栅栏；这里始终核对 SQL 当前用户。
-    pub async fn rotate<F: RevocationFence>(&self, fence: &F, user_id: i64, sid: &str,
-        presented: &RefreshHash, next: &RefreshHash, now: i64) -> Result<RefreshOutcome, SessionError> {
-        if user_id <= 0 || now <= 0 || presented.matches(&next.0) { return Err(SessionError::Invalid); }
+    pub async fn rotate<F: RevocationFence>(
+        &self,
+        fence: &F,
+        user_id: i64,
+        sid: &str,
+        presented: &RefreshHash,
+        next: &RefreshHash,
+        now: i64,
+    ) -> Result<RefreshOutcome, SessionError> {
+        if user_id <= 0 || now <= 0 || presented.matches(&next.0) {
+            return Err(SessionError::Invalid);
+        }
         let grace = now.checked_add(30).ok_or(SessionError::Invalid)?;
         for _ in 0..3 {
-            let mut row = self.authoritative(sid).await?.ok_or(SessionError::NotFound)?;
-            if row.metadata.user_id != user_id || !row.metadata.active(now) { return Err(SessionError::Inactive); }
+            let mut row = self
+                .authoritative(sid)
+                .await?
+                .ok_or(SessionError::NotFound)?;
+            if row.metadata.user_id != user_id || !row.metadata.active(now) {
+                return Err(SessionError::Inactive);
+            }
             let is_current = row.current_hash_matches(presented);
             let is_previous = presented.matches(&row.previous_refresh_hash);
             // 即使用户安全状态变更，也不能让未知 secret 触发 SID 撤销。
-            if !is_current && !is_previous { return Err(SessionError::Invalid); }
+            if !is_current && !is_previous {
+                return Err(SessionError::Invalid);
+            }
             match self.user_version(user_id).await {
-                Ok(uv) if uv == row.metadata.user_auth_version => {},
+                Ok(uv) if uv == row.metadata.user_auth_version => {}
                 Ok(_) | Err(SessionError::UserSecurityChanged) => {
-                    let report = self.revoke(fence, user_id, sid, "user_security_changed", now).await?;
+                    let report = self
+                        .revoke(fence, user_id, sid, "user_security_changed", now)
+                        .await?;
                     return Ok(RefreshOutcome::UserSecurityChanged(report));
                 }
                 Err(e) => return Err(e),
@@ -301,54 +411,92 @@ impl SessionRepository {
                         .bind(grace).bind(&next.0).bind(now).bind(sid).bind(user_id).bind(&presented.0)
                         .execute(pool).await?.rows_affected()
                 });
-                if affected == 0 { continue; }
+                if affected == 0 {
+                    continue;
+                }
                 row.previous_refresh_hash = row.refresh_hash;
                 row.previous_valid_until = grace;
                 row.refresh_hash = next.0.clone();
                 row.metadata.last_active_at = now;
                 return Ok(RefreshOutcome::Rotated(row));
             }
-            if now <= row.previous_valid_until { return Ok(RefreshOutcome::PreviousWithinGrace(row)); }
+            if now <= row.previous_valid_until {
+                return Ok(RefreshOutcome::PreviousWithinGrace(row));
+            }
             // 此处不能 CAS hash：并发轮换后整个泄露会话仍须撤销。
-            return Ok(RefreshOutcome::Reused(self.revoke(fence, user_id, sid, "refresh_reuse", now).await?));
+            return Ok(RefreshOutcome::Reused(
+                self.revoke(fence, user_id, sid, "refresh_reuse", now)
+                    .await?,
+            ));
         }
         Err(SessionError::Invalid)
     }
 
     /// 候选读取 → pending fence → 事务重读 → 提交 → 终态 fence。
-    pub async fn revoke<F: RevocationFence>(&self, fence: &F, user_id: i64, sid: &str,
-        reason: &str, now: i64) -> Result<RevokeReport, SessionError> {
+    pub async fn revoke<F: RevocationFence>(
+        &self,
+        fence: &F,
+        user_id: i64,
+        sid: &str,
+        reason: &str,
+        now: i64,
+    ) -> Result<RevokeReport, SessionError> {
         validate_revoke(user_id, reason, now)?;
-        let Some(row) = self.authoritative(sid).await? else { return Ok(RevokeReport::default()); };
-        if row.metadata.user_id != user_id || !row.metadata.active(now) { return Ok(RevokeReport::default()); }
+        let Some(row) = self.authoritative(sid).await? else {
+            return Ok(RevokeReport::default());
+        };
+        if row.metadata.user_id != user_id || !row.metadata.active(now) {
+            return Ok(RevokeReport::default());
+        }
         fence.revoking(&row.metadata, now, reason).await?;
-        let changed = self.revoke_fenced_batch(&[row.metadata], user_id, reason, now).await?;
+        let changed = self
+            .revoke_fenced_batch(&[row.metadata], user_id, reason, now)
+            .await?;
         Ok(finalize(fence, changed, now).await)
     }
 
     /// 仅凭 cookie 登出：先在事务内验证摘要，再发布 fence。
     /// 仅持有 SID 不能获得撤销权限。
-    pub async fn revoke_by_refresh<F: RevocationFence>(&self, fence: &F, sid: &str,
-        presented: &RefreshHash, reason: &str, now: i64) -> Result<RevokeReport, SessionError> {
-        if sid.is_empty() || now <= 0 || reason.len() > 64 { return Err(SessionError::Invalid); }
-        let lock = if matches!(self.db, Database::Postgres(_)) { " FOR UPDATE" } else { "" };
+    pub async fn revoke_by_refresh<F: RevocationFence>(
+        &self,
+        fence: &F,
+        sid: &str,
+        presented: &RefreshHash,
+        reason: &str,
+        now: i64,
+    ) -> Result<RevokeReport, SessionError> {
+        if sid.is_empty() || now <= 0 || reason.len() > 64 {
+            return Err(SessionError::Invalid);
+        }
+        let lock = if matches!(self.db, Database::Postgres(_)) {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
         let changed = backend!(&self.db, pool, {
             let mut tx = pool.begin().await?;
             let mut query = sqlx::QueryBuilder::new("SELECT ");
-            query.push(COLUMNS).push(" FROM user_sessions WHERE sid=").push_bind(sid).push(lock);
+            query
+                .push(COLUMNS)
+                .push(" FROM user_sessions WHERE sid=")
+                .push_bind(sid)
+                .push(lock);
             let row = query.build().fetch_optional(&mut *tx).await?;
             let mut changed = Vec::new();
             if let Some(row) = row {
                 let row = record!(row);
                 let authorized = row.current_hash_matches(presented)
-                    || (now <= row.previous_valid_until && presented.matches(&row.previous_refresh_hash));
+                    || (now <= row.previous_valid_until
+                        && presented.matches(&row.previous_refresh_hash));
                 if row.metadata.active(now) && authorized {
                     let mut m = row.metadata;
                     fence.revoking(&m, now, reason).await?;
                     let n = sqlx::query("UPDATE user_sessions SET status='revoked',revoked_at=$1,revoked_reason=$2 WHERE sid=$3 AND user_id=$4 AND status='active' AND revoked_at=0 AND expires_at>$1")
                         .bind(now).bind(reason).bind(sid).bind(m.user_id).execute(&mut *tx).await?.rows_affected();
                     if n == 1 {
-                        m.status = "revoked".into(); m.revoked_at = now; m.revoked_reason = reason.into();
+                        m.status = "revoked".into();
+                        m.revoked_at = now;
+                        m.revoked_reason = reason.into();
                         changed.push(m);
                     }
                 }
@@ -360,24 +508,44 @@ impl SessionRepository {
     }
 
     // 私有方法：不暴露绕过 fence 的高层撤销入口。
-    async fn revoke_fenced_batch(&self, candidates: &[SessionMetadata], user_id: i64,
-        reason: &str, now: i64) -> Result<Vec<SessionMetadata>, SessionError> {
-        let lock = if matches!(self.db, Database::Postgres(_)) { " FOR UPDATE" } else { "" };
+    async fn revoke_fenced_batch(
+        &self,
+        candidates: &[SessionMetadata],
+        user_id: i64,
+        reason: &str,
+        now: i64,
+    ) -> Result<Vec<SessionMetadata>, SessionError> {
+        let lock = if matches!(self.db, Database::Postgres(_)) {
+            " FOR UPDATE"
+        } else {
+            ""
+        };
         backend!(&self.db, pool, {
             let mut tx = pool.begin().await?;
             let mut changed = Vec::new();
             for candidate in candidates {
                 let mut query = sqlx::QueryBuilder::new("SELECT ");
-                query.push(COLUMNS).push(" FROM user_sessions WHERE sid=").push_bind(&candidate.sid)
-                    .push(" AND user_id=").push_bind(user_id).push(lock);
+                query
+                    .push(COLUMNS)
+                    .push(" FROM user_sessions WHERE sid=")
+                    .push_bind(&candidate.sid)
+                    .push(" AND user_id=")
+                    .push_bind(user_id)
+                    .push(lock);
                 let row = query.build().fetch_optional(&mut *tx).await?;
-                let Some(row) = row else { continue; };
+                let Some(row) = row else {
+                    continue;
+                };
                 let mut m = record!(row).metadata;
-                if !m.active(now) { continue; }
+                if !m.active(now) {
+                    continue;
+                }
                 let n = sqlx::query("UPDATE user_sessions SET status='revoked',revoked_at=$1,revoked_reason=$2 WHERE sid=$3 AND user_id=$4 AND status='active' AND revoked_at=0 AND expires_at>$1")
                     .bind(now).bind(reason).bind(&m.sid).bind(user_id).execute(&mut *tx).await?.rows_affected();
                 if n == 1 {
-                    m.status = "revoked".into(); m.revoked_at = now; m.revoked_reason = reason.into();
+                    m.status = "revoked".into();
+                    m.revoked_at = now;
+                    m.revoked_reason = reason.into();
                     changed.push(m);
                 }
             }
@@ -386,60 +554,114 @@ impl SessionRepository {
         })
     }
 
-    pub async fn list(&self, user_id: i64, current_sid: &str, now: i64) -> Result<Vec<SessionMetadata>, SessionError> {
+    pub async fn list(
+        &self,
+        user_id: i64,
+        current_sid: &str,
+        now: i64,
+    ) -> Result<Vec<SessionMetadata>, SessionError> {
         let uv = self.user_version(user_id).await?;
         backend!(&self.db, pool, {
             let mut query = sqlx::QueryBuilder::new("SELECT ");
-            query.push(COLUMNS).push(" FROM user_sessions WHERE user_id=").push_bind(user_id)
-                .push(" AND user_auth_version=").push_bind(uv)
-                .push(" AND status='active' AND expires_at>").push_bind(now)
-                .push(" ORDER BY CASE WHEN sid=").push_bind(current_sid)
+            query
+                .push(COLUMNS)
+                .push(" FROM user_sessions WHERE user_id=")
+                .push_bind(user_id)
+                .push(" AND user_auth_version=")
+                .push_bind(uv)
+                .push(" AND status='active' AND expires_at>")
+                .push_bind(now)
+                .push(" ORDER BY CASE WHEN sid=")
+                .push_bind(current_sid)
                 .push(" THEN 0 ELSE 1 END,last_active_at DESC,created_at DESC LIMIT 100");
             let rows = query.build().fetch_all(pool).await?;
             let mut out = Vec::with_capacity(rows.len());
-            for row in rows { out.push(record!(row).metadata); }
+            for row in rows {
+                out.push(record!(row).metadata);
+            }
             Ok(out)
         })
     }
 
-    pub async fn revoke_others<F: RevocationFence>(&self, fence: &F, user_id: i64,
-        current_sid: &str, reason: &str, now: i64) -> Result<RevokeReport, BatchFailure> {
+    pub async fn revoke_others<F: RevocationFence>(
+        &self,
+        fence: &F,
+        user_id: i64,
+        current_sid: &str,
+        reason: &str,
+        now: i64,
+    ) -> Result<RevokeReport, BatchFailure> {
         let mut total = RevokeReport::default();
         let result: Result<(), SessionError> = async {
             validate_revoke(user_id, reason, now)?;
-            if current_sid.is_empty() { return Err(SessionError::Invalid); }
+            if current_sid.is_empty() {
+                return Err(SessionError::Invalid);
+            }
             loop {
                 let candidates: Vec<SessionMetadata> = backend!(&self.db, pool, {
                     let mut query = sqlx::QueryBuilder::new("SELECT ");
-                    query.push(COLUMNS).push(" FROM user_sessions WHERE user_id=").push_bind(user_id)
-                        .push(" AND sid<>").push_bind(current_sid)
-                        .push(" AND status='active' AND revoked_at=0 AND expires_at>").push_bind(now)
+                    query
+                        .push(COLUMNS)
+                        .push(" FROM user_sessions WHERE user_id=")
+                        .push_bind(user_id)
+                        .push(" AND sid<>")
+                        .push_bind(current_sid)
+                        .push(" AND status='active' AND revoked_at=0 AND expires_at>")
+                        .push_bind(now)
                         .push(" ORDER BY sid LIMIT 500");
                     let rows = query.build().fetch_all(pool).await?;
                     let mut out = Vec::with_capacity(rows.len());
-                    for row in rows { out.push(record!(row).metadata); }
+                    for row in rows {
+                        out.push(record!(row).metadata);
+                    }
                     out
                 });
-                if candidates.is_empty() { break; }
-                for m in &candidates { fence.revoking(m, now, reason).await?; }
-                let changed = self.revoke_fenced_batch(&candidates, user_id, reason, now).await?;
+                if candidates.is_empty() {
+                    break;
+                }
+                for m in &candidates {
+                    fence.revoking(m, now, reason).await?;
+                }
+                let changed = self
+                    .revoke_fenced_batch(&candidates, user_id, reason, now)
+                    .await?;
                 let report = finalize(fence, changed, now).await;
                 total.revoked_count += report.revoked_count;
                 total.terminal_fence_failures += report.terminal_fence_failures;
             }
             Ok(())
-        }.await;
-        match result { Ok(()) => Ok(total), Err(error) => Err(BatchFailure { committed: total, error }) }
+        }
+        .await;
+        match result {
+            Ok(()) => Ok(total),
+            Err(error) => Err(BatchFailure {
+                committed: total,
+                error,
+            }),
+        }
     }
 }
 
 fn validate_revoke(user_id: i64, reason: &str, now: i64) -> Result<(), SessionError> {
-    if user_id <= 0 || now <= 0 || reason.len() > 64 { Err(SessionError::Invalid) } else { Ok(()) }
+    if user_id <= 0 || now <= 0 || reason.len() > 64 {
+        Err(SessionError::Invalid)
+    } else {
+        Ok(())
+    }
 }
-async fn finalize<F: RevocationFence>(fence: &F, changed: Vec<SessionMetadata>, now: i64) -> RevokeReport {
-    let mut report = RevokeReport { revoked_count: changed.len() as u64, terminal_fence_failures: 0 };
+async fn finalize<F: RevocationFence>(
+    fence: &F,
+    changed: Vec<SessionMetadata>,
+    now: i64,
+) -> RevokeReport {
+    let mut report = RevokeReport {
+        revoked_count: changed.len() as u64,
+        terminal_fence_failures: 0,
+    };
     for m in changed {
-        if fence.revoked(&m, now).await.is_err() { report.terminal_fence_failures += 1; }
+        if fence.revoked(&m, now).await.is_err() {
+            report.terminal_fence_failures += 1;
+        }
     }
     report
 }
@@ -456,5 +678,7 @@ async fn finalize<F: RevocationFence>(fence: &F, changed: Vec<SessionMetadata>, 
 fn truncate_bytes(value: &str, max: usize) -> Result<&str, SessionError> {
     let value = value.trim();
     let end = value.len().min(max);
-    value.get(..end).ok_or(SessionError::MetadataEncodingUnsupported)
+    value
+        .get(..end)
+        .ok_or(SessionError::MetadataEncodingUnsupported)
 }

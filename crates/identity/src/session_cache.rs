@@ -8,7 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn system_now_ms() -> Result<i64, CacheError> {
-    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| CacheError::Invalid)?;
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| CacheError::Invalid)?;
     i64::try_from(elapsed.as_millis()).map_err(|_| CacheError::Invalid)
 }
 
@@ -101,10 +103,11 @@ impl RedisSessionCache {
     /// 连接及握手整体限时，失败不会隐式切换为无缓存模式。
     pub async fn connect(url: &str, secret: &[u8], cache_seconds: i64) -> Result<Self, CacheError> {
         let client = redis::Client::open(url).map_err(redis_error)?;
-        let connection = tokio::time::timeout(IO_TIMEOUT, client.get_multiplexed_async_connection())
-            .await
-            .map_err(|_| CacheError::Unavailable)?
-            .map_err(redis_error)?;
+        let connection =
+            tokio::time::timeout(IO_TIMEOUT, client.get_multiplexed_async_connection())
+                .await
+                .map_err(|_| CacheError::Unavailable)?
+                .map_err(redis_error)?;
         Self::from_connection(connection, secret, cache_seconds)
     }
 
@@ -116,12 +119,21 @@ impl RedisSessionCache {
         if secret.is_empty() {
             return Err(CacheError::Invalid);
         }
-        let seconds = if cache_seconds <= 0 { 60 } else { cache_seconds };
+        let seconds = if cache_seconds <= 0 {
+            60
+        } else {
+            cache_seconds
+        };
         let window_ms = seconds.checked_mul(1000).ok_or(CacheError::Invalid)?;
         let mut key = b"user-session-cache-v1:".to_vec();
         key.extend_from_slice(secret);
         let key_mac = Hmac::<Sha256>::new_from_slice(&key).map_err(|_| CacheError::Invalid)?;
-        Ok(Self { connection, key_mac, window_ms, clock: Arc::new(system_now_ms) })
+        Ok(Self {
+            connection,
+            key_mac,
+            window_ms,
+            clock: Arc::new(system_now_ms),
+        })
     }
 
     /// 注入发布时毫秒时钟；与 fence 参数的业务审计秒时间相互独立。
@@ -154,7 +166,9 @@ impl RedisSessionCache {
         }
         Ok(ActiveDeadline {
             captured_ms: now_ms,
-            deadline_ms: now_ms.checked_add(self.window_ms).ok_or(CacheError::Invalid)?,
+            deadline_ms: now_ms
+                .checked_add(self.window_ms)
+                .ok_or(CacheError::Invalid)?,
         })
     }
 
@@ -183,7 +197,8 @@ impl RedisSessionCache {
         }) {
             return Ok(CacheRead::Denied);
         }
-        let fields: Result<HashMap<String, String>, _> = fields.into_iter()
+        let fields: Result<HashMap<String, String>, _> = fields
+            .into_iter()
             .map(|(key, value)| Ok((String::from_utf8(key)?, String::from_utf8(value)?)))
             .collect::<Result<_, std::string::FromUtf8Error>>();
         let Ok(fields) = fields else {
@@ -219,7 +234,10 @@ impl RedisSessionCache {
         if session.status != "active" || session.revoked_at != 0 {
             return Err(CacheError::Inactive);
         }
-        let expires = session.expires_at.checked_mul(1000).ok_or(CacheError::Invalid)?;
+        let expires = session
+            .expires_at
+            .checked_mul(1000)
+            .ok_or(CacheError::Invalid)?;
         if expires <= now_ms {
             return Err(CacheError::Inactive);
         }
@@ -247,10 +265,20 @@ impl RedisSessionCache {
         let result: i64 = tokio::time::timeout(IO_TIMEOUT, async {
             redis::Script::new(WRITE)
                 .key(self.cache_key(&m.sid))
-                .arg(&m.sid).arg(m.user_id).arg(m.version).arg(m.user_auth_version)
-                .arg(&m.status).arg(&m.login_method).arg(&m.ip).arg(&m.user_agent)
-                .arg(m.created_at).arg(m.last_active_at).arg(m.expires_at)
-                .arg(m.revoked_at).arg(&m.revoked_reason).arg(expiration)
+                .arg(&m.sid)
+                .arg(m.user_id)
+                .arg(m.version)
+                .arg(m.user_auth_version)
+                .arg(&m.status)
+                .arg(&m.login_method)
+                .arg(&m.ip)
+                .arg(&m.user_agent)
+                .arg(m.created_at)
+                .arg(m.last_active_at)
+                .arg(m.expires_at)
+                .arg(m.revoked_at)
+                .arg(&m.revoked_reason)
+                .arg(expiration)
                 .invoke_async(&mut connection)
                 .await
         })
@@ -274,15 +302,23 @@ impl RedisSessionCache {
         if published_ms <= 0 {
             return Err(CacheError::Invalid);
         }
-        let remaining = m.expires_at.checked_mul(1000)
-            .and_then(|expiry| expiry.checked_sub(published_ms)).ok_or(CacheError::Invalid)?;
+        let remaining = m
+            .expires_at
+            .checked_mul(1000)
+            .and_then(|expiry| expiry.checked_sub(published_ms))
+            .ok_or(CacheError::Invalid)?;
         let ttl = remaining.min(self.window_ms);
         self.write(m, if ttl <= 0 { 1000 } else { ttl }).await
     }
 }
 
 impl RevocationFence for RedisSessionCache {
-    async fn revoking(&self, session: &SessionMetadata, now: i64, reason: &str) -> Result<(), SessionError> {
+    async fn revoking(
+        &self,
+        session: &SessionMetadata,
+        now: i64,
+        reason: &str,
+    ) -> Result<(), SessionError> {
         let mut m = session.clone();
         m.status = "revoking".into();
         m.revoked_at = now;
