@@ -1,0 +1,56 @@
+package identity
+
+// 仅供远程 CI 复制到固定上游 apps/api/internal/identity/p2_session_key_oracle_test.go。
+// 在 apps/api 运行 go test ./internal/identity -run '^TestP2SessionKeyOracle$' -count=1。
+// 输出路径由 P2_SESSION_KEY_ORACLE_PATH 提供，父目录须由 CI 预先创建。
+// 独立于密码 oracle，不改其 JSON 契约；不并行修改全局会话秘密。
+import (
+	"encoding/json"
+	"os"
+	"testing"
+
+	"github.com/QuantumNous/new-api/internal/common"
+)
+
+func TestP2SessionKeyOracle(t *testing.T) {
+	path := os.Getenv("P2_SESSION_KEY_ORACLE_PATH")
+	if path == "" {
+		t.Fatal("必须设置 P2_SESSION_KEY_ORACLE_PATH")
+	}
+	old := common.SessionSecret
+	t.Cleanup(func() { common.SessionSecret = old })
+	// 固定公开合成输入；不得读取真实配置秘密或自行复制 HMAC 算法生成期望。
+	secrets := []string{
+		"test-session-secret-with-sufficient-entropy",
+		"public-session-cache-secret-密码",
+	}
+	sids := []string{
+		"session-1",
+		"123e4567-e89b-42d3-a456-426614174000",
+		"session-密码\x00tail",
+	}
+	type vector struct {
+		Secret string `json:"secret"`
+		SID string `json:"sid"`
+		Key string `json:"key"`
+	}
+	rows := make([]vector, 0, len(secrets)*len(sids))
+	for _, secret := range secrets {
+		common.SessionSecret = secret
+		for _, sid := range sids {
+			// 直接调用原 identity/session_store.go 的真实私有入口。
+			rows = append(rows, vector{Secret: secret, SID: sid, Key: userSessionCacheKey(sid)})
+		}
+	}
+	out := struct {
+		Schema int `json:"schema"`
+		Vectors []vector `json:"vectors"`
+	}{Schema: 1, Vectors: rows}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		t.Fatal("会话 key oracle 编码失败")
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		t.Fatal("会话 key oracle 写入失败")
+	}
+}

@@ -245,7 +245,7 @@ def p2_oracle():
     (module / "web/dist").mkdir(parents=True, exist_ok=True)
     (module / "web/dist/index.html").touch()
     success = True
-    for kind, package in (("crypto", "identity"), ("origin", "security")):
+    for kind, package in (("crypto", "identity"), ("origin", "security"), ("session-key", "identity")):
         template = ROOT / f"scripts/ci/p2-{kind}-oracle_test.go.txt"
         text = template.read_text()
         if not re.search(r"(?m)^package\s+" + package + r"\s*$", text):
@@ -259,7 +259,7 @@ def p2_oracle():
         destination = evidence() / f"p2-{kind}-oracle.jsonl"
         env = dict(os.environ, GOWORK="off", GOTOOLCHAIN="local", GOFLAGS="-mod=readonly",
                    UPSTREAM_SHA=UPSTREAM_SHA)
-        env[f"P2_{kind.upper()}_ORACLE_PATH"] = str(destination)
+        env[f"P2_{kind.upper().replace('-', '_')}_ORACLE_PATH"] = str(destination)
         command = ["go", "test", "-json", "-count=1", "-tags", "with_gvisor,with_wireguard,with_utls",
                    f"./internal/{package}", "-run", "^" + test + "$"]
         result = subprocess.run(command, cwd=module, env=env, stdout=subprocess.PIPE,
@@ -275,7 +275,7 @@ def p2_oracle():
                   for action in ("pass", "fail", "skip")}
         root_pass = any(event.get("Action") == "pass" and event.get("Test") == test for event in events)
         # The actual Origin template exports t.Logf records. Preserve actual values.
-        marker = f"P2_{kind.upper()}_ORACLE "
+        marker = f"P2_{kind.upper().replace('-', '_')}_ORACLE "
         records = []
         for event in events:
             output = event.get("Output", "")
@@ -313,14 +313,14 @@ def p2_restore_oracle():
     if source != {"upstream_sha": UPSTREAM_SHA, "policy_ok": True}:
         raise RuntimeError("oracle source or execution failed")
     checksums = dict(line.split("  ", 1)[::-1] for line in (prepared / "SHA256SUMS").read_text().splitlines())
-    for kind in ("crypto", "origin"):
+    for kind in ("crypto", "origin", "session-key"):
         name = f"p2-{kind}-oracle.jsonl"
         path = prepared / name
         if hashlib.sha256(path.read_bytes()).hexdigest() != checksums[name] or not path.stat().st_size:
             raise RuntimeError("oracle checksum mismatch or empty fixture")
         shutil.copyfile(path, evidence() / name)
         with open(os.environ["GITHUB_ENV"], "a") as output:
-            output.write(f"P2_{kind.upper()}_ORACLE_PATH={path}\n")
+            output.write(f"P2_{kind.upper().replace('-', '_')}_ORACLE_PATH={path}\n")
     shutil.copyfile(prepared / "p2-oracle-source.json", evidence() / "p2-oracle-source.json")
     write_json("p2-oracle-restore.json", {"exit_code": 0, "identity": identity, "upstream_sha": UPSTREAM_SHA})
     return True
@@ -334,7 +334,7 @@ def verify():
     if not os.environ.get("TEST_REDIS_URL"):
         raise RuntimeError("Redis fixture URL is mandatory, not a skip condition")
     print("::add-mask::" + os.environ["TEST_REDIS_URL"], flush=True)
-    for kind in ("CRYPTO", "ORIGIN"):
+    for kind in ("CRYPTO", "ORIGIN", "SESSION_KEY"):
         path = os.environ.get(f"P2_{kind}_ORACLE_PATH")
         if not path or not Path(path).is_file() or not Path(path).stat().st_size:
             raise RuntimeError("verified P2 oracle fixture is mandatory")

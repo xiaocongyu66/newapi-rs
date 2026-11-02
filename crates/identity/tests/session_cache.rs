@@ -13,6 +13,42 @@ use redis::aio::MultiplexedConnection;
 
 const SECRET: &[u8] = b"synthetic-session-cache-secret-not-for-production";
 
+#[tokio::test]
+async fn session_key_matches_fixed_go_oracle() {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Vector {
+        secret: String,
+        sid: String,
+        key: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Oracle {
+        schema: u32,
+        vectors: Vec<Vector>,
+    }
+    // 缺失或损坏的远程 Go 样本必须失败，不能退回本地算法生成期望。
+    let path = std::env::var("P2_SESSION_KEY_ORACLE_PATH")
+        .expect("必须设置远程 Go 生成的 P2_SESSION_KEY_ORACLE_PATH");
+    let bytes = std::fs::read(path).expect("必须能读取 Go 会话 key 金标准");
+    let oracle: Oracle = serde_json::from_slice(&bytes).expect("Go 会话 key 样本格式必须有效");
+    assert_eq!(oracle.schema, 1);
+    let secrets = ["test-session-secret-with-sufficient-entropy", "public-session-cache-secret-密码"];
+    let sids = ["session-1", "123e4567-e89b-42d3-a456-426614174000", "session-密码\0tail"];
+    assert_eq!(oracle.vectors.len(), secrets.len() * sids.len());
+    let (_, _, connection) = connections(60).await;
+    for (index, vector) in oracle.vectors.iter().enumerate() {
+        // 固定输入及顺序，防止空数组、删减样本或替换测试输入形成假通过。
+        assert_eq!(vector.secret, secrets[index / sids.len()]);
+        assert_eq!(vector.sid, sids[index % sids.len()]);
+        let cache = RedisSessionCache::from_connection(
+            connection.clone(), vector.secret.as_bytes(), 60,
+        ).unwrap();
+        assert_eq!(cache.cache_key(&vector.sid), vector.key);
+    }
+}
+
 async fn connections(seconds: i64) -> (RedisSessionCache, RedisSessionCache, MultiplexedConnection) {
     let url = std::env::var("TEST_REDIS_URL")
         .expect("真实 Redis 测试必须设置 TEST_REDIS_URL，禁止跳过");
