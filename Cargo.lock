@@ -1010,6 +1010,7 @@ name = "newapi-security"
 version = "0.1.0"
 dependencies = [
  "ipnet",
+ "serde_json",
  "url",
 ]
 

@@ -40,7 +40,7 @@ func TestP2OriginOracle(t *testing.T) {
 		{Name: "空查询", Origins: []string{"https://example.test?"}, Allowed: true},
 		{Name: "空片段", Origins: []string{"https://example.test#"}, Allowed: true},
 		{Name: "空端口", Origins: []string{"https://example.test:"}, Allowed: true},
-		{Name: "转义斜线", Origins: []string{"https://example.test/%2f"}, Allowed: true},
+		{Name: "转义斜线", Origins: []string{"https://example.test/%2f"}, Allowed: false},
 		{Name: "点段", Origins: []string{"https://example.test/a/.."}},
 		{Name: "转义点", Origins: []string{"https://example.test/%2e"}},
 		{Name: "转义双点", Origins: []string{"https://example.test/%2E%2e/"}},
