@@ -235,6 +235,8 @@ def finalize():
     expected = ["generate-lockfile", "metadata", "tree", "features"] if os.environ["GITHUB_JOB"] == "prepare" else [
         "postgres-version", "driver-tests", "rustc", "check", "fmt", "clippy", "metadata", "features", "workspace-tests",
         "newapi-storage-sqlite", "newapi-storage-postgres", "newapi-catalog-sqlite", "newapi-catalog-postgres"]
+    if os.environ["GITHUB_JOB"] == "process":
+        expected = ["go-oracle", "server-build", "process-tests"]
     write_json("command-status.json", {name: "recorded" if (evidence() / (name + ".json")).exists()
                                       else "not-executed (see steps/lock-status)" for name in expected})
     lines = []

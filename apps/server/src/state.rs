@@ -85,18 +85,90 @@ pub async fn reload_loop(
             _ = shutdown.changed() => break,
             _ = tokio::time::sleep(frequency) => {}
         }
-        tokio::select! {
-            biased;
-            _ = shutdown.changed() => break,
-            result = state.reload(&db) => {
-                if let Err(error) = result {
-                    tracing::warn!(
-                        category = crate::database_error_class(&error),
-                        "public configuration reload failed"
-                    );
-                }
-            }
+        if !reload_until_shutdown(&state, &db, &mut shutdown).await {
+            break;
         }
     }
     state.mark_not_ready();
+}
+
+// 返回 false 表示退出；直接丢弃未完成的数据库读取，不等待连接池超时。
+async fn reload_until_shutdown(
+    state: &AppState,
+    db: &Database,
+    shutdown: &mut watch::Receiver<bool>,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = shutdown.changed() => {
+            state.mark_not_ready();
+            false
+        }
+        result = state.reload(db) => {
+            if let Err(error) = result {
+                tracing::warn!(
+                    category = crate::database_error_class(&error),
+                    "public configuration reload failed"
+                );
+            }
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{future::Future, task::Poll};
+
+    #[tokio::test]
+    async fn shutdown_cancels_in_flight_reload_waiting_for_pool() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(60))
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(r#"CREATE TABLE options ("key" TEXT PRIMARY KEY, "value" TEXT)"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(r#"INSERT INTO options VALUES ('Notice', 'last good value')"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let db = Database::Sqlite(pool.clone());
+        let state = AppState::initialize(&db).await.unwrap();
+        // 独占唯一连接，使真实 catalog 读取确定阻塞在连接获取阶段。
+        let held = pool.acquire().await.unwrap();
+        assert_eq!(pool.num_idle(), 0);
+        for drop_sender in [false, true] {
+            state.ready.store(true, Ordering::Release);
+            let (tx, mut rx) = watch::channel(false);
+            let mut reload = Box::pin(reload_until_shutdown(&state, &db, &mut rx));
+            // 手工 poll 确认读取已进入 Pending，再触发退出；不依赖 sleep 猜时序。
+            std::future::poll_fn(|cx| {
+                assert!(reload.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            assert!(state.is_ready());
+            if !drop_sender {
+                tx.send(true).unwrap();
+            }
+            drop(tx);
+            let completed = tokio::time::timeout(Duration::from_secs(2), reload)
+                .await
+                .expect("shutdown must not wait for pool acquisition timeout");
+            assert!(!completed);
+            assert!(!state.is_ready());
+            assert_eq!(state.snapshot().notice, "last good value");
+            assert_eq!(pool.num_idle(), 0);
+        }
+        // 退出发生时测试仍持有连接，证明不是连接释放后读取自然完成。
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(2), db.close())
+            .await
+            .unwrap();
+    }
 }

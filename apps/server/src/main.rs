@@ -68,13 +68,18 @@ async fn run() -> Result<(), ()> {
             let _ = signal_tx.send(true);
         })
         .await;
-    // Also stop the worker when serving fails without receiving a signal.
+    // 即使服务异常返回，也先通知并等待同步任务退出，再关闭连接池。
     let _ = shutdown_tx.send(true);
-    if reload.await.is_err() {
+    let worker_failed = reload.await.is_err();
+    if worker_failed {
         tracing::error!("configuration worker stopped unexpectedly");
     }
     state.mark_not_ready();
     db.close().await;
+    // 不记录 JoinError 的 Debug 内容，避免将 panic 载荷写入日志。
+    if worker_failed {
+        return Err(());
+    }
     result.map_err(|_| {
         tracing::error!("HTTP server stopped unexpectedly");
     })

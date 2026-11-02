@@ -1,0 +1,65 @@
+// Injected only into the disposable, fixed-SHA upstream copy in Actions.
+package handler
+
+import (
+ "encoding/json"
+ "net/http"
+ "net/http/httptest"
+ "os"
+ "testing"
+
+ "github.com/QuantumNous/new-api/internal/common"
+ "github.com/QuantumNous/new-api/internal/security"
+ "github.com/QuantumNous/new-api/internal/transport/contract"
+ "github.com/QuantumNous/new-api/internal/transport/fiberadapter"
+)
+
+func TestP1ExportPublicConfig(t *testing.T) {
+ type response struct { Path string `json:"path"`; Status int `json:"status"`; Body json.RawMessage `json:"body"` }
+ type fixture struct { Name string `json:"name"`; Options map[string]string `json:"options"`; Responses []response `json:"responses"` }
+ routes := []struct { key, path string; handle func(contract.Context) }{
+  {"Notice", "/api/notice", GetNotice}, {"About", "/api/about", GetAbout},
+  {"HomePageContent", "/api/home_page_content", GetHomePageContent},
+  {"legal.user_agreement", "/api/user-agreement", GetUserAgreement},
+  {"legal.privacy_policy", "/api/privacy-policy", GetPrivacyPolicy},
+ }
+ common.OptionMapRWMutex.Lock()
+ original := common.OptionMap
+ common.OptionMapRWMutex.Unlock()
+ legal := security.GetLegalSettings()
+ agreement, privacy := legal.UserAgreement, legal.PrivacyPolicy
+ t.Cleanup(func() {
+  common.OptionMapRWMutex.Lock(); common.OptionMap = original; common.OptionMapRWMutex.Unlock()
+  legal.UserAgreement, legal.PrivacyPolicy = agreement, privacy
+ })
+ var fixtures []fixture
+ for _, state := range []struct{name, value string}{
+  {"missing", ""}, {"empty", ""}, {"whitespace", " \t\n "},
+  {"unicode", "公共配置 café 日本語\n\"quoted\""},
+  {"markdown", "# Notice\n**important**"}, {"html", "<p>content &amp; text</p>"},
+  {"url", "https://example.invalid/legal?q=1&lang=zh"},
+ } {
+  f := fixture{Name: state.name, Options: map[string]string{}}
+  common.OptionMapRWMutex.Lock()
+  common.OptionMap = map[string]string{}
+  if state.name != "missing" {
+   for _, route := range routes { f.Options[route.key] = state.value; common.OptionMap[route.key] = state.value }
+  }
+  common.OptionMapRWMutex.Unlock()
+  legal.UserAgreement, legal.PrivacyPolicy = state.value, state.value
+  for _, route := range routes {
+   ctx, recorder := fiberadapter.NewSyntheticContext(httptest.NewRequest(http.MethodGet, route.path, nil))
+   route.handle(ctx)
+   if recorder.Code != http.StatusOK || !json.Valid(recorder.Body.Bytes()) { t.Fatal("invalid upstream handler response") }
+   f.Responses = append(f.Responses, response{route.path, recorder.Code, append(json.RawMessage(nil), recorder.Body.Bytes()...)})
+  }
+  fixtures = append(fixtures, f)
+ }
+ data, err := json.MarshalIndent(struct{
+  SHA string `json:"upstream_sha"`; Fixtures []fixture `json:"fixtures"`
+ }{os.Getenv("UPSTREAM_SHA"), fixtures}, "", "  ")
+ if err != nil { t.Fatal(err) }
+ destination := os.Getenv("P1_GO_FIXTURE")
+ if destination == "" { t.Fatal("fixture output path required") }
+ if err := os.WriteFile(destination, data, 0600); err != nil { t.Fatal(err) }
+}

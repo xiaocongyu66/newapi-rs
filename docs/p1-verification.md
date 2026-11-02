@@ -4,7 +4,7 @@
 
 本交付仅实现 P1 CI 编排、证据驱动脚本及脚本回归测试，**尚未运行，不能判定 P1 PASS**。未本地执行构建、测试、自写脚本、服务或容器；未提交或推送。P0 工作流未修改。业务 Rust 与模块测试由各模块所有者提供；本文件不替代主计划或独立 verification。
 
-新增文件：`.github/workflows/p1-rust.yml`、`scripts/ci/p1-ci.py`、`scripts/ci/p1-ci-test.py`、本文。只使用标准 `ubuntu-24.04`、`contents: read`、超时、取消同分支过期运行、注册表下载缓存；没有 `continue-on-error`，两个数据库 job 不互相 fail-fast。
+交付文件：`.github/workflows/p1-rust.yml`、`scripts/ci/p1-ci.py`、`scripts/ci/p1-ci-test.py`、`scripts/ci/p1-process.py`、`scripts/ci/p1-go-fixture_test.go.txt`、本文。只使用标准 `ubuntu-24.04`、`contents: read`、超时、取消同分支过期运行、注册表下载缓存；没有 `continue-on-error`，两个数据库 job 不互相 fail-fast。
 
 ## 固定基线与只读镜像核实
 
@@ -45,12 +45,25 @@
 
 - package 名为 `newapi-storage`、`newapi-catalog`。**真实数据库测试名称必须分别含 `sqlite_` / `postgres_`**。没有匹配测试会因 passed=0 红灯，而不是静默通过；集成者可统一测试命名，但不得删去正计数门禁。
 - `TEST_POSTGRES_DSN` 仅在 verify 步骤注入 job 临时容器的 `p1_test` 专用库，没有生产 secret。`P1_REQUIRE_POSTGRES=1` 表示缺少 DSN/连接失败必须 fail，禁止 Rust 测试 `return` 冒充通过、禁止 `#[ignore]`。测试应从环境取 DSN，不将其写入 panic/assert/Debug；CI 额外遮蔽完整 DSN 与 PostgreSQL URL，不把遮蔽当作业务日志安全测试的替代。
-- PostgreSQL 每个测试创建**自己的唯一 schema**（不依赖新 PostgreSQL 特有函数），所有池连接均设置对应 search_path；fixture 创建旧 `options` 表并绑定参数。只清理自身 schema，不 drop database、不改 public schema，不共享全局 options。失败清理可以由整个临时 service 销毁兜底。
+- PostgreSQL 测试使用**单连接池（max_connections=1）及连接私有临时表 pg_temp.options**；fixture 与被测查询必须复用该连接，search_path 将 pg_temp 置前。临时表随连接关闭销毁，不创建永久 schema、不 drop database、不改 public schema、不共享全局 options。测试不能因重建连接使临时表丢失而偷偷回退到 public.options。
 - SQLite 测试用唯一临时文件，fixture 在调用 `Database::connect` 前创建必要表；另测不存在文件不得自动创建、缺表加载失败、禁止 MySQL DSN、正常关闭。不能用 mock 代替真实 SQLite。
 - catalog 两库测试覆盖五个大小写精确 key、空值/空白/Unicode、未知 key 隔离、缺行保留 previous、删行保留 previous、首次空值、整体查询失败不发布部分快照。PostgreSQL 必须真实连接临时库；仅测试名字叫 postgres 不构成证据。
 - server 自有测试随 workspace 运行，验证首次 load 失败不 listen、内存 GET envelope、全量快照发布、失败保留快照且 not-ready、非法配置/未实现路由/错误方法/优雅退出。CI 不能替模块编写这些 Rust 测试，也不通过修改 storage/server 规避编译错误。
 
-解析 libtest 汇总能拒绝零执行和 ignored，但无法识别测试内部人为提前 return、mock 冒充真库或没有断言。独立 verification 必须对照上述模块测试源码和至少 2–3 条原始命令日志，不得只看绿灯。本轮不增加 HTTP 进程 smoke（可选）；不得宣称已覆盖真实 server 端口 3001、SQL_DSN 启动与退出的进程级行为。
+解析 libtest 汇总能拒绝零执行和 ignored，但无法识别测试内部人为提前 return、mock 冒充真库或没有断言。独立 verification 必须对照上述模块测试源码和至少 2–3 条原始命令日志，不得只看绿灯。新增独立 process job 的真实 HTTP 进程 smoke，详见下节；该新增验证尚未运行，不能宣称通过。
+
+## 追加：固定 Go oracle 与真实 Rust 进程差分
+
+`process` 是单独 job（不在 PG 矩阵重复 Go 构建），仍依赖 prepare 的精确 lock 及身份/校验和核验。新增 `scripts/ci/p1-process.py`、`scripts/ci/p1-go-fixture_test.go.txt`；只在 GitHub-hosted Actions 执行。
+
+1. checkout 固定 Go 上游 `17970da4571e81308f176a0e61a38276e5771606`，验证 SHA；复制到 RUNNER_TEMP，只有临时副本注入测试及 embed placeholder。setup-go SHA 和上游 build tags 沿用 P0，Go 依赖只读。
+2. `go test -json -count=1 ... -run '^TestP1ExportPublicConfig$'` 实际调用五个现有 handler（Fiber synthetic context），保存每次真实状态码与 JSON body；不手写 expected envelope。覆盖 missing、empty、whitespace、Unicode、Markdown、HTML、URL 共七组输入，35 条响应。Go 测试必须恰好一条通过、零失败、零跳过，否则阻断。
+3. fixture 同时携带输入 options 与上游 SHA。Python sqlite3 为每组创建独立临时文件及旧 options 表，用参数绑定装入同组输入，另加未知私密 key 的日志 canary。`cargo +1.99.1 build --locked -p newapi-server --bin newapi-server` 后启动真实二进制，以 SQL_DSN 指向该文件，PORT 使用内核分配的随机空闲端口；仅请求 127.0.0.1，无生产库或网络目标。
+4. 对真实 HTTP 五 GET 的状态/JSON 逐项比较 Go oracle，**不是两份手写 expected**。每组发送 SIGTERM，要求十秒内退出码 0、端口关闭。两组负向进程测试为 SQLite 文件存在但没有 options 表、带 canary 凭证的非法 MySQL DSN；要求二十秒内非零退出且观察期间不监听。
+5. 每个进程保留退出码、HTTP 检查数、失败类别、日志泄露判断；检查日志不得含 SQL_DSN、未知私密值及非法 DSN 用户名/密码 canary。原始日志先检查再脱敏落盘，防止失败 artifact 泄露敏感值。全部九组通过且 HTTP 检查数恰为 35 才成功；不忽略失败，finally 强制清理残留进程。轮询只发生远程进程启动测试，不在开发机运行。
+6. artifact `p1-process-<SHA>-<run>-<attempt>` 包含 Go fixture、Go 原始测试事件、命令退出码/计数、root lock、Rust build 日志和每组进程结果；always seal/upload 保留失败证据。未执行项目仍标 not-executed。
+
+范围说明：这是 Go **handler** 对 Rust **真实 HTTP 进程** 的差分；不声称启动了完整 Go 服务或验证 Go DB loader/完整中间件。随机端口分配与 bind 之间有极短竞争窗口，遇占用应红灯排查而非换端口掩盖失败。负向 no-listen 采用高频 TCP 观察并结合非零启动退出，不替代 server 单元测试的启动顺序断言。追加脚本/工作流尚未远程执行；catalog 编译/fmt 由其他所有者修复，不在此改动。
 
 ## 本次编写的 CI 回归测试
 
@@ -60,5 +73,5 @@
 
 - 本工作区没有 P1 Rust workspace 文件。主代理需集成其他所有者交付后才能运行；测试命名接口必须同步确认。
 - 模块新增未在探针中的依赖需单独审阅固定版本；manifest 静态约束不是传递依赖审计的替代。
-- 9.6 registry 当前可拉取性尚待远程门禁验证；拉取失败必须报告受阻，不能默默抬高最低支持版本。
+- 主代理报告首轮 run `41444440734` 已真实启动 PostgreSQL 9.6/17；本代理未据此宣称 Rust 测试通过。后续镜像拉取失败仍须报告受阻，不能默默抬高最低支持版本。
 - 首次 bootstrap lock 必须回收提交并 locked 重跑；工具链/依赖可获得性、YAML 展开、脚本测试、Rust 编译和两库行为全部尚待 Actions 验证。
