@@ -32,7 +32,7 @@ impl Drop for Directory {
     }
 }
 
-async fn execute(db: &Database, sql: &str) {
+async fn execute(db: &Database, sql: &'static str) {
     match db {
         Database::Sqlite(pool) => {
             sqlx::query(sql).execute(pool).await.unwrap();
@@ -128,8 +128,16 @@ async fn contract(db: &Database) {
     let cleared = PublicConfig::load(db, &deleted).await.unwrap();
     assert_eq!(cleared.notice, "");
 
-    execute(db, "UPDATE options SET \"value\" = 'new' WHERE \"key\" = 'Notice'").await;
-    execute(db, "UPDATE options SET \"value\" = NULL WHERE \"key\" = 'About'").await;
+    execute(
+        db,
+        "UPDATE options SET \"value\" = 'new' WHERE \"key\" = 'Notice'",
+    )
+    .await;
+    execute(
+        db,
+        "UPDATE options SET \"value\" = NULL WHERE \"key\" = 'About'",
+    )
+    .await;
     assert!(PublicConfig::load(db, &loaded).await.is_err());
     assert_eq!(fields(&loaded), expected);
     execute(db, "DROP TABLE options").await;
@@ -142,7 +150,11 @@ async fn contract(db: &Database) {
         "CREATE TEMP TABLE options (\"key\" TEXT PRIMARY KEY, \"value\" INTEGER)",
     )
     .await;
-    execute(db, "INSERT INTO options (\"key\", \"value\") VALUES ('Notice', 42)").await;
+    execute(
+        db,
+        "INSERT INTO options (\"key\", \"value\") VALUES ('Notice', 42)",
+    )
+    .await;
     assert!(PublicConfig::load(db, &loaded).await.is_err());
     assert_eq!(fields(&loaded), expected);
     execute(db, "DROP TABLE options").await;
