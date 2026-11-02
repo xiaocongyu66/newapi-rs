@@ -67,4 +67,4 @@
 - Actions race 检查法律结构体并发读写；前端检查空值清缓存、错误保留缓存、URL 展示方式和法律同意依赖。
 - 保存来源 SHA、workflow run ID、命令、退出码、测试数/跳过数、脱敏响应 artifact；独立复核者据该 SHA 给 PARTIAL/PASS/FAIL。上述完整矩阵属于 P1 公共配置实现验收，不是开始 P1 的前置条件。P0 负责冻结本契约、覆盖映射和测试方案；已有 Go handler 基线证据见 ci-baseline.md，未覆盖项须在 P1 如实验证，不能据现有基线宣称全矩阵通过。
 
-本轮不新增机器可读 fixture，避免把静态推导冒充运行采集。剩余缺口包括中间件错误、完整 options 更新 UI、启动 DB 错误路径、法律锁语义、frontend status/consent、三库基线与远程证据。
+本轮不新增机器可读 fixture，避免把静态推导冒充运行采集。剩余缺口包括中间件错误、完整 options 更新 UI、启动 DB 错误路径、法律锁语义、frontend status/consent、SQLite/PostgreSQL 两库实现验收与远程证据。

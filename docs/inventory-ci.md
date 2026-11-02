@@ -1,6 +1,6 @@
 # P0 远程静态台账一致性检查
 
-状态：已交付、未执行验证。P0 未验收，不进入 P1。仅新增本说明、`scripts/ci/check-inventory.py`、`.github/workflows/p0-inventory.yml`；不修改已通过的 p0-baseline.yml，不提交或推送，不执行本地脚本/构建/测试。
+状态：已远程执行，P0 未整体验收。修复多行注册解析后，commit `75fb5f5330ba1d95d264ef45485e4f5e61aa7ec9` 的 run [41437057543](https://github.com/xiaocongyu66/newapi-rs/actions/runs/41437057543) 报告路由 `PASS_STATIC_EXPLICIT_ONLY`、errors=0、整体 PARTIAL/exit 2。独立 verification 已确认修复符合预期，主执行者复查远程日志一致；不把红色整体检查描述为全量通过。未执行本地脚本/构建/测试。
 
 目标主库遵循最新用户决定：**SQLite + PostgreSQL**；MySQL 不支持、不迁移，不增加 MySQL 验收门槛。这里不连接任何数据库。
 
@@ -41,4 +41,4 @@ Python 标准库读取 Go 文本，不导入、编译或执行上游 Go，不安
 
 主代理合并三个新文件及最新三份台账后，获授权提交/推送集成 SHA，在远程运行本工作流；本代理不执行提交、推送或本地脚本。取回该精确 SHA/run/attempt 的 report.json，先检查 routes_status 和逐项差集，再交独立 verification。若失败按报告修正解析器或台账，不能改快照凑数。
 
-尚无本次工作流运行 ID、Python 语法/执行验证或独立复核 PASS。必须由 Actions 首跑验证实现；模型完整注册/动态 SQL 与异步任务逐入口映射尚未闭环。SQLite/PostgreSQL 真实连接和运行时路由契约依所属阶段推进，不把未来实现验收冒充本次静态对账。
+远程运行与限定范围复核结果见开头记录；模型完整注册/动态 SQL 与异步任务逐入口映射尚未闭环。SQLite/PostgreSQL 真实连接和运行时路由契约依所属阶段推进，不把未来实现验收冒充本次静态对账。

@@ -249,6 +249,26 @@
 
 【事实纠正】settings/settings.go:181–182,228–232存在TelegramOAuthEnabled、TelegramBotToken/Name及WeChatAuthEnabled、WeChatServerAddress/Token/QRCodeImageURL。原§5“尚未证明提供商”仍是实现全集待核验，而不代表配置入口不存在。
 
+## 10. 非启动入口续核：账务与缓存（覆盖§7同名候选）
+
+以下是固定代码入口，不按userId、红包、请求或goroutine实例数量增加分母。副作用重试/崩溃运行验证归P4/P7，不前置要求P0通过；本节不宣称运行成功。
+
+| 入口及逐调用证据（internal下） | 已读闭包的准确副作用 | 目标所有权/阶段 |
+|---|---|---|
+| billing/qq_checkin.go:124,157 | 两数据库路径均IncrUser(userId,quotaAwarded)，错误忽略；不是通知/日志任务 | billing编排、identity额度缓存端口，P4/P7 |
+| billing/store_checkin.go:208,242 | 网页签到两路径均IncrUser(userId,quotaAwarded)，错误忽略 | 同上P4 |
+| billing/qq_drop.go:183 | IncrUser(userId,drop.QuotaAwarded)，错误忽略 | 同上P4/P7 |
+| billing/qq_redpacket.go:221,342 | 创建后DecrUser(sender,total)，领取后IncrUser(user,grab.Amount)；不是过期维护循环 | 同上P4/P7 |
+| billing/qq_steal.go:204 | 闭包先DecrUser(victim,amount)，再IncrUser(thief,amount)，两错误忽略 | 同上P4/P7，守恒验收仍需事务/缓存故障fixture |
+| billing/qq_transfer.go:190,253 | 两路径先IncrUser(from,-amount)，再IncrUser(to,Received)，不是转账主事务在go内执行 | 同上P4/P7 |
+| billing/consume_text_quota.go:649；consume_quota_realtime.go:404 | RecordRelaySample(relayInfo,true,completionTokens) | usage采样/统计，P4/P7；非第二次扣费 |
+| billing/open_billing_session.go:84–125 BillingSession.Refund | 锁下排除settled/refunded/无需退款，先置refunded；复制token/funding等到闭包；funding.Refund→订阅extraReserved负delta→非playground且tokenConsumed>0时IncreaseTokenQuota，失败各自记日志 | billing资金编排→identity令牌端口，P4；内存幂等标志不证明崩溃持久化幂等，未见闭包自动重试 |
+| identity/store_users.go:1065,1094,1267 | 分别RefreshUserGroupCache、updateUserSettingCache、updateUserNameCache；不能统一称“写用户后任务”，有读取回填用途 | identity DB读→缓存，P2/P3 |
+| identity/store_users.go:1130,1155 | 分别IncrUser/DecrUser；异步在后续BatchUpdate/DB分支之前派发，不应声称DB提交后才更新缓存 | identity缓存，billing编排额度，P4 |
+| identity/token_store.go:336,378 | ApplyTokenDelta正/负额度，缺hash跳过由下次DB读取水合，不创建残缺hash；后续另有BatchUpdate/DB分支 | identity令牌缓存，billing编排，P4 |
+
+以上消除QQ签到/掉落/红包/偷取/转账、普通签到、文本采样、退款session、用户/token闭包的副作用不明；实时计费另外两入口亦已续读：consume_quota_realtime.go:449–495 checkAndSendQuotaNotify，UserQuota-(quota+preConsumedQuota)<threshold才notifyUser；threshold优先用户非零QuotaWarningThreshold，否则全局；调用点443要求sendEmail且本次总额度非零。497–543 checkAndSendSubscriptionQuotaNotify先排除nil、无订阅/总额度<=0，remaining=total-(usedAfterPreConsume+postDelta)，小于threshold才通知。空NotifyType默认Email，Bark/Gotify用短文本，其他采用含wallet链接HTML；失败只记日志。归billing决定通知语义→integrations发送，P4/P7，不是新的持久化账务任务，通知限流另见ops/limit_notify.go。
+
 ## 8. 未完成项与远程验收设计
 
 1. **已有Go基线证据**：ci-baseline.md首轮记录run 41425478831 attempt 1/2，SHA 6e599ec59837d645b4740ebe363790beda6b40f1均success；attempt 1 public-config 19/0、focused 295/2、full-api 2745/7、relaykit 280/0（pass/skip），四组退出码0。独立验证对CI基础交付PASS，不等于P0整体通过。以下2–6项为分阶段验证方案：P0只验集合、字段、归属与方案；P1验SQLxSQLite/PostgreSQL两目标库；P4验账务；P7验任务恢复；P8验完整升级。不得要求后阶段运行通过才验收P0清单。

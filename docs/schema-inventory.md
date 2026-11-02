@@ -157,6 +157,14 @@
 
 【待验证】全仓库（含modules/relaykit、db/archive）的 Table(expr)、Raw/Exec、Migrator、CREATE/ALTER 参数来源清单尚未封闭。只扫描注册点不能证明无额外业务表；不能据此宣布P0完成。
 
+## 7. 动态标识符来源续核（替代§4相应未决描述）
+
+`common/dbx/migrate_priority_weight.go`的动态DDL不是用户自定义表集合：DropLegacySchedulingColumns（42–59）固定4对目标：channels.priority、channels.weight、abilities.priority、abilities.weight；先carryOverChannelWeightToRoutes，将旧渠道权重复制到仍处于seed=100的channel_model_routes，已调过路由权重的不覆盖。表owner=catalog，迁移执行storage，P8。
+
+columnExists/tableExists（130–182）以绑定参数探测目录，schemaFunc只按引擎选DATABASE()/current_schema()；SQLite查pragma_table_info/sqlite_master。dropColumnIfExists（199–216）的table/column来自上述4项，不接受HTTP输入。dropIndexesOnColumn（223–270）从SQLite pragma_index_list/info或PG pg_index/class/attribute取实际索引名，再执行DROP INDEX；**索引名是数据库运行时对象，不要求P0枚举每个运维自建索引名**。应登记生成规则及转义契约：当前代码仅加引号、未转义标识符内部引号；PG目录查询按t.relname/a.attname、未显式schema过滤。这是两个具体P8兼容/安全fixture项，不是无限扩大业务表分母的理由。MySQL分支仅历史事实，不迁移。
+
+因此§4“枚举table/column/index来源白名单”在本函数链已静态核清：4个固定表列目标+运行时目录索引集合。剩余原生SQL审阅不能再以未知任意索引名称阻塞P0；具体尚待核的是common/dbx/migrate_route_unit_group.go的CollapseRouteUnitGroups旧索引去重顺序、dbinfra/timescale_log.go的策略参数生成、db/archive两个历史SQL适用版本（非当前自动注册模型）。
+
 ## 6. 本轮新增42模型逐字段登记
 
 以下为源码结构声明事实，不是运行DDL。简记：PK=primaryKey（旧式primary_key另注）；AI=autoIncrement；NN=not null；U=uniqueIndex；I=index；D=default；V(n)=type:varchar(n)；S(n)=size:n；B=bigint；T=type:text；J=type:json；省略标签=∅。同一斜线组内各字段分别拥有相同类型/标签，不代表一个复合字段。列名除显式column外仍按默认命名待核。所有权、R/W与阶段逐模型见data-jobs §2及本文件§3。

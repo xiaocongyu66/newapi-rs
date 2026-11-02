@@ -156,7 +156,7 @@ integrations → foundation
 
 |补充能力|参考源码|本架构所有者/边界|远程验收及当前状态|
 |---|---|---|---|
-|独立 LOG_SQL_DSN 与 ClickHouse 日志库|`/root/newapi/apps/api/internal/dbinfra/open_db.go:63–103,148–161`|storage提供独立连接能力，usage拥有日志repository；日志不与业务库假设同事务|三业务库矩阵不能代替ClickHouse；驱动/协议选择与最低版本待确认，受阻|
+|独立 LOG_SQL_DSN 与 ClickHouse 日志库|`/root/newapi/apps/api/internal/dbinfra/open_db.go:63–103,148–161`|storage提供独立连接能力，usage拥有日志repository；日志不与业务库假设同事务|SQLite/PostgreSQL 两主库矩阵不能代替ClickHouse；驱动/协议选择与最低版本待确认，受阻|
 |修复、AutoMigrate、回填型升级|同文件:195–239|storage只负责执行机制，各领域拥有本域升级规则；data负责人逐项冻结|不只移植SQL文件；重复执行、失败中断、备份恢复、共存schema测试；未开始|
 |JWT用途隔离、refresh轮换/撤销|authtoken与identity session；具体函数行号待补|identity拥有凭证生命周期，security验证用途与策略，server适配cookie/headers|access/session/refresh/proof不能仅凭同一签名验证器混用；重放/撤销/2FA轮换fixture；未开始|
 |sing-box/uTLS/WireGuard|internal/egress；具体函数行号待补|integrations/egress经relay.OutboundPort提供能力，不改变域依赖|普通Reqwest proxy不等于完整替代；Rust替代能力未证明，受阻；不得静默保留Go sidecar冒充完整重写|

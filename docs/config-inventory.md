@@ -139,6 +139,43 @@ catalog/configure_gateway_dispatch.go:24–34和configure_route_stats.go:24–34
 
 Passkey默认补证（security/configure_passkey.go:13–42）：Enabled=false、RPDisplayName=common.SystemName、RPID/Origins/AttachmentPreference空、AllowInsecureOrigin=false、UserVerification=preferred。getter在RPID空且ServerAddress非空时从URL Host或原地址填充，Origins空或[]时填ServerAddress；这些是读取时变更，不是固定DB默认。反射json键仍须对identity.PasskeySettings声明核对，未计上述40键。
 
+## 8. 固定注册全集与运行时值边界（本轮续补）
+
+生产`settings.GlobalConfig.Register`调用点共26组（全internal检索，排除测试及注释），不是不可穷举集合。§6已展开9组；本节补余17组。注册名固定；map的模型名、用户组、工具名，数组规则实例和OAuth提供商记录是**运行时数据**，不新增注册项、表或后台任务。P0验收容器类型、输入校验和消费者，而非枚举每个可能模型/域名/金额。W统一由catalog持久化options端口，以下owner为语义域；默认及校验运行验证归对应后续阶段。
+
+下表每个后缀与组前缀用点连接，是独立持久化键；JSON嵌套成员不递归生成options键。
+
+| 固定注册组 | 全部顶层后缀 | 证据 / 语义owner与阶段 |
+|---|---|---|
+| general_setting | docs_link, ping_interval_enabled, ping_interval_seconds, quota_display_type, custom_currency_symbol, custom_currency_exchange_rate, amount_name, amount_unit | billing/manage_subscription.go:588–618，billing/relay P4/P5 |
+| tool_price_setting | prices（map[string]float64） | billing/price_expression/price_tools.go:55–64，billing P4/P6 |
+| billing_setting | billing_mode, billing_expr（均map[string]string） | billing/settle_tiered.go:206–217，billing P4 |
+| group_ratio_setting | group_ratio, group_group_ratio, group_special_usable_group（RWMap及嵌套map） | catalog/configure_ratio/configure_group_ratio.go:17–35，catalog/billing P3/P4 |
+| global | pass_through_request_enabled, thinking_model_blacklist, chat_completions_to_responses_policy | catalog/manage_models.go:38–42,308，catalog/relay P3/P6 |
+| claude | model_headers_settings, default_max_tokens, thinking_adapter_enabled, thinking_adapter_budget_tokens_percentage | 同58–63,309，catalog/relay P3/P6 |
+| gemini | safety_settings, version_settings, supported_imagine_models, thinking_adapter_enabled, thinking_adapter_budget_tokens_percentage, function_call_thought_signature_enabled, remove_function_response_id_enabled | 同87–95,310，catalog/relay P3/P6 |
+| grok | violation_deduction_enabled, violation_deduction_amount | 同122–125,311，catalog/billing P4/P6 |
+| qwen | sync_image_models | 同138–140,312，catalog/relay P3/P6 |
+| channel_affinity_setting | enabled, switch_on_success, keep_on_channel_disabled, max_entries, default_ttl_seconds, rules | catalog/track_affinity_setting.go:30–36,153，catalog P5 |
+| geo_block_setting | enabled, allow_admin, blocked_countries | geoip/geoip.go:20–42，security/integrations P7 |
+| passkey | enabled, rp_display_name, rp_id, origins, allow_insecure_origin, user_verification, attachment_preference | identity/passkey_settings.go:3–10；security/configure_passkey.go:24，identity P7 |
+| console_setting | api_info, uptime_kuma_groups, announcements, faq, api_info_enabled, uptime_kuma_enabled, announcements_enabled, faq_enabled | usage/configure_perf.go:62–90，usage P7 |
+| perf_metrics_setting | enabled, flush_interval, bucket_time, retention_days | 同104–119，usage P7 |
+| performance_setting | disk_cache_enabled, disk_cache_threshold_mb, disk_cache_max_size_mb, disk_cache_path, monitor_enabled, monitor_cpu_threshold, monitor_memory_threshold, monitor_disk_threshold | 同147–182，storage/usage P7/P9 |
+| user_insight_setting | enabled, record_in_log, jailbreak_alert_score, gender_inference_enabled, sample_enabled, sample_rate_percent, sample_keep_body, sample_quota_mb, sample_retention_days, auto_ban_enabled, auto_ban_min_risk, auto_ban_code_ratio_enabled, auto_ban_code_ratio_percent, auto_ban_code_min_requests, client_ban_enabled, blocked_clients | usage/user_insight_setting.go:7–77，usage/security P7 |
+| qq_bot_setting | 见下面完整后缀表 | billing/qqbot_setting.go:9–184,275，billing/integrations P4/P7 |
+
+qq_bot_setting全部顶层后缀（同一结构体，不是多注册组）：
+
+- 身份/签到：app_id, app_secret, webhook_path_token, min_quota, max_quota, qq_checkin_enabled, checkin_disabled_groups, web_checkin_enabled, single_platform_only, notify_template, auto_approve_enabled, auto_approve_keyword。
+- 掉落：drop_enabled, drop_groups, drop_min_messages, drop_max_messages, drop_min_quota, drop_max_quota, drop_daily_limit, drop_template, drop_balance_anchor, drop_daily_guarantee。
+- 转账：transfer_enabled, transfer_disabled_groups, transfer_daily_limit, transfer_min_amount, transfer_max_amount, transfer_fee_brackets。
+- 红包：red_packet_enabled, red_packet_disabled_groups, red_packet_daily_limit, red_packet_min_amount, red_packet_max_amount, red_packet_default_count, red_packet_max_count, red_packet_expire_seconds, red_packet_allow_own_grab。
+- 冷却/撤回：command_cooldown_seconds, rebind_cooldown_seconds, recall_failed_messages, recall_delay_seconds, recall_policies, admin_open_ids。
+- 偷取/诱饵：steal_enabled, steal_success_rate, steal_min_amount, steal_max_amount, steal_daily_limit, steal_recipient_grace_seconds, bait_keyword, bait_strict_match, bait_window_minutes, bait_victim_extra_rate, bait_global_extra_multiplier, bait_drop_max_deny_rate, bait_spam_threshold, bait_spam_penalty_minutes, bait_spam_stack_step, bait_spam_deny_rate, bait_spam_steal_rate。
+
+秘密：app_secret/webhook_path_token及provider/header配置中的凭据不能随配置dump；后台QQ事件/延迟撤回实例数量随流量变化，不增加固定任务类型。rules嵌套结构明确来自ChannelAffinityRule（同文件11–28）：name/model_regex/path_regex/user_agent_include/key_sources/value_regex/ttl_seconds/param_override_template/skip_retry_on_failure/include_using_group/include_model_name/include_rule_name；key_sources成员type/key/path。global.chat_completions_to_responses_policy成员enabled/all_channels/channel_ids/channel_types/model_patterns（manage_models.go:13–19）；均作为一个JSON值管理。
+
 ## 7. Actions闭环要求
 
 仅远程Actions：固定SHA枚举seed最终键集合与GlobalConfig反射键集合，和读/写键集合做差集；报告未知/废弃键及所有动态env实参。用脱敏fixture测缺失、空、非法、大小写、别名优先级、热更新及DB故障；敏感值只输出键名/分类，绝不dump真实options或env。每键至少有owner、阶段、默认和测试映射；差集未清零保持P0受阻。提交/推送/触发由获授权集成者操作，本代理未触发；已有Go基线success证据见§1，不把该基线当逐键配置验证。

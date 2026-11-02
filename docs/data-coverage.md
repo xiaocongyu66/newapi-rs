@@ -130,6 +130,28 @@ S=源码字段/标签登记；O=已有读写归属及阶段；V=真实schema、�
 - [x] Passkey默认与getter从ServerAddress派生RPID/Origins已登记，不冒充固定DB默认。
 - [ ] 所有注册组的字段、默认、权限/秘密、非法/空值、热更新、动态env实参及最终seed/read/write差集。
 
+## 6. 本轮续补：有限分母与具体待读入口
+
+- [x] config-inventory §8补齐其余17组顶层键，与原9组共同覆盖生产GlobalConfig.Register的**26个固定注册组**；QQ配置完整顶层字段、Passkey json标签、affinity/global嵌套结构已登记。旧“反射组尚未展开”由此替代。
+- [x] 模型名/工具名/用户组/域名/规则数组/QQ群/OpenID属于运行时配置值，不新增注册组或schema模型；只须记录容器、校验与消费者，不以不可穷举值无限阻塞P0。
+- [x] schema §7核清DropLegacySchedulingColumns固定4个table/column组合及dropIndexesOnColumn运行时目录索引名来源；不要求枚举用户自建所有索引名。内部引号转义、PG同名跨schema索引选择是具体P8fixture债务。
+- [x] data-jobs §10核清QQ签到/掉落/红包/偷取/转账、网页签到、文本及实时采样、退款session、用户与token缓存闭包；另完整读取余额/订阅通知两函数，明确阈值/默认Email/失败仅日志。
+
+当前尚需P0静态确认的具名入口（这些是有限代码项，不含后阶段运行验证）：
+
+| 工作项 | 具体文件/函数或声明 | 所有权/阶段 |
+|---|---|---|
+| 剩余catalog种子hook键及默认/验证 | catalog/manage_channels.go init；resolve_group.go init；track_health.go init，及configure_gateway_dispatch.go ValidateGatewayDispatchOption | catalog P3/P5 |
+| 动态env实参 | common/totp.go LookupEnv封装；common/utils.go Getenv封装；common/init.go动态name循环；relay/channel/ali/adaptor.go aliAnthropicMessagesModelsEnv | identity/config/relay P2/P6 |
+| 旧路由去组/策略SQL参数 | common/dbx/migrate_route_unit_group.go CollapseRouteUnitGroups；dbinfra/timescale_log.go setupTimescaleLogHypertable；db/archive版本SQL | catalog/usage/storage P8 |
+| QQ事件分派 | billing/manage_qqbot.go handleQQBotEvent调用前验签/去重与分派函数 | integrations/billing P7 |
+| 通知/健康/日志入口 | ops/limit_notify.go异步闭包；catalog/track_health.go:246；security/audit_access.go:138；sensitive/audit_block.go:49；logger/logger.go:114 | ops/catalog/security/usage P2/P5/P7/P9 |
+| 管理扇出与relay后处理 | ops/manage_model_metadata_sync.go:673；handler/handle_model_sync.go:313,318,513,517；handle_channel_probe.go:905；handle_relay.go:502,689 | catalog/integrations/relay P3/P5/P7 |
+| 连接生命周期 | egress/dial_singbox.go:82；fiberadapter/stream.go:169,296；openai/relay_realtime.go:37,97及§7列出的5家供应商stream闭包 | integrations/transport/relay P5/P6 |
+| 非启动清理/封装检索对账 | common/rate-limit.go clearExpiredItems；对main/internal的time.Sleep/NewTicker/AfterFunc候选与既有30行启动表做差集 | security/jobs P2/P7 |
+
+26组键名分母现已明确，但默认表达式/输入校验不是全部完成；需按config §8各组对应结构初始化及getter/validator逐项续核。此处不把无限用户值列为缺口，也不要求P4/P7故障测试提前通过。
+
 ## 5. 仍需远程证据与P0阻塞
 
 阶段区分：P0阻塞是静态全集/归属/契约与Go基线证据未闭环；以下SQLx实现、Rust账务、任务恢复及完整升级执行分别归P1/P4/P7/P8，不要求后阶段实现测试提前通过。V空框记录未来验收债务，不单凭它认定P0不合格。当前全量异步入口与配置静态缺口仍足以阻止自行宣布P0通过。

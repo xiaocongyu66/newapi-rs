@@ -1,4 +1,11 @@
-# P0 Rust 依赖基线（待远程验证）
+# P0 Rust 依赖基线
+
+## 远程执行与锁文件回收记录
+
+- 首次解析：run [41436159208](https://github.com/xiaocongyu66/newapi-rs/actions/runs/41436159208)，commit `92c05ba20d46b0ba2eb4297829686f75aee248bf`，attempt 1 success；独立审阅确认 resolve/check/export 成功，实际启用图无 MySQL/Moka。
+- Cargo.lock 从该运行 artifact 原样回收，并提交至 `75fb5f5330ba1d95d264ef45485e4f5e61aa7ec9`。未本地生成或手工改写锁文件。
+- 回收后的远程验证：run [41437057426](https://github.com/xiaocongyu66/newapi-rs/actions/runs/41437057426)，同一锁文件提交，结论 success；独立最终复核进行中，不据此宣称 P0 总体完成。
+- 以下“本次未执行/尚无锁文件”是 Agent 首次交付时的历史状态；当前执行状态以上述精确运行记录为准。
 
 ## 边界与状态
 
