@@ -1,0 +1,124 @@
+name: Rust formatting patch (not source acceptance)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'rust-toolchain*'
+      - '**/rustfmt.toml'
+      - '**/.rustfmt.toml'
+      - '.github/workflows/rust-format-patch.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-format-patch-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: '1.99.1'
+  CARGO_TERM_COLOR: never
+
+jobs:
+  formatting-patch:
+    name: Generate reviewable patch only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Initialize run evidence
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/rust-format-patch"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          keys = ['GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
+                  'GITHUB_REF', 'GITHUB_EVENT_NAME', 'GITHUB_REPOSITORY',
+                  'RUST_TOOLCHAIN', 'ImageOS', 'ImageVersion']
+          data = {key: os.environ.get(key) for key in keys}
+          data['purpose'] = 'Formatting patch only; NOT source formatting acceptance'
+          data['run_url'] = (f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                             f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}")
+          Path(os.environ['RUNNER_TEMP'], 'rust-format-patch', 'identity.json').write_text(
+              json.dumps(data, indent=2) + '\n')
+          PY
+      - name: Checkout exact event SHA in this isolated job
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify clean source identity
+        shell: bash
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/rust-format-patch/checkout-sha.txt"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          cp .github/workflows/rust-format-patch.yml "$RUNNER_TEMP/rust-format-patch/workflow.yml"
+      - name: Install fixed formatter toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --no-self-update
+          rustc +"$RUST_TOOLCHAIN" --version --verbose > "$RUNNER_TEMP/rust-format-patch/rustc.txt"
+          cargo +"$RUST_TOOLCHAIN" fmt --version > "$RUNNER_TEMP/rust-format-patch/rustfmt.txt"
+      - name: Format only this disposable checkout and export binary patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          evidence = Path(os.environ['RUNNER_TEMP'], 'rust-format-patch')
+          command = ['cargo', '+' + os.environ['RUST_TOOLCHAIN'], 'fmt', '--all']
+          result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+          (evidence / 'cargo-fmt.log').write_bytes(result.stdout)
+          # No pipeline: preserve the formatter's real exit status even if diff succeeds.
+          patch = subprocess.run(['git', 'diff', '--binary', '--', '*.rs'],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+          (evidence / 'rustfmt.patch').write_bytes(patch.stdout)
+          (evidence / 'git-diff.stderr').write_bytes(patch.stderr)
+          data = {
+              'command': command, 'formatter_exit_code': result.returncode,
+              'diff_exit_code': patch.returncode, 'patch_bytes': len(patch.stdout),
+              'patch_sha256': hashlib.sha256(patch.stdout).hexdigest(),
+              'source_sha': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'source_acceptance': False,
+              'next_step': 'Review and recover patch at exact source SHA; commit and rerun acceptance CI',
+          }
+          (evidence / 'result.json').write_text(json.dumps(data, indent=2) + '\n')
+          print(result.stdout.decode('utf-8', errors='replace'))
+          print('Patch generation is not source acceptance. Review artifact and rerun CI on a new commit.')
+          raise SystemExit(1 if result.returncode or patch.returncode else 0)
+          PY
+      - name: Seal evidence even on failure
+        if: always()
+        shell: bash
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          evidence = Path(os.environ['RUNNER_TEMP'], 'rust-format-patch')
+          evidence.mkdir(parents=True, exist_ok=True)
+          (evidence / 'steps.json').write_text(os.environ['STEPS_JSON'] + '\n')
+          (evidence / 'job-status.json').write_text(json.dumps({
+              'status': os.environ['JOB_STATUS'], 'source_acceptance': False,
+              'patch_generated': (evidence / 'rustfmt.patch').exists(),
+          }, indent=2) + '\n')
+          lines = [hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name
+                   for path in sorted(evidence.iterdir())
+                   if path.is_file() and path.name != 'SHA256SUMS']
+          (evidence / 'SHA256SUMS').write_text('\n'.join(lines) + '\n')
+          PY
+      - name: Upload patch and exact source evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-format-patch-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-format-patch/
+          if-no-files-found: error
+          retention-days: 14
