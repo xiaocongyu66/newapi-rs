@@ -22,6 +22,8 @@ pub enum SessionError {
     IssuanceLimit,
     /// Rust String 尚不能承载 Go 字节截断产生的非法 UTF-8；禁止直接映射 HTTP 400。
     MetadataEncodingUnsupported,
+    /// 仅 SQLite 已知 BUSY/LOCKED 错误；不包含 PG、连接池超时或一般存储失败。
+    DatabaseBusy,
     Storage,
     Fence,
 }
@@ -35,6 +37,7 @@ impl std::fmt::Display for SessionError {
             Self::ActiveLimit => "active session limit",
             Self::IssuanceLimit => "session issuance limit",
             Self::MetadataEncodingUnsupported => "session metadata byte encoding is not supported",
+            Self::DatabaseBusy => "session SQLite database is busy or locked",
             Self::Storage => "session storage failure",
             Self::Fence => "session deny fence failure",
         })
@@ -42,7 +45,23 @@ impl std::fmt::Display for SessionError {
 }
 impl std::error::Error for SessionError {}
 impl From<sqlx::Error> for SessionError {
-    fn from(_: sqlx::Error) -> Self { Self::Storage }
+    fn from(error: sqlx::Error) -> Self {
+        if let sqlx::Error::Database(db_error) = &error {
+            // 先按实际驱动类型收窄，绝不能把 PG SQLSTATE 当 SQLite 数字码。
+            if let Some(sqlite) = db_error.try_downcast_ref::<sqlx::sqlite::SqliteError>() {
+                use sqlx::error::DatabaseError;
+                // 明确白名单，不匹配错误文本，也不接受任意低八位相同的未知扩展码。
+                // BUSY / LOCKED / BUSY_RECOVERY / BUSY_SNAPSHOT / BUSY_TIMEOUT /
+                // LOCKED_SHAREDCACHE / LOCKED_VTAB。
+                if matches!(sqlite.code().as_deref(),
+                    Some("5" | "6" | "261" | "517" | "773" | "262" | "518")) {
+                    return Self::DatabaseBusy;
+                }
+            }
+        }
+        // 不在此自动重试；约束、解码、I/O、连接池及所有 PG 错误保持 Storage。
+        Self::Storage
+    }
 }
 
 /// 小写十六进制 HMAC-SHA256 摘要，不是 refresh 明文；禁止 Debug/Serialize。

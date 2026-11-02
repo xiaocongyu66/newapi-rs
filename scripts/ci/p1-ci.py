@@ -23,11 +23,11 @@ def evidence():
 
 
 def redact(text):
-    for name in ("TEST_POSTGRES_DSN", "SQL_DSN", "PGPASSWORD"):
+    for name in ("TEST_POSTGRES_DSN", "TEST_REDIS_URL", "SQL_DSN", "PGPASSWORD"):
         value = os.environ.get(name)
         if value:
             text = text.replace(value, "[REDACTED]")
-    return re.sub(r"(?i)(postgres(?:ql)?://)[^\s\"']+", r"\1[REDACTED]", text)
+    return re.sub(r"(?i)((?:postgres(?:ql)?|rediss?)://)[^\s\"']+", r"\1[REDACTED]", text)
 
 
 def write_json(name, value):
@@ -118,6 +118,10 @@ def manifest_policy():
                     version = spec.get("version") if isinstance(spec, dict) else spec
                     if version != expected_version:
                         raise RuntimeError("dependency differs from fixed probe version")
+                if actual_name == "redis" and (not isinstance(spec, dict) or
+                        spec.get("version") != "=0.32.7" or spec.get("default-features", True) or
+                        set(spec.get("features", [])) != {"tokio-comp", "script"}):
+                    raise RuntimeError("Redis must use fixed version and approved features")
                 if actual_name == "sqlx" and (not isinstance(spec, dict) or
                         spec.get("default-features", True) or "mysql" in spec.get("features", [])):
                     raise RuntimeError("SQLx defaults/MySQL must be disabled")
@@ -175,11 +179,13 @@ def request_json(url, headers=None):
 
 def images():
     # Read-only anonymous Docker Official Images registry authentication.
-    token = request_json("https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/postgres:pull")["token"]
     result = {}
-    for key, tag in (("pg96", "9.6"), ("pg17", "17")):
+    for key, repository, tag in (("pg96", "postgres", "9.6"), ("pg17", "postgres", "17"),
+                                 ("redis", "redis", "7.2.17-bookworm")):
+        token = request_json("https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/"
+                             + repository + ":pull")["token"]
         req = urllib.request.Request(
-            "https://registry-1.docker.io/v2/library/postgres/manifests/" + tag,
+            f"https://registry-1.docker.io/v2/library/{repository}/manifests/" + tag,
             headers={"Authorization": "Bearer " + token,
                      "Accept": "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json"})
         with urllib.request.urlopen(req, timeout=45) as response:
@@ -193,9 +199,10 @@ def images():
                    for m in manifest.get("manifests", [])):
             raise RuntimeError("required linux/amd64 official image is unavailable")
         (evidence() / (key + "-manifest.json")).write_bytes(body)
-        result[key] = {"tag": tag, "digest": digest, "image": "postgres@" + digest}
+        result[key] = {"repository": "library/" + repository, "tag": tag,
+                       "digest": digest, "image": repository + "@" + digest}
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            output.write(f"{key}=postgres@{digest}\n")
+            output.write(f"{key}={repository}@{digest}\n")
     write_json("registry.json", result)
     return True
 
@@ -319,7 +326,14 @@ def p2_restore_oracle():
     return True
 
 
+def redis_version_matches(text):
+    return re.search(r"(?m)^redis_version:7\.2\.17\r?$", text) is not None
+
+
 def verify():
+    if not os.environ.get("TEST_REDIS_URL"):
+        raise RuntimeError("Redis fixture URL is mandatory, not a skip condition")
+    print("::add-mask::" + os.environ["TEST_REDIS_URL"], flush=True)
     for kind in ("CRYPTO", "ORIGIN"):
         path = os.environ.get(f"P2_{kind}_ORACLE_PATH")
         if not path or not Path(path).is_file() or not Path(path).stat().st_size:
@@ -334,6 +348,14 @@ def verify():
     version_ok = version.startswith(expected + ".") or version.startswith(expected + " ")
     write_json("postgres-version-policy.json", {"expected": expected, "actual": version, "policy_ok": version_ok})
     ok = version_ok and ok
+    redis_ok = run("redis-version", ["docker", "exec", os.environ["P2_REDIS_CONTAINER"],
+                   "redis-cli", "--raw", "INFO", "server"])
+    redis_version_ok = redis_version_matches((evidence() / "redis-version.log").read_text())
+    write_json("redis-version-policy.json", {
+        "expected": "7.2.17", "policy_ok": redis_ok and redis_version_ok,
+        "image": os.environ["P2_REDIS_IMAGE"],
+    })
+    ok = redis_ok and redis_version_ok and ok
     ok = run("driver-tests", ["python3", "scripts/ci/p1-ci-test.py"]) and ok
     for label, command in (
         ("rustc", ["rustc", "+" + TOOLCHAIN, "--version", "--verbose"]),
@@ -347,6 +369,8 @@ def verify():
     ok = run("workspace-tests", cargo("test", "--locked", "--workspace"), True) and ok
     ok = run("origin-oracle-tests", cargo("test", "--locked", "-p", "newapi-security",
              "--test", "origin_oracle", "origin_matches_go_oracle", "--", "--exact"), True) and ok
+    ok = run("session-cache-tests", cargo("test", "--locked", "-p", "newapi-identity",
+             "--test", "session_cache", "--", "--test-threads=1"), True) and ok
     # Positive counts per backend AND owning module prevent all-filtered false greens.
     for package in ("newapi-storage", "newapi-catalog", "newapi-identity"):
         for backend in ("sqlite", "postgres"):
@@ -369,7 +393,7 @@ def finalize():
     elif os.environ["GITHUB_JOB"] == "oracle":
         expected = ["p2-crypto-oracle-command", "p2-origin-oracle-command"]
     elif os.environ["GITHUB_JOB"] == "verify":
-        expected.extend(["p2-oracle-restore", "origin-oracle-tests"])
+        expected.extend(["p2-oracle-restore", "origin-oracle-tests", "redis-version", "session-cache-tests"])
     write_json("command-status.json", {name: "recorded" if (evidence() / (name + ".json")).exists()
                                       else "not-executed (see steps/lock-status)" for name in expected})
     lines = []

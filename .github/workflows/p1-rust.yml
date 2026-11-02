@@ -54,6 +54,7 @@ jobs:
     outputs:
       pg96: ${{ steps.images.outputs.pg96 }}
       pg17: ${{ steps.images.outputs.pg17 }}
+      redis: ${{ steps.images.outputs.redis }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -146,6 +147,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
+      redis:
+        image: ${{ needs.prepare.outputs.redis }}
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
       postgres:
         image: ${{ matrix.image }}
         env:
@@ -196,6 +206,9 @@ jobs:
       - name: Check, format, lint and test both real database backends
         env:
           P1_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          P2_REDIS_CONTAINER: ${{ job.services.redis.id }}
+          P2_REDIS_IMAGE: ${{ needs.prepare.outputs.redis }}
+          TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
           TEST_POSTGRES_DSN: postgres://p1_test:p1_ephemeral_only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/p1_test
         run: python3 scripts/ci/p1-ci.py verify
       - name: Seal evidence even on failure

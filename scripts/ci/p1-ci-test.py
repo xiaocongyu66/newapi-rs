@@ -39,6 +39,24 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(ci.redact('error: "postgresql://other:secret@host/db"'),
                          'error: "postgresql://[REDACTED]"')
 
+    def test_redis_url_redaction(self):
+        with patch.dict(os.environ, {"TEST_REDIS_URL": "redis://127.0.0.1:12345/0"}):
+            self.assertEqual(ci.redact(os.environ["TEST_REDIS_URL"]), "[REDACTED]")
+        self.assertEqual(ci.redact('"rediss://user:secret@remote/0"'),
+                         '"rediss://[REDACTED]"')
+
+    def test_exact_redis_server_version(self):
+        self.assertTrue(ci.redis_version_matches("# Server\r\nredis_version:7.2.17\r\n"))
+        self.assertFalse(ci.redis_version_matches("redis_version:7.2.170\n"))
+        self.assertFalse(ci.redis_version_matches("redis_version:7.4.12\n"))
+        self.assertFalse(ci.redis_version_matches("ERR connection refused"))
+
+    def test_session_cache_uses_real_binary_without_name_filter(self):
+        self.assertEqual(ci.cargo("test", "--locked", "-p", "newapi-identity",
+                                  "--test", "session_cache", "--", "--test-threads=1"),
+                         ["cargo", "+1.99.1", "test", "--locked", "-p", "newapi-identity",
+                          "--test", "session_cache", "--", "--test-threads=1"])
+
     def test_push_cannot_refresh_even_with_environment_flag(self):
         with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "push", "P1_REFRESH_LOCK": "true"}):
             self.assertFalse(ci.refresh_requested())

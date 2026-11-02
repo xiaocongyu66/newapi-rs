@@ -1,5 +1,17 @@
 # P1 Rust 远程验证与集成交接
 
+## P2 Redis session cache 增量（最新交接）
+
+本次只修改 p1-rust.yml、p1-ci.py、p1-ci-test.py、本文；未本地执行任何测试、服务或容器，未提交推送。crypto oracle 包同步为 **internal/identity**，覆盖下文旧 common 约定，避免回归主集成修复。
+
+- 2026-11-02 经 `gh api repos/docker-library/official-images/contents/library/redis` 只读核实官方 `7.2.17-bookworm`，amd64 支持，来源 `redis/docker-library-redis` commit `41bd5f7bdf101142b029865bf727a97810ca8e02` / tag `v7.2.17`。本机 registry auth 请求超时，**没有虚构已取得 digest**。prepare 扩展现有 registry 校验：固定此完整版本 tag，远程获取官方 library/redis manifest、校验 SHA256 和 linux/amd64，输出不可变 digest。验证失败即阻断；verify service 只用 `redis@sha256:...`，原始 manifest/tag/digest 存 prepare artifact。
+- PG9.6/17 两个 job 各自拥有独立临时 Redis service，随机映射端口，无生产凭证、无外部 Redis、无共享持久卷。healthcheck 为 redis-cli ping。只在 verify 步骤注入 `TEST_REDIS_URL=redis://127.0.0.1:<job临时端口>/0`；TIME、Lua、CLIENT ID/KILL 使用测试专用实例的默认权限，不接生产服务。
+- driver 缺 TEST_REDIS_URL 直接失败，输出日志前 add-mask；artifact 日志额外遮蔽完整环境 URL 及 redis/rediss URL。用容器内 redis-cli INFO server 验证实际版本必须恰为 7.2.17，记录真实退出码、版本判断、镜像 digest。INFO 不等于 Rust adapter 验证，后者见下一项。
+- 已读取 `/root/newapi-rs-p2-auth/crates/identity/tests/session_cache.rs`，其四项测试名并不统一以 redis_ 开头，因此采用实际 binary：`cargo +1.99.1 test --locked -p newapi-identity --test session_cache -- --test-threads=1`，不加名称筛选。要求正执行数、failed=0、ignored=0；不存在 binary 或零测试直接失败。该 binary 也会随 workspace test 执行。
+- 当前四项实际测试覆盖独立连接撤销拒绝迟到回填、Redis 自然 TTL 到期、版本/schema/白名单/截止时间、真实 WRONGTYPE 与 CLIENT ID/KILL 断连错误。临时 key 为随机 SID，清理仅限自身 key；不使用 FLUSHALL、不杀其他测试连接。运行时真实退出码、passed/failed/ignored/filtered 和版本证据入同 SHA/run/attempt artifact。
+- 新增三个 CI 回归测试（URL 脱敏、精确 Redis 版本拒绝前缀误匹配、session_cache 命令构造），尚未运行。manifest 对直接 Redis 依赖要求 `=0.32.7`、default-features=false、features 恰为 tokio-comp/script。既有 MySQL/Moka 禁用和锁定版本保留。
+- 根 lock 不自动漂移。主代理集成新依赖后仍须显式 `gh workflow run p1-rust.yml --ref migration/p2 -f refresh_lock=true`，回收/审阅/提交该精确 run 的真实 lock，再对新 SHA locked 重跑。Redis tag/digest 的远程可拉取性及所有新增行为仍待 Actions 验证。
+
 ## P2 共享 Go oracle 增量
 
 新增 `prepare → oracle → verify(pg96, pg17)` 依赖链；原 P1 process job 保持。oracle job 仅构建一次两个 Go 包，固定上游 SHA `17970da4571e81308f176a0e61a38276e5771606`，注入模板到 RUNNER_TEMP 副本，不修改上游 checkout 或生产 crate。仍使用 P0 固定 checkout/setup-go/upload/download SHA、contents:read。
