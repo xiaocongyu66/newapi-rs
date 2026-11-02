@@ -86,7 +86,8 @@ class Audit:
             return
         filename, parameter, body, start = choices[0]
         env = {parameter: prefix}
-        for offset, line in enumerate(body.splitlines()):
+        lines = body.splitlines()
+        for offset, line in enumerate(lines):
             line_no = start + offset
             s = line.strip()
             if not s:
@@ -98,7 +99,13 @@ class Audit:
                 else:
                     env[g[1]] = join(env[g[2]], json.loads(g[3]))
                 continue
-            r = re.match(r'(\w+)\.(' + VERBS + r')\((' + STRING + r')\s*[,)]', s)
+            # Match from the registration's opening line, allowing whitespace and
+            # newlines before its literal first argument. body is already comment-
+            # stripped by load_routes(), with original line breaks preserved.
+            route_text = s
+            if re.fullmatch(r'\w+\.(?:' + VERBS + r')\(\s*', s):
+                route_text = '\n'.join(lines[offset:]).lstrip()
+            r = re.match(r'(\w+)\.(' + VERBS + r')\(\s*(' + STRING + r')\s*[,)]', route_text)
             if r:
                 if r[1] not in env:
                     self.unknown.append(f'{filename}:{line_no}: unknown receiver {r[1]}')
