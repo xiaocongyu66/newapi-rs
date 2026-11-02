@@ -1,0 +1,68 @@
+// CI-only supplemental contract fixture, copied into a disposable upstream tree.
+package handler
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/QuantumNous/new-api/internal/common"
+	"github.com/QuantumNous/new-api/internal/security"
+	"github.com/QuantumNous/new-api/internal/transport/contract"
+	"github.com/QuantumNous/new-api/internal/transport/fiberadapter"
+	"github.com/stretchr/testify/require"
+)
+
+func TestP0PublicConfig(t *testing.T) {
+	common.OptionMapRWMutex.Lock()
+	original := common.OptionMap
+	common.OptionMap = map[string]string{}
+	common.OptionMapRWMutex.Unlock()
+	legal := security.GetLegalSettings()
+	originalAgreement, originalPrivacy := legal.UserAgreement, legal.PrivacyPolicy
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = original
+		common.OptionMapRWMutex.Unlock()
+		legal.UserAgreement, legal.PrivacyPolicy = originalAgreement, originalPrivacy
+	})
+
+	cases := []struct {
+		key string
+		path string
+		handle func(contract.Context)
+	}{
+		{"Notice", "/api/notice", GetNotice},
+		{"About", "/api/about", GetAbout},
+		{"HomePageContent", "/api/home_page_content", GetHomePageContent},
+		{"UserAgreement", "/api/user-agreement", GetUserAgreement},
+		{"PrivacyPolicy", "/api/privacy-policy", GetPrivacyPolicy},
+	}
+	for _, state := range []string{"missing", "empty", "configured"} {
+		t.Run(state, func(t *testing.T) {
+			want := ""
+			if state == "configured" {
+				want = "<p>P0 公共配置</p>\n\"quoted\""
+			}
+			common.OptionMapRWMutex.Lock()
+			common.OptionMap = map[string]string{}
+			if state != "missing" {
+				for _, key := range []string{"Notice", "About", "HomePageContent"} {
+					common.OptionMap[key] = want
+				}
+			}
+			common.OptionMapRWMutex.Unlock()
+			legal.UserAgreement, legal.PrivacyPolicy = want, want
+			for _, tc := range cases {
+				t.Run(tc.key, func(t *testing.T) {
+					ctx, response := fiberadapter.NewSyntheticContext(httptest.NewRequest(http.MethodGet, tc.path, nil))
+					tc.handle(ctx)
+					require.Equal(t, http.StatusOK, response.Code)
+					var payload map[string]any
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+					require.Equal(t, map[string]any{"success": true, "message": "", "data": want}, payload)
+				})
+			}
+		})
+	}
+}

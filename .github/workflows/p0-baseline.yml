@@ -1,0 +1,117 @@
+name: P0 baseline
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-baseline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-baseline:
+    name: Go baseline (${{ matrix.module }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [api, relaykit]
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      SINGBOX_TAGS: with_gvisor,with_wireguard,with_utls
+      UPSTREAM_SHA: 17970da4571e81308f176a0e61a38276e5771606
+      BASELINE_MODULE: ${{ matrix.module }}
+    steps:
+      - name: Initialize evidence before setup
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/p0-evidence"
+          python3 - <<'PY'
+          import json, os, platform
+          from pathlib import Path
+          keys = ['GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REF', 'UPSTREAM_SHA', 'BASELINE_MODULE', 'ImageOS', 'ImageVersion']
+          data = {key: os.getenv(key) for key in keys}
+          data.update(environment=platform.platform(), tests_status='not-run; inspect results.json and Actions step outcomes')
+          Path(os.environ['RUNNER_TEMP'], 'p0-evidence', 'environment.json').write_text(json.dumps(data, indent=2))
+          PY
+      - name: Checkout migration CI
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          path: migration
+      - name: Checkout immutable upstream reference
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: xiaocongyu66/new-api
+          ref: 17970da4571e81308f176a0e61a38276e5771606
+          persist-credentials: false
+          path: upstream-reference
+      - name: Verify reference and create disposable test copy
+        shell: bash
+        run: |
+          test "$(git -C upstream-reference rev-parse HEAD)" = "$UPSTREAM_SHA"
+          cp -a upstream-reference "$RUNNER_TEMP/p0-source"
+          # Only the disposable copy receives the upstream CI embed placeholder.
+          mkdir -p "$RUNNER_TEMP/p0-source/apps/api/web/dist"
+          touch "$RUNNER_TEMP/p0-source/apps/api/web/dist/index.html"
+          cp migration/scripts/ci/public_config_test.go.txt "$RUNNER_TEMP/p0-source/apps/api/internal/transport/handler/p0_public_config_test.go"
+      - name: Set up exact upstream Go version and dependency cache
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: upstream-reference/apps/api/go.mod
+          cache: true
+          cache-dependency-path: |
+            upstream-reference/apps/api/go.sum
+            upstream-reference/apps/api/modules/relaykit/go.sum
+      - name: Run baseline and record exit codes and test counts
+        shell: bash
+        run: python3 migration/scripts/ci/run-go-baseline.py
+      - name: Preserve evidence even on setup or test failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p0-go-${{ matrix.module }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p0-evidence/
+          retention-days: 7
+          if-no-files-found: error
+
+  rust-toolchain:
+    name: P0 Rust toolchain presence (not implementation acceptance)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record hosted runner Rust tools without building
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/p0-rust"
+          python3 - <<'PY'
+          import json, os, platform, subprocess
+          from pathlib import Path
+          results = []
+          for command in [['rustc', '--version', '--verbose'], ['cargo', '--version']]:
+              try:
+                  result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                  entry = dict(command=command, exit_code=result.returncode, output=result.stdout)
+              except OSError as error:
+                  entry = dict(command=command, exit_code=127, output=str(error))
+              print(entry['output'])
+              results.append(entry)
+          data = dict(commit=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], environment=platform.platform(), results=results)
+          Path(os.environ['RUNNER_TEMP'], 'p0-rust', 'toolchain.json').write_text(json.dumps(data, indent=2))
+          raise SystemExit(int(any(item['exit_code'] for item in results)))
+          PY
+      - name: Preserve toolchain evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p0-rust-toolchain-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p0-rust/
+          retention-days: 7
+          if-no-files-found: error
