@@ -1,6 +1,15 @@
 # P0 远程 CI 基线
 
-状态：配置已编写，未执行；P0 不得据此标记已验收。所有构建、测试、脚本执行仅允许在 GitHub-hosted Actions；本次没有本地构建、测试、启动服务或容器验证，也没有提交、推送或触发远程运行。
+状态：2026-11-02 首轮远程 CI 基础交付经独立验证通过；P0 全阶段仍未验收。所有构建、测试、脚本执行仅允许在 GitHub-hosted Actions，未进行本地构建测试。
+
+## 首轮验证记录
+
+- 新仓库 commit：`6e599ec59837d645b4740ebe363790beda6b40f1`。
+- 运行：https://github.com/xiaocongyu66/newapi-rs/actions/runs/41425478831 ，attempt 1，结论 success；独立 verification 对本次 CI 基础交付判定 PASS。
+- public-config：19 test pass，0 test skip；focused：295 pass，2 skip；full-api：2745 pass，7 skip；relaykit：280 pass，0 skip。四套命令退出码均为 0。计数包含子测试及跨套件重复，不能作为独立契约数量。
+- MySQL/PostgreSQL 及支付签名存在原生 skip；没有 Rust 实现、三库兼容或完整 P0 验收结论。
+- 主执行者通过 `gh api` 核对 SHA、attempt、success 和公开仓库状态，并触发同一提交的 attempt 2 远程复跑。2026-11-02 已确认 attempt 2 completed/success；API、relaykit 的基线执行步骤以及 Rust 工具查询步骤均为 success。复跑不改变原生跳过项及验收范围。
+- 下文描述配置设计及初始交付限制；涉及“尚未执行”的历史表述以本节精确运行记录为准。
 
 ## 源码与执行边界
 
@@ -62,8 +71,8 @@ Rust 任务仅记录 runner 自带 `rustc --version --verbose` 与 `cargo --vers
 
 ## 未覆盖与受阻项
 
-- 尚无远程 run ID、退出码或测试数量，脚本及 fixture 尚未经执行验证；只有静态审阅，不能宣称 PASS。
-- 三库真实服务没有启动。上游 identity/handler 的 `TEST_MYSQL_DSN`、`TEST_POSTGRES_DSN` 测试会原生 skip；SQLite/模拟依赖通过也不能代替 MySQL/PostgreSQL 验收。阶段三库矩阵仍须独立实现。
+- 首轮远程运行记录见上文；其通过仅覆盖当前 CI 基线，不代表 P0 全部交付通过。
+- 本 Go 基线未启动独立数据库服务。上游 `TEST_MYSQL_DSN`、`TEST_POSTGRES_DSN` 测试存在原生 skip，保留为历史事实。用户现已取消 MySQL 支持，不要求补齐其验收；目标 SQLite/PostgreSQL 实连矩阵在 P1 独立实现，不能由模拟依赖通过替代。
 - 上游 Waffo Pancake 有明确的 SDK 签名测试 skip；真实支付/通知/供应商调用未获授权，不补生产凭证。
 - race 专项、dev build tag、前端构建/E2E、性能/压力与部署未列入本 P0 基线，不能以本工作流替代后续阶段。
 - 补充公共配置 fixture 不覆盖数据库不可用、配置加载失败、错误方法及完整前端差分，这些仍归 P1 契约验收。

@@ -1,0 +1,54 @@
+name: P0 inventory consistency
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-inventory-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-inventory:
+    name: Static inventory (partial is not acceptance)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Initialize evidence before checkout
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/p0-inventory"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = {k: os.getenv(k) for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'ImageOS', 'ImageVersion')}
+          data.update(status='NOT_RUN', upstream_sha='17970da4571e81308f176a0e61a38276e5771606')
+          Path(os.environ['RUNNER_TEMP'], 'p0-inventory', 'environment.json').write_text(json.dumps(data, indent=2))
+          PY
+      - name: Checkout migration inventory
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4; reused verified baseline pin
+        with:
+          persist-credentials: false
+          path: migration
+      - name: Checkout immutable upstream (read only)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: xiaocongyu66/new-api
+          ref: 17970da4571e81308f176a0e61a38276e5771606
+          persist-credentials: false
+          path: upstream-reference
+      - name: Compare explicit registrations, snapshots and inventory
+        shell: bash
+        run: python3 migration/scripts/ci/check-inventory.py
+      - name: Preserve reports even when incomplete or failed
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4; reused verified baseline pin
+        with:
+          name: p0-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p0-inventory/
+          retention-days: 7
+          if-no-files-found: error
