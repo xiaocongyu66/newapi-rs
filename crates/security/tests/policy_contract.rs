@@ -180,7 +180,6 @@ fn origin_normalization_and_hostile_inputs() {
         "https://example.test",
         "https://EXAMPLE.test:443",
         " https://example.test/ ",
-        "https://example.test/%2f",
         "https://example.test?",
         "https://example.test#",
         "https://example.test:",
@@ -199,6 +198,8 @@ fn origin_normalization_and_hostile_inputs() {
         "https://example.test,https://example.test",
         "https://example.test https://evil.test",
         "https://example.test/path",
+        // 原始路径已有斜线，转义斜线解码后为双斜线，不是根路径。
+        "https://example.test/%2f",
         "https://example.test/a/..",
         "https://example.test/%2e",
         "https://example.test/%2E%2e/",
