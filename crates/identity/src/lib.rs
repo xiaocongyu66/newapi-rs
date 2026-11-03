@@ -9,6 +9,7 @@ pub mod session_cache;
 pub mod sessions;
 pub mod setup;
 pub mod tokens;
+pub mod user_auth;
 pub mod users;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
