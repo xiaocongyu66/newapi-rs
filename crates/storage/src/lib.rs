@@ -25,6 +25,9 @@ impl Database {
         if dsn.starts_with("sqlite:") {
             let options = SqliteConnectOptions::from_str(dsn)?
                 .create_if_missing(false)
+                // 对齐原 Go 默认 `_busy_timeout=30000`：写锁竞争应等待，
+                // 而不是立即把并发会话写成 Storage 失败。
+                .busy_timeout(Duration::from_secs(30))
                 .disable_statement_logging();
             let pool = SqlitePoolOptions::new()
                 .max_connections(5)

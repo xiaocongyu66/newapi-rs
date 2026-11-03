@@ -942,7 +942,7 @@ async fn sqlite_contract(legacy_char: bool) {
     let options = SqliteConnectOptions::new()
         .filename(&path)
         .create_if_missing(true)
-        .busy_timeout(std::time::Duration::from_secs(10))
+        .busy_timeout(std::time::Duration::from_secs(30))
         .disable_statement_logging();
     let first = SqlitePoolOptions::new()
         .max_connections(3)
