@@ -1,6 +1,7 @@
 //! 身份纯算法边界；验签成功后仍须查询会话和当前用户状态。
 #![forbid(unsafe_code)]
 
+pub mod auth_session;
 pub mod crypto;
 pub mod session_cache;
 pub mod sessions;
