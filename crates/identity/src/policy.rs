@@ -162,7 +162,9 @@ impl CasbinRuleRepository {
                 .await?
             }
         };
-        Ok(effect_from_rows(rows.iter().map(|(value,)| value.as_deref())))
+        Ok(effect_from_rows(
+            rows.iter().map(|(value,)| value.as_deref()),
+        ))
     }
 }
 
@@ -217,18 +219,21 @@ pub async fn self_user_permissions(
     use crate::self_user::{Permissions, SidebarModulePermission};
 
     let mut modules = std::collections::BTreeMap::new();
-    let sidebar_settings = match role_from_system_role(system_role) {
-        Some(Role::Root) => false,
-        Some(Role::Admin) => {
+    let sidebar_settings = match system_role {
+        ROLE_ROOT_VALUE => false,
+        ROLE_ADMIN_VALUE => {
             let mut setting = std::collections::BTreeMap::new();
             setting.insert(
                 "setting".to_owned(),
                 can(repository, user_id, system_role, SYSTEM_SETTINGS).await?,
             );
-            modules.insert("admin".to_owned(), SidebarModulePermission::Actions(setting));
+            modules.insert(
+                "admin".to_owned(),
+                SidebarModulePermission::Actions(setting),
+            );
             true
         }
-        None => {
+        _ => {
             modules.insert("admin".to_owned(), SidebarModulePermission::Enabled(false));
             true
         }

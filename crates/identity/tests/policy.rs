@@ -1,8 +1,8 @@
 //! 策略只读求值契约；SQLite 与隔离 schema 的 PostgreSQL 均真实执行。
 use newapi_identity::policy::{
     ADMIN_ROLE, CATALOG, CasbinRuleRepository, Permission, ROOT_ROLE, Role, RuleEffect, can,
-    capabilities, is_known_permission, role_from_system_role, role_subject,
-    self_user_permissions, user_subject,
+    capabilities, is_known_permission, role_from_system_role, role_subject, self_user_permissions,
+    user_subject,
 };
 use newapi_identity::self_user::SidebarModulePermission;
 use newapi_storage::Database;
@@ -32,7 +32,10 @@ fn checked<T>(result: Result<T, sqlx::Error>, action: &'static str) -> T {
 async fn execute(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         checked(
-            sqlx::QueryBuilder::new(statement).build().execute(pool).await,
+            sqlx::QueryBuilder::new(statement)
+                .build()
+                .execute(pool)
+                .await,
             "execute fixed SQL",
         );
     });
@@ -40,9 +43,8 @@ async fn execute(db: &Database, statement: &'static str) {
 
 async fn allow(db: &Database, subject: &str, resource: &str, action: &str) {
     backend!(db, pool, {
-        let mut query = sqlx::QueryBuilder::new(
-            "INSERT INTO casbin_rule (ptype,v0,v1,v2,v3) VALUES ('p',",
-        );
+        let mut query =
+            sqlx::QueryBuilder::new("INSERT INTO casbin_rule (ptype,v0,v1,v2,v3) VALUES ('p',");
         query
             .push_bind(subject)
             .push(",")
@@ -56,9 +58,8 @@ async fn allow(db: &Database, subject: &str, resource: &str, action: &str) {
 
 async fn deny(db: &Database, subject: &str, resource: &str, action: &str) {
     backend!(db, pool, {
-        let mut query = sqlx::QueryBuilder::new(
-            "INSERT INTO casbin_rule (ptype,v0,v1,v2,v3) VALUES ('p',",
-        );
+        let mut query =
+            sqlx::QueryBuilder::new("INSERT INTO casbin_rule (ptype,v0,v1,v2,v3) VALUES ('p',");
         query
             .push_bind(subject)
             .push(",")
@@ -107,7 +108,10 @@ async fn scenarios(db: &Database) {
 
     // 角色映射边界与 Go resolveSubjectRoles 一致。
     assert_eq!(role_from_system_role(100).map(|r| r.key()), Some(ROOT_ROLE));
-    assert_eq!(role_from_system_role(1000).map(|r| r.key()), Some(ROOT_ROLE));
+    assert_eq!(
+        role_from_system_role(1000).map(|r| r.key()),
+        Some(ROOT_ROLE)
+    );
     assert_eq!(role_from_system_role(10).map(|r| r.key()), Some(ADMIN_ROLE));
     assert_eq!(role_from_system_role(99).map(|r| r.key()), Some(ADMIN_ROLE));
     assert!(role_from_system_role(9).is_none());
@@ -144,7 +148,10 @@ async fn scenarios(db: &Database) {
     ));
 
     // 无任何规则时管理员拒绝。
-    assert!(!checked(can(&repo, 7, 10, SYSTEM).await, "admin without rules"));
+    assert!(!checked(
+        can(&repo, 7, 10, SYSTEM).await,
+        "admin without rules"
+    ));
 
     // 角色基线来自 casbin_rule，而不是静态 default_roles。
     allow(db, &role_subject(Role::Admin), "system", "settings").await;
@@ -157,7 +164,10 @@ async fn scenarios(db: &Database) {
     assert!(!checked(can(&repo, 7, 10, SYSTEM).await, "user deny wins"));
 
     // 另一个用户不受影响。
-    assert!(checked(can(&repo, 8, 10, SYSTEM).await, "other admin role allow"));
+    assert!(checked(
+        can(&repo, 8, 10, SYSTEM).await,
+        "other admin role allow"
+    ));
 
     // 未知权限即使存在用户规则也不放行（非超级用户）。
     allow(db, &user_subject(9), "system", "unknown").await;
@@ -177,7 +187,10 @@ async fn scenarios(db: &Database) {
 
     // 普通系统角色在读取任何规则前即拒绝，包括显式用户授权。
     allow(db, &user_subject(11), "system", "settings").await;
-    assert!(!checked(can(&repo, 11, 1, SYSTEM).await, "plain user denied"));
+    assert!(!checked(
+        can(&repo, 11, 1, SYSTEM).await,
+        "plain user denied"
+    ));
 
     // 空效果与 NULL 按旧格式视为 allow；未知效果忽略。
     assert_eq!(
@@ -193,7 +206,10 @@ async fn scenarios(db: &Database) {
     )
     .await;
     assert_eq!(
-        checked(repo.subject_effect(&user_subject(20), SYSTEM).await, "empty effect"),
+        checked(
+            repo.subject_effect(&user_subject(20), SYSTEM).await,
+            "empty effect"
+        ),
         Some(RuleEffect::Allow)
     );
     execute(
@@ -202,7 +218,10 @@ async fn scenarios(db: &Database) {
     )
     .await;
     assert_eq!(
-        checked(repo.subject_effect(&user_subject(21), SYSTEM).await, "null effect"),
+        checked(
+            repo.subject_effect(&user_subject(21), SYSTEM).await,
+            "null effect"
+        ),
         Some(RuleEffect::Allow)
     );
     execute(
@@ -211,7 +230,10 @@ async fn scenarios(db: &Database) {
     )
     .await;
     assert_eq!(
-        checked(repo.subject_effect(&user_subject(22), SYSTEM).await, "unknown effect"),
+        checked(
+            repo.subject_effect(&user_subject(22), SYSTEM).await,
+            "unknown effect"
+        ),
         None
     );
 
@@ -228,12 +250,18 @@ async fn scenarios(db: &Database) {
     assert!(root_matrix["system"]["settings"]);
 
     // SelfUser 权限载荷与 Go calculateUserPermissions 形状一致。
-    let root = checked(self_user_permissions(&repo, 8, 100).await, "root permissions");
+    let root = checked(
+        self_user_permissions(&repo, 8, 100).await,
+        "root permissions",
+    );
     assert!(!root.sidebar_settings);
     assert!(root.sidebar_modules.is_empty());
     assert!(root.admin_permissions["system"]["settings"]);
 
-    let admin = checked(self_user_permissions(&repo, 8, 10).await, "admin permissions");
+    let admin = checked(
+        self_user_permissions(&repo, 8, 10).await,
+        "admin permissions",
+    );
     assert!(admin.sidebar_settings);
     assert_eq!(
         admin.sidebar_modules["admin"],
@@ -249,6 +277,18 @@ async fn scenarios(db: &Database) {
     );
     assert!(!user.admin_permissions["system"]["settings"]);
     assert!(!user.admin_permissions["channel"]["read"]);
+
+    for role in [11, 99, 101] {
+        let permissions = checked(
+            self_user_permissions(&repo, 8, role).await,
+            "nonstandard role sidebar",
+        );
+        assert!(permissions.sidebar_settings);
+        assert_eq!(
+            permissions.sidebar_modules["admin"],
+            SidebarModulePermission::Enabled(false)
+        );
+    }
 }
 
 #[tokio::test]
