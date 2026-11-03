@@ -122,7 +122,11 @@ async fn scenarios(db: &Database) {
         execute(db, "DELETE FROM users").await;
     }
     execute(db, "DROP TABLE users").await;
-    assert!(repo.by_token(raw).await.is_err(), "storage failure is not absence");
+    let missing_table = repo
+        .by_token(raw)
+        .await
+        .expect_err("missing table must remain a storage error");
+    assert_eq!(UserAuthError::from(missing_table), UserAuthError::Storage);
 }
 
 #[test]
@@ -199,10 +203,11 @@ async fn sqlite_user_auth_contract() {
     let db = Database::Sqlite(pool);
     scenarios(&db).await;
     db.close().await;
-    assert!(matches!(
-        PersonalAccessTokenRepository::new(db).by_token("closed").await,
-        Err(sqlx::Error::PoolClosed)
-    ));
+    let closed_pool = PersonalAccessTokenRepository::new(db)
+        .by_token("closed")
+        .await
+        .expect_err("closed pool must remain a storage error");
+    assert_eq!(UserAuthError::from(closed_pool), UserAuthError::Storage);
     std::fs::remove_file(path).expect("remove isolated SQLite fixture");
 }
 
@@ -249,10 +254,11 @@ async fn postgres_user_auth_contract() {
     let db = Database::Postgres(pool);
     scenarios(&db).await;
     db.close().await;
-    assert!(matches!(
-        PersonalAccessTokenRepository::new(db).by_token("closed").await,
-        Err(sqlx::Error::PoolClosed)
-    ));
+    let closed_pool = PersonalAccessTokenRepository::new(db)
+        .by_token("closed")
+        .await
+        .expect_err("closed pool must remain a storage error");
+    assert_eq!(UserAuthError::from(closed_pool), UserAuthError::Storage);
     checked(
         sqlx::query(&format!("DROP SCHEMA \"{schema}\" CASCADE")).execute(&admin).await,
         "drop isolated schema",

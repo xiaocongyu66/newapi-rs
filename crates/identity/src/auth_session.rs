@@ -36,11 +36,16 @@ pub struct RefreshResult {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionAuthError {
+    /// The credential was structurally valid or previously issued, but is no longer
+    /// authorized for authentication. This deliberately carries no session details.
+    Unauthorized,
     RefreshInvalid,
     SessionMismatch,
     SessionRevoked,
-    /// 缺失会话标识；HTTP 层映射为 400 AUTH_SESSION_ID_REQUIRED。
+    /// A session identifier is required to complete this operation.
     SessionIdRequired,
+    /// The deny fence failed; this is distinct from durable storage failure.
+    Fence,
     BatchFailed {
         committed_count: u64,
         error: SessionError,
@@ -53,9 +58,18 @@ pub enum SessionAuthError {
 impl From<SessionError> for SessionAuthError {
     fn from(error: SessionError) -> Self {
         match error {
-            SessionError::Invalid => Self::RefreshInvalid,
-            SessionError::NotFound | SessionError::Inactive => Self::SessionRevoked,
-            other => Self::Storage(other),
+            // These are authentication outcomes, not persistence failures. Keep the
+            // public result fixed and non-sensitive so callers cannot infer records.
+            SessionError::Invalid
+            | SessionError::NotFound
+            | SessionError::Inactive
+            | SessionError::UserSecurityChanged => Self::Unauthorized,
+            SessionError::Fence => Self::Fence,
+            SessionError::ActiveLimit
+            | SessionError::IssuanceLimit
+            | SessionError::MetadataEncodingUnsupported
+            | SessionError::DatabaseBusy
+            | SessionError::Storage => Self::Storage(error),
         }
     }
 }
@@ -162,7 +176,7 @@ impl<F: RevocationFence> SessionAuth<F> {
         // 先从权威行取用户；rotate 仍会再次重读并核对用户版本。
         let user_id = match self.repository.authoritative(credential.sid()).await? {
             Some(record) => record.metadata.user_id,
-            None => return Err(SessionAuthError::SessionRevoked),
+            None => return Err(SessionAuthError::Unauthorized),
         };
         match self
             .repository
@@ -186,7 +200,7 @@ impl<F: RevocationFence> SessionAuth<F> {
             Ok(RefreshOutcome::Reused(report))
             | Ok(RefreshOutcome::UserSecurityChanged(report)) => {
                 self.observe_revoke(&report);
-                Err(SessionAuthError::SessionRevoked)
+                Err(SessionAuthError::Unauthorized)
             }
             Err(error) => Err(error.into()),
         }
@@ -251,7 +265,7 @@ impl<F: RevocationFence> SessionAuth<F> {
     ) -> Result<AuthIdentity, SessionAuthError> {
         self.keys
             .parse_access(raw_access, now)
-            .map_err(|_| SessionAuthError::SessionRevoked)
+            .map_err(|_| SessionAuthError::Unauthorized)
     }
 
     /// 按已验签访问令牌绑定的用户与 SID 注销，不依赖会话仍活跃。

@@ -119,7 +119,7 @@ async fn bearer_revoke_and_refresh_reuse_preserve_terminal_failures() {
         auth.refresh(reused.raw().expose_secret(), None, NOW + 32)
             .await
             .err(),
-        Some(SessionAuthError::SessionRevoked),
+        Some(SessionAuthError::Unauthorized),
     );
     assert_eq!(auth.terminal_fence_failures(), 2);
     for sid in [bearer_session.sid(), reused.sid()] {
@@ -179,7 +179,7 @@ async fn session_management_scopes_revocation_to_the_authenticated_user() {
     );
     assert_eq!(
         auth.validate(&identity, NOW + 3).await.err(),
-        Some(SessionAuthError::SessionRevoked),
+        Some(SessionAuthError::Unauthorized),
     );
     db.close().await;
 }
@@ -276,7 +276,7 @@ async fn current_refresh_after_auth_version_change_preserves_terminal_failure() 
         auth.refresh(issued.refresh_token.expose_secret(), None, NOW + 2)
             .await
             .err(),
-        Some(SessionAuthError::SessionRevoked),
+        Some(SessionAuthError::Unauthorized),
     );
     assert_eq!(auth.terminal_fence_failures(), 1);
     let after = repository
@@ -322,7 +322,7 @@ async fn public_revoke_commits_despite_terminal_failure_and_keeps_count() {
         auth.identify(issued.access_token.expose_secret(), NOW + 3)
             .await
             .err(),
-        Some(SessionAuthError::SessionRevoked),
+        Some(SessionAuthError::Unauthorized),
     );
     auth.revoke_session(&issued.access_identity, NOW + 4)
         .await
@@ -371,9 +371,7 @@ async fn pending_fence_failure_leaves_sql_and_old_access_active() {
         auth.revoke_session(&issued.access_identity, NOW + 3)
             .await
             .err(),
-        Some(SessionAuthError::Storage(
-            newapi_identity::sessions::SessionError::Fence,
-        )),
+        Some(SessionAuthError::Fence),
     );
     assert_eq!(auth.terminal_fence_failures(), 0);
     let after = repository
@@ -395,6 +393,57 @@ async fn pending_fence_failure_leaves_sql_and_old_access_active() {
         issued.access_identity,
     );
     assert_eq!(auth.terminal_fence_failures(), 0);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn identify_rejects_disabled_and_soft_deleted_users_without_storage_classification() {
+    for column in ["status", "deleted_at"] {
+        let (db, auth) = fixture().await;
+        let first = credential();
+        seed(&db, &first).await;
+        let issued = auth
+            .refresh(first.raw().expose_secret(), None, NOW + 1)
+            .await
+            .expect("签发有效 access");
+        let Database::Sqlite(pool) = &db else {
+            panic!("fixture 必须使用 SQLite");
+        };
+        let query = match column {
+            "status" => "UPDATE users SET status=0 WHERE id=1",
+            "deleted_at" => "UPDATE users SET deleted_at=1 WHERE id=1",
+            _ => unreachable!(),
+        };
+        sqlx::query(query).execute(pool).await.expect("更新用户状态");
+        assert_eq!(
+            auth.identify(issued.access_token.expose_secret(), NOW + 2)
+                .await
+                .err(),
+            Some(SessionAuthError::Unauthorized),
+        );
+        db.close().await;
+    }
+}
+
+#[tokio::test]
+async fn identify_rejects_expired_or_malformed_access_as_unauthorized() {
+    let (db, auth) = fixture().await;
+    let first = credential();
+    seed(&db, &first).await;
+    let issued = auth
+        .refresh(first.raw().expose_secret(), None, NOW + 1)
+        .await
+        .expect("签发有效 access");
+    assert_eq!(
+        auth.identify(issued.access_token.expose_secret(), NOW + 901)
+            .await
+            .err(),
+        Some(SessionAuthError::Unauthorized),
+    );
+    assert_eq!(
+        auth.parse_access("not-a-jwt", NOW + 1).err(),
+        Some(SessionAuthError::Unauthorized),
+    );
     db.close().await;
 }
 
@@ -485,7 +534,7 @@ async fn replay_after_grace_revokes_family() {
         auth.refresh(first.raw().expose_secret(), None, NOW + 100)
             .await
             .err(),
-        Some(SessionAuthError::SessionRevoked)
+        Some(SessionAuthError::Unauthorized)
     );
     assert!(matches!(
         auth.validate(
@@ -498,7 +547,7 @@ async fn replay_after_grace_revokes_family() {
             NOW + 101
         )
         .await,
-        Err(SessionAuthError::SessionRevoked)
+        Err(SessionAuthError::Unauthorized)
     ));
     db.close().await;
 }
@@ -523,7 +572,7 @@ async fn logout_is_idempotent_and_hides_existence() {
         auth.refresh(first.raw().expose_secret(), None, NOW + 5)
             .await
             .err(),
-        Some(SessionAuthError::SessionRevoked)
+        Some(SessionAuthError::Unauthorized)
     );
     db.close().await;
 }
