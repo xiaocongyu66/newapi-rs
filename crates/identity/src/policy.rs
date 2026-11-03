@@ -2,6 +2,7 @@
 //! 规则来自 `casbin_rule`，不包含策略写入、角色启用开关或 HTTP 接线。
 //! 判定顺序与 Go `policy.Can` 一致：空角色拒绝、超级用户放行、未知权限拒绝、
 //! 用户覆盖优先、再看角色基线；显式 deny 覆盖同主体 allow。
+//! 仅支持可直接解释的 p 行；不实现通用 CSV/Casbin，其他编码返回固定错误。
 
 use std::collections::BTreeMap;
 
@@ -134,45 +135,120 @@ impl CasbinRuleRepository {
         Self { db }
     }
 
-    /// 固定查询并绑定全部参数；空或 NULL 效果列按 Go 旧格式视为 allow。
+    /// 加载完整快照后求值，不能只过滤匹配行而遗漏使 Go 加载失败的规则。
     pub async fn subject_effect(
         &self,
         subject: &str,
         permission: Permission,
     ) -> Result<Option<RuleEffect>, sqlx::Error> {
-        let rows: Vec<(Option<String>,)> = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(
-                    "SELECT v3 FROM casbin_rule WHERE ptype='p' AND v0=$1 AND v1=$2 AND v2=$3",
-                )
-                .bind(subject)
-                .bind(permission.resource)
-                .bind(permission.action)
-                .fetch_all(pool)
-                .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(
-                    "SELECT v3 FROM casbin_rule WHERE ptype='p' AND v0=$1 AND v1=$2 AND v2=$3",
-                )
-                .bind(subject)
-                .bind(permission.resource)
-                .bind(permission.action)
-                .fetch_all(pool)
-                .await?
-            }
+        Ok(self.load_snapshot().await?.subject_effect(subject, permission))
+    }
+
+    async fn load_snapshot(&self) -> Result<PolicySnapshot, sqlx::Error> {
+        const QUERY: &str = "SELECT ptype,v0,v1,v2,v3,v4,v5 FROM casbin_rule ORDER BY id ASC";
+        let rows: Vec<StoredRule> = match &self.db {
+            Database::Sqlite(pool) => sqlx::query_as(QUERY).fetch_all(pool).await?,
+            Database::Postgres(pool) => sqlx::query_as(QUERY).fetch_all(pool).await?,
         };
-        Ok(effect_from_rows(
-            rows.iter().map(|(value,)| value.as_deref()),
-        ))
+        let mut rules = Vec::new();
+        for (ptype, v0, v1, v2, v3, v4, v5) in rows {
+            let ptype = ptype.unwrap_or_default();
+            // Go LoadPolicyLine ignores a line beginning with '#', before CSV parsing.
+            if ptype.starts_with('#') {
+                continue;
+            }
+            // The current Go model declares only p, not g/p2/etc. Unknown types
+            // fail model loading; they must never become a partial usable snapshot.
+            if ptype != "p"
+                || [v4, v5]
+                    .iter()
+                    .any(|v| !v.as_deref().unwrap_or("").is_empty())
+            {
+                return Err(unsupported_rule());
+            }
+            let fields = [v0, v1, v2, v3].map(Option::unwrap_or_default);
+            if fields[..3].iter().any(String::is_empty)
+                || fields.iter().any(|value| {
+                    value.chars().any(|c| matches!(c, ',' | '"' | '\r' | '\n'))
+                })
+            {
+                return Err(unsupported_rule());
+            }
+            // ruleToLine drops empty fields, but supplies allow for an empty
+            // trailing effect. NULL scanned by Go into string is the same case.
+            // For the supported unquoted fields CSV TrimLeadingSpace trims only
+            // the start, not the end; whitespace-only effects become empty/allow.
+            let [subject, resource, action, effect] = fields.map(|v| v.trim_start().to_owned());
+            rules.push(PolicyRule {
+                subject,
+                resource,
+                action,
+                effect,
+            });
+        }
+        Ok(PolicySnapshot { rules })
+    }
+}
+
+type StoredRule = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn unsupported_rule() -> sqlx::Error {
+    // Never include persisted subjects, resources, effects or parser input.
+    sqlx::Error::Protocol("unsupported authorization policy encoding".to_owned())
+}
+
+struct PolicyRule {
+    subject: String,
+    resource: String,
+    action: String,
+    effect: String,
+}
+
+struct PolicySnapshot {
+    rules: Vec<PolicyRule>,
+}
+
+impl PolicySnapshot {
+    fn subject_effect(&self, subject: &str, permission: Permission) -> Option<RuleEffect> {
+        effect_from_rows(
+            self.rules
+                .iter()
+                .filter(|rule| {
+                    rule.subject == subject
+                        && rule.resource == permission.resource
+                        && rule.action == permission.action
+                })
+                .map(|rule| rule.effect.as_str()),
+        )
+    }
+
+    fn can(&self, user_id: i64, role: Role, permission: Permission) -> bool {
+        if role.is_superuser() {
+            return true;
+        }
+        if !is_known_permission(permission) {
+            return false;
+        }
+        if let Some(effect) = self.subject_effect(&user_subject(user_id), permission) {
+            return effect == RuleEffect::Allow;
+        }
+        self.subject_effect(&role_subject(role), permission) == Some(RuleEffect::Allow)
     }
 }
 
 /// 任一显式 deny 即拒绝；否则存在 allow 时放行；没有规则返回 None。
-fn effect_from_rows<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Option<RuleEffect> {
+fn effect_from_rows<'a>(values: impl Iterator<Item = &'a str>) -> Option<RuleEffect> {
     let mut allow = false;
     for value in values {
-        match value.unwrap_or("") {
+        match value {
             "deny" => return Some(RuleEffect::Deny),
             "allow" | "" => allow = true,
             // 未知效果值与 Go 一致：忽略，不当作放行。
@@ -197,20 +273,11 @@ pub async fn can(
     if !is_known_permission(permission) {
         return Ok(false);
     }
-    if let Some(effect) = repository
-        .subject_effect(&user_subject(user_id), permission)
-        .await?
-    {
-        return Ok(effect == RuleEffect::Allow);
-    }
-    Ok(repository
-        .subject_effect(&role_subject(role), permission)
-        .await?
-        == Some(RuleEffect::Allow))
+    Ok(repository.load_snapshot().await?.can(user_id, role, permission))
 }
 
-/// Go `calculateUserPermissions` + `Capabilities` 的等价输出。
-/// 仅角色与策略决定内容，不读取用户设置或额度。
+/// 在支持的规则编码范围内保持 Go 权限输出；不支持的编码返回错误。
+/// 仅角色与策略决定内容，不读取用户设置或额度；侧栏复用同一策略快照。
 pub async fn self_user_permissions(
     repository: &CasbinRuleRepository,
     user_id: i64,
@@ -218,6 +285,7 @@ pub async fn self_user_permissions(
 ) -> Result<crate::self_user::Permissions, sqlx::Error> {
     use crate::self_user::{Permissions, SidebarModulePermission};
 
+    let admin_permissions = capabilities(repository, user_id, system_role).await?;
     let mut modules = std::collections::BTreeMap::new();
     let sidebar_settings = match system_role {
         ROLE_ROOT_VALUE => false,
@@ -225,7 +293,7 @@ pub async fn self_user_permissions(
             let mut setting = std::collections::BTreeMap::new();
             setting.insert(
                 "setting".to_owned(),
-                can(repository, user_id, system_role, SYSTEM_SETTINGS).await?,
+                admin_permissions["system"]["settings"],
             );
             modules.insert(
                 "admin".to_owned(),
@@ -241,7 +309,7 @@ pub async fn self_user_permissions(
     Ok(Permissions {
         sidebar_settings,
         sidebar_modules: modules,
-        admin_permissions: capabilities(repository, user_id, system_role).await?,
+        admin_permissions,
     })
 }
 
@@ -251,20 +319,27 @@ pub async fn capabilities(
     user_id: i64,
     system_role: i32,
 ) -> Result<BTreeMap<String, BTreeMap<String, bool>>, sqlx::Error> {
+    let role = role_from_system_role(system_role);
+    let snapshot = if role.is_some_and(|role| !role.is_superuser()) {
+        Some(repository.load_snapshot().await?)
+    } else {
+        None
+    };
     let mut result = BTreeMap::new();
     for resource in CATALOG {
         let mut actions = BTreeMap::new();
         for action in resource.actions {
-            let allowed = can(
-                repository,
-                user_id,
-                system_role,
-                Permission {
-                    resource: resource.resource,
-                    action: action.action,
-                },
-            )
-            .await?;
+            let permission = Permission {
+                resource: resource.resource,
+                action: action.action,
+            };
+            let allowed = match role {
+                Some(Role::Root) => true,
+                Some(role) => snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.can(user_id, role, permission)),
+                None => false,
+            };
             actions.insert(action.action.to_owned(), allowed);
         }
         result.insert(resource.resource.to_owned(), actions);
