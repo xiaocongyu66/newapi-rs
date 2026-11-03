@@ -886,16 +886,34 @@ async fn metadata_repository_decoding(db: &Database) {
         execute(db, "UPDATE user_sessions SET version=1 WHERE sid='encoding-bad'").await;
         for column in ["ip", "user_agent", "login_method", "status", "revoked_reason"] {
             // 标识符仅来自上述源码白名单，原字节必须保留为 ff。
-            let mut inject = sqlx::QueryBuilder::new("UPDATE user_sessions SET ");
-            inject
-                .push(column)
-                .push("=CAST(x'ff' AS TEXT) WHERE sid='encoding-bad'");
-            inject.build().execute(pool).await.expect("注入非法文本");
-            let mut raw = sqlx::QueryBuilder::new("SELECT CAST(");
-            raw.push(column)
-                .push(" AS BLOB) FROM user_sessions WHERE sid='encoding-bad'");
-            let bytes: Vec<u8> = raw
-                .build_query_scalar()
+            let (inject_sql, raw_sql) = match column {
+                "ip" => (
+                    "UPDATE user_sessions SET ip=CAST(x'ff' AS TEXT) WHERE sid='encoding-bad'",
+                    "SELECT CAST(ip AS BLOB) FROM user_sessions WHERE sid='encoding-bad'",
+                ),
+                "user_agent" => (
+                    "UPDATE user_sessions SET user_agent=CAST(x'ff' AS TEXT) WHERE sid='encoding-bad'",
+                    "SELECT CAST(user_agent AS BLOB) FROM user_sessions WHERE sid='encoding-bad'",
+                ),
+                "login_method" => (
+                    "UPDATE user_sessions SET login_method=CAST(x'ff' AS TEXT) WHERE sid='encoding-bad'",
+                    "SELECT CAST(login_method AS BLOB) FROM user_sessions WHERE sid='encoding-bad'",
+                ),
+                "status" => (
+                    "UPDATE user_sessions SET status=CAST(x'ff' AS TEXT) WHERE sid='encoding-bad'",
+                    "SELECT CAST(status AS BLOB) FROM user_sessions WHERE sid='encoding-bad'",
+                ),
+                "revoked_reason" => (
+                    "UPDATE user_sessions SET revoked_reason=CAST(x'ff' AS TEXT) WHERE sid='encoding-bad'",
+                    "SELECT CAST(revoked_reason AS BLOB) FROM user_sessions WHERE sid='encoding-bad'",
+                ),
+                _ => unreachable!("固定元数据列白名单"),
+            };
+            sqlx::query(inject_sql)
+                .execute(pool)
+                .await
+                .expect("注入非法文本");
+            let bytes: Vec<u8> = sqlx::query_scalar(raw_sql)
                 .fetch_one(pool)
                 .await
                 .expect("原字节");
