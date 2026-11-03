@@ -3,6 +3,7 @@
 
 pub mod auth_session;
 pub mod crypto;
+pub mod policy;
 pub mod self_user;
 pub mod session_cache;
 pub mod sessions;
