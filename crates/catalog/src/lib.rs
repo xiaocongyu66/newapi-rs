@@ -3,6 +3,20 @@
 use newapi_storage::Database;
 use serde::Serialize;
 
+pub mod channel_prompt;
+pub mod billing_options;
+pub mod response_cache;
+
+pub use channel_prompt::{ChannelPromptError, ChannelPromptSettings};
+pub use response_cache::{
+    CacheEligibilityError, CacheKey, CacheScope, ResponseCacheConfig, ResponseCacheConfigError,
+    ResponseCacheRequest,
+};
+pub use billing_options::{
+    plan_billing_options_merge, BillingSettingRecord, LegacyBillingRecord, MergeError, MergePlan,
+    PlanStep,
+};
+
 const KEYS: [&str; 5] = [
     "Notice",
     "About",
