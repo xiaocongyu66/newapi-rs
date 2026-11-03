@@ -531,22 +531,24 @@ async fn session_identity(
     headers: &HeaderMap,
     now: i64,
 ) -> Result<newapi_identity::AuthIdentity, (StatusCode, &'static str)> {
-    let auth = state.auth().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "AUTH_INTERNAL_ERROR",
-    ))?;
-    let token = bearer(headers)
-        .ok_or((StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED"))?;
-    auth.identify(token, now).await.map_err(|error| match error {
-        SessionAuthError::Storage(_) | SessionAuthError::BatchFailed { .. } => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
-        }
-        SessionAuthError::RefreshInvalid | SessionAuthError::SessionRevoked
-        | SessionAuthError::SessionMismatch | SessionAuthError::Race
-        | SessionAuthError::SessionIdRequired => {
-            (StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED")
-        }
-    })
+    let auth = state
+        .auth()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "AUTH_INTERNAL_ERROR"))?;
+    let token = bearer(headers).ok_or((StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED"))?;
+    auth.identify(token, now)
+        .await
+        .map_err(|error| match error {
+            SessionAuthError::Storage(_) | SessionAuthError::BatchFailed { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
+            }
+            SessionAuthError::RefreshInvalid
+            | SessionAuthError::SessionRevoked
+            | SessionAuthError::SessionMismatch
+            | SessionAuthError::Race
+            | SessionAuthError::SessionIdRequired => {
+                (StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED")
+            }
+        })
 }
 
 async fn delete_session(
