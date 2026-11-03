@@ -66,9 +66,9 @@ impl RateLimiter {
 
         if state.windows.len() >= MAX_KEYS {
             state.capacity_exceeded = true;
-            state.windows.retain(|_, entry| {
-                now.saturating_duration_since(entry.start) < self.window
-            });
+            state
+                .windows
+                .retain(|_, entry| now.saturating_duration_since(entry.start) < self.window);
             if state.windows.len() >= MAX_KEYS {
                 return Decision::Limited {
                     retry_after: self.window,
@@ -97,12 +97,7 @@ impl RateLimiter {
     }
 }
 
-fn consume(
-    entry: &mut WindowState,
-    per_window: u32,
-    window: Duration,
-    now: Instant,
-) -> Decision {
+fn consume(entry: &mut WindowState, per_window: u32, window: Duration, now: Instant) -> Decision {
     if now.saturating_duration_since(entry.start) >= window {
         entry.start = now;
         entry.count = 0;

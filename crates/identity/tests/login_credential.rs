@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const FIXTURE_HASH: &str = "synthetic-prehashed-login-fixture";
 const USERS: &str = "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, password TEXT NOT NULL, status INTEGER NOT NULL, auth_version BIGINT NOT NULL, deleted_at TIMESTAMP)";
-const INSERT: &str = "INSERT INTO users (id,username,password,status,auth_version) VALUES ($1,$2,$3,$4,$5)";
+const INSERT: &str =
+    "INSERT INTO users (id,username,password,status,auth_version) VALUES ($1,$2,$3,$4,$5)";
 
 // 只输出固定操作标签，禁止输出凭据、DSN 或 SQLx 原始错误。
 fn checked<T>(result: Result<T, sqlx::Error>, action: &'static str) -> T {
@@ -77,9 +78,7 @@ async fn scenarios(db: &Database) {
         assert!(credential.password_hash == FIXTURE_HASH, "hash mismatch");
     }
     for username in ["CASEUSER", "absent", "", "' OR 1=1 --", "CaseUser "] {
-        assert!(
-            checked(repo.by_username(username).await, "read absent username").is_none()
-        );
+        assert!(checked(repo.by_username(username).await, "read absent username").is_none());
     }
 
     execute(

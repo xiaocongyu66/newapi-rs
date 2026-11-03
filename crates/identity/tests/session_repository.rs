@@ -878,13 +878,27 @@ async fn metadata_repository_decoding(db: &Database) {
         .expect("待注入行创建");
     if let Database::Sqlite(pool) = db {
         // 非 UTF-8 错误不能因发生在 record! 内就被误分类。
-        execute(db, "UPDATE user_sessions SET version='not-an-integer' WHERE sid='encoding-bad'").await;
+        execute(
+            db,
+            "UPDATE user_sessions SET version='not-an-integer' WHERE sid='encoding-bad'",
+        )
+        .await;
         assert!(matches!(
             repo.authoritative("encoding-bad").await,
             Err(SessionError::Storage)
         ));
-        execute(db, "UPDATE user_sessions SET version=1 WHERE sid='encoding-bad'").await;
-        for column in ["ip", "user_agent", "login_method", "status", "revoked_reason"] {
+        execute(
+            db,
+            "UPDATE user_sessions SET version=1 WHERE sid='encoding-bad'",
+        )
+        .await;
+        for column in [
+            "ip",
+            "user_agent",
+            "login_method",
+            "status",
+            "revoked_reason",
+        ] {
             // 标识符仅来自上述源码白名单，原字节必须保留为 ff。
             let (inject_sql, raw_sql) = match column {
                 "ip" => (
@@ -938,7 +952,8 @@ async fn metadata_repository_decoding(db: &Database) {
                 Err(SessionError::MetadataEncodingUnsupported)
             ));
             assert_eq!(
-                repo.revoke(&spy, 1, "encoding-bad", "logout", NOW + 1).await,
+                repo.revoke(&spy, 1, "encoding-bad", "logout", NOW + 1)
+                    .await,
                 Err(SessionError::MetadataEncodingUnsupported)
             );
             assert_eq!(
@@ -965,8 +980,7 @@ async fn metadata_repository_decoding(db: &Database) {
                 .await
                 .expect("失败后状态");
             assert!(before == after, "失败不得修改 refresh 或会话状态");
-            let preserved: Vec<u8> = raw
-                .build_query_scalar()
+            let preserved: Vec<u8> = sqlx::query_scalar(raw_sql)
                 .fetch_one(pool)
                 .await
                 .expect("失败后原字节");
@@ -975,7 +989,11 @@ async fn metadata_repository_decoding(db: &Database) {
         }
     }
     for sid in ["encoding-good", "encoding-bad"] {
-        let row = repo.authoritative(sid).await.expect("正常读取").expect("行");
+        let row = repo
+            .authoritative(sid)
+            .await
+            .expect("正常读取")
+            .expect("行");
         assert_eq!(row.metadata.ip, "127.0.0.1");
         assert_eq!(row.metadata.user_agent, "x");
         assert_eq!(row.metadata.login_method, "password");
@@ -983,7 +1001,11 @@ async fn metadata_repository_decoding(db: &Database) {
         assert_eq!(row.metadata.revoked_at, 0);
         assert!(row.current_hash_matches(&hash('a')));
     }
-    execute(db, "DELETE FROM user_sessions WHERE sid IN ('encoding-good','encoding-bad')").await;
+    execute(
+        db,
+        "DELETE FROM user_sessions WHERE sid IN ('encoding-good','encoding-bad')",
+    )
+    .await;
 }
 
 // 验证数据库字节边界，不冒充已执行 Go 驱动差分：

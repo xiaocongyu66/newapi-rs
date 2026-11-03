@@ -216,8 +216,7 @@ macro_rules! backend {
 fn metadata_decode_error(error: sqlx::Error) -> SessionError {
     match &error {
         sqlx::Error::ColumnDecode { source, .. } | sqlx::Error::Decode(source)
-            if source.is::<std::str::Utf8Error>()
-                || source.is::<std::string::FromUtf8Error>() =>
+            if source.is::<std::str::Utf8Error>() || source.is::<std::string::FromUtf8Error>() =>
         {
             SessionError::MetadataEncodingUnsupported
         }

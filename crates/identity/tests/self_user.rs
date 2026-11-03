@@ -97,7 +97,13 @@ fn all_profile_fields_and_permissions_are_preserved() {
     // 完整白名单比较也排除派生额度、侧栏、管理员备注与嵌套 profile。
     assert_eq!(serialized, expected);
     let object = serialized.as_object().expect("self user object");
-    for forbidden in ["password", "token", "access_token", "auth_version", "remark"] {
+    for forbidden in [
+        "password",
+        "token",
+        "access_token",
+        "auth_version",
+        "remark",
+    ] {
         assert!(!object.contains_key(forbidden));
     }
 }

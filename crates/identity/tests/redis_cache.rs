@@ -24,8 +24,8 @@ async fn connection(client: &redis::Client) -> MultiplexedConnection {
 }
 
 async fn fixture(seconds: i64) -> Fixture {
-    let url = std::env::var("TEST_REDIS_URL")
-        .expect("真实 Redis 测试必须设置 TEST_REDIS_URL，禁止跳过");
+    let url =
+        std::env::var("TEST_REDIS_URL").expect("真实 Redis 测试必须设置 TEST_REDIS_URL，禁止跳过");
     let client = redis::Client::open(url)
         .unwrap_or_else(|_| panic!("TEST_REDIS_URL 必须是有效的 Redis 测试配置"));
     let writer = connection(&client).await;
@@ -55,11 +55,10 @@ async fn ttl_ms(control: &mut MultiplexedConnection, key: &str) -> i64 {
 }
 
 async fn cleanup(control: &mut MultiplexedConnection, key: &str) {
-    let _: i64 =
-        tokio::time::timeout(IO_TIMEOUT, redis::cmd("DEL").arg(key).query_async(control))
-            .await
-            .expect("测试键清理超时")
-            .unwrap_or_else(|_| panic!("测试键清理失败"));
+    let _: i64 = tokio::time::timeout(IO_TIMEOUT, redis::cmd("DEL").arg(key).query_async(control))
+        .await
+        .expect("测试键清理超时")
+        .unwrap_or_else(|_| panic!("测试键清理失败"));
 }
 
 fn session(now: i64) -> SessionMetadata {
@@ -149,10 +148,7 @@ async fn redis_same_sid_guards_versions_and_keeps_deny_across_versions() {
         Ok(CacheRead::Active(newer.clone()))
     );
 
-    f.writer
-        .revoking(&newer, t / 1000, "logout")
-        .await
-        .unwrap();
+    f.writer.revoking(&newer, t / 1000, "logout").await.unwrap();
     let mut newest = newer.clone();
     newest.version += 1;
     // SID 是键的唯一会话标识；不能把版本隔离误解为高版本绕过墓碑。
