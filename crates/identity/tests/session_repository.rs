@@ -866,6 +866,108 @@ async fn batch_sql_rollback(db: &Database, second: &Database) {
     );
 }
 
+// 真实仓储读取：不修改列类型，不用 bytea 冒充 PG TEXT。
+// UTF8 PostgreSQL 的非法文本不可注入；现有 boundary fixture 断言服务端 22021。
+async fn metadata_repository_decoding(db: &Database) {
+    let repo = SessionRepository::new(db.clone());
+    repo.create(draft("encoding-good"), SessionLimits::default(), NOW)
+        .await
+        .expect("正常元数据创建");
+    repo.create(draft("encoding-bad"), SessionLimits::default(), NOW)
+        .await
+        .expect("待注入行创建");
+    if let Database::Sqlite(pool) = db {
+        // 非 UTF-8 错误不能因发生在 record! 内就被误分类。
+        execute(db, "UPDATE user_sessions SET version='not-an-integer' WHERE sid='encoding-bad'").await;
+        assert!(matches!(
+            repo.authoritative("encoding-bad").await,
+            Err(SessionError::Storage)
+        ));
+        execute(db, "UPDATE user_sessions SET version=1 WHERE sid='encoding-bad'").await;
+        for column in ["ip", "user_agent", "login_method", "status", "revoked_reason"] {
+            // 标识符仅来自上述源码白名单，原字节必须保留为 ff。
+            let mut inject = sqlx::QueryBuilder::new("UPDATE user_sessions SET ");
+            inject
+                .push(column)
+                .push("=CAST(x'ff' AS TEXT) WHERE sid='encoding-bad'");
+            inject.build().execute(pool).await.expect("注入非法文本");
+            let mut raw = sqlx::QueryBuilder::new("SELECT CAST(");
+            raw.push(column)
+                .push(" AS BLOB) FROM user_sessions WHERE sid='encoding-bad'");
+            let bytes: Vec<u8> = raw
+                .build_query_scalar()
+                .fetch_one(pool)
+                .await
+                .expect("原字节");
+            assert_eq!(bytes, vec![0xff]);
+            let snapshot_sql = "SELECT refresh_hash,previous_refresh_hash,previous_valid_until,last_active_at,revoked_at,version FROM user_sessions WHERE sid='encoding-bad'";
+            let before: (String, String, i64, i64, i64, i64) = sqlx::query_as(snapshot_sql)
+                .fetch_one(pool)
+                .await
+                .expect("失败前状态");
+            let spy = SpyFence::new();
+            assert!(matches!(
+                repo.authoritative("encoding-bad").await,
+                Err(SessionError::MetadataEncodingUnsupported)
+            ));
+            assert!(matches!(
+                repo.validate_access(1, "encoding-bad", 1, 3, NOW).await,
+                Err(SessionError::MetadataEncodingUnsupported)
+            ));
+            assert!(matches!(
+                repo.rotate(&spy, 1, "encoding-bad", &hash('a'), &hash('b'), NOW + 1)
+                    .await,
+                Err(SessionError::MetadataEncodingUnsupported)
+            ));
+            assert_eq!(
+                repo.revoke(&spy, 1, "encoding-bad", "logout", NOW + 1).await,
+                Err(SessionError::MetadataEncodingUnsupported)
+            );
+            assert_eq!(
+                repo.revoke_by_refresh(&spy, "encoding-bad", &hash('a'), "logout", NOW + 1)
+                    .await,
+                Err(SessionError::MetadataEncodingUnsupported)
+            );
+            if column != "status" {
+                assert!(matches!(
+                    repo.list(1, "encoding-good", NOW).await,
+                    Err(SessionError::MetadataEncodingUnsupported)
+                ));
+                let failure = repo
+                    .revoke_others(&spy, 1, "encoding-good", "logout", NOW + 1)
+                    .await
+                    .expect_err("非法候选不得提交部分撤销");
+                assert_eq!(failure.error, SessionError::MetadataEncodingUnsupported);
+                assert_eq!(failure.committed.revoked_count, 0);
+                assert_eq!(failure.committed.terminal_fence_failures, 0);
+            }
+            assert!(spy.events.lock().expect("spy mutex").is_empty());
+            let after: (String, String, i64, i64, i64, i64) = sqlx::query_as(snapshot_sql)
+                .fetch_one(pool)
+                .await
+                .expect("失败后状态");
+            assert!(before == after, "失败不得修改 refresh 或会话状态");
+            let preserved: Vec<u8> = raw
+                .build_query_scalar()
+                .fetch_one(pool)
+                .await
+                .expect("失败后原字节");
+            assert_eq!(preserved, bytes);
+            execute(db, "UPDATE user_sessions SET ip='127.0.0.1',user_agent='x',login_method='password',status='active',revoked_reason='' WHERE sid='encoding-bad'").await;
+        }
+    }
+    for sid in ["encoding-good", "encoding-bad"] {
+        let row = repo.authoritative(sid).await.expect("正常读取").expect("行");
+        assert_eq!(row.metadata.ip, "127.0.0.1");
+        assert_eq!(row.metadata.user_agent, "x");
+        assert_eq!(row.metadata.login_method, "password");
+        assert_eq!(row.metadata.status, "active");
+        assert_eq!(row.metadata.revoked_at, 0);
+        assert!(row.current_hash_matches(&hash('a')));
+    }
+    execute(db, "DELETE FROM user_sessions WHERE sid IN ('encoding-good','encoding-bad')").await;
+}
+
 // 验证数据库字节边界，不冒充已执行 Go 驱动差分：
 // SQLite 用 BLOB -> TEXT 保持原字节，再转 BLOB 读取，避免 Rust String 解码；
 // PG convert_from 明确要求 UTF8，必须返回 22021，不能只断言任意错误。
@@ -958,6 +1060,7 @@ async fn sqlite_contract(legacy_char: bool) {
     let other = Database::Sqlite(second);
     metadata_encoding_boundary(&db).await;
     scenarios(&db, &other, legacy_char).await;
+    metadata_repository_decoding(&db).await;
     remaining_scenarios(&db, &other).await;
     controlled_races(&db, &other).await;
     batch_sql_rollback(&db, &other).await;
@@ -1027,6 +1130,7 @@ async fn postgres_contract(legacy_char: bool) {
     }
     metadata_encoding_boundary(&pools[0]).await;
     scenarios(&pools[0], &pools[1], legacy_char).await;
+    metadata_repository_decoding(&pools[0]).await;
     remaining_scenarios(&pools[0], &pools[1]).await;
     controlled_races(&pools[0], &pools[1]).await;
     batch_sql_rollback(&pools[0], &pools[1]).await;

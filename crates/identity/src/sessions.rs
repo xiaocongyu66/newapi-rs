@@ -20,7 +20,7 @@ pub enum SessionError {
     UserSecurityChanged,
     ActiveLimit,
     IssuanceLimit,
-    /// Rust String 尚不能承载 Go 字节截断产生的非法 UTF-8；禁止直接映射 HTTP 400。
+    /// 输入截断或数据库元数据包含非法 UTF-8；禁止丢弃、替换字节或直接映射 HTTP 400。
     MetadataEncodingUnsupported,
     /// 仅 SQLite 已知 BUSY/LOCKED 错误；不包含 PG、连接池超时或一般存储失败。
     DatabaseBusy,
@@ -211,20 +211,38 @@ macro_rules! backend {
         }
     };
 }
+// 仅用于元数据文本列；类型不匹配、NULL、缺列等仍走普通存储错误。
+// 两驱动共用同一分类，不匹配错误文本，也不将所有 ColumnDecode 误判为 UTF-8。
+fn metadata_decode_error(error: sqlx::Error) -> SessionError {
+    match &error {
+        sqlx::Error::ColumnDecode { source, .. } | sqlx::Error::Decode(source)
+            if source.is::<std::str::Utf8Error>()
+                || source.is::<std::string::FromUtf8Error>() =>
+        {
+            SessionError::MetadataEncodingUnsupported
+        }
+        _ => SessionError::from(error),
+    }
+}
+
 macro_rules! record {
     ($r:expr) => {{
         let r = $r;
         SessionRecord {
             metadata: SessionMetadata {
-                sid: r.try_get("sid")?,
+                sid: r.try_get("sid").map_err(metadata_decode_error)?,
                 user_id: r.try_get("user_id")?,
                 version: r.try_get("version")?,
                 user_auth_version: r.try_get("user_auth_version")?,
-                status: r.try_get("status")?,
-                login_method: r.try_get("login_method")?,
-                ip: r.try_get::<Option<String>, _>("ip")?.unwrap_or_default(),
+                status: r.try_get("status").map_err(metadata_decode_error)?,
+                login_method: r.try_get("login_method").map_err(metadata_decode_error)?,
+                ip: r
+                    .try_get::<Option<String>, _>("ip")
+                    .map_err(metadata_decode_error)?
+                    .unwrap_or_default(),
                 user_agent: r
-                    .try_get::<Option<String>, _>("user_agent")?
+                    .try_get::<Option<String>, _>("user_agent")
+                    .map_err(metadata_decode_error)?
                     .unwrap_or_default(),
                 created_at: r
                     .try_get::<Option<i64>, _>("created_at")?
@@ -233,7 +251,8 @@ macro_rules! record {
                 expires_at: r.try_get("expires_at")?,
                 revoked_at: r.try_get("revoked_at")?,
                 revoked_reason: r
-                    .try_get::<Option<String>, _>("revoked_reason")?
+                    .try_get::<Option<String>, _>("revoked_reason")
+                    .map_err(metadata_decode_error)?
                     .unwrap_or_default(),
             },
             refresh_hash: r.try_get::<String, _>("refresh_hash")?.trim().to_owned(),

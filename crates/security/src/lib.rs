@@ -2,6 +2,8 @@
 //! 输入必须由服务装配层从权威身份快照转换，禁止直接采用请求中的角色。
 //! 角色通过不代表细粒度权限通过；真正权限端口仍须接入策略快照求值。
 
+pub mod rate_limit;
+
 use std::net::IpAddr;
 
 use ipnet::IpNet;

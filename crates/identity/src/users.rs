@@ -176,3 +176,61 @@ INSERT INTO users (
     $1,$2,'Root User',100,1,'','','','','','',NULL,100000000,0,0,
     'default','',0,0,0,0,NULL,'','','','',$3,0,1
 )"#;
+
+/// 登录所需的最小凭据投影；不实现 Debug 或序列化。
+/// 读取不验证密码、不判定账号状态，也不授予访问权限。
+pub struct LoginCredential {
+    pub user_id: i64,
+    pub password_hash: String,
+    pub status: i64,
+    pub auth_version: i64,
+    pub username: String,
+}
+
+const LOGIN_CREDENTIAL_BY_USERNAME: &str = "SELECT CAST(id AS BIGINT),username,password,CAST(status AS BIGINT),CAST(auth_version AS BIGINT) FROM users WHERE username=$1 AND deleted_at IS NULL";
+
+#[derive(Clone)]
+pub struct LoginCredentialRepository {
+    db: Database,
+}
+
+impl LoginCredentialRepository {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    /// 保留数据库原有等值比较语义，不修剪用户名或覆盖 collation。
+    /// SQLx 错误原样传播；调用方不得直接记录可能敏感的错误文本。
+    pub async fn by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<LoginCredential>, sqlx::Error> {
+        let row = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as::<sqlx::Sqlite, (i64, String, String, i64, i64)>(
+                    LOGIN_CREDENTIAL_BY_USERNAME,
+                )
+                .bind(username)
+                .fetch_optional(pool)
+                .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as::<sqlx::Postgres, (i64, String, String, i64, i64)>(
+                    LOGIN_CREDENTIAL_BY_USERNAME,
+                )
+                .bind(username)
+                .fetch_optional(pool)
+                .await?
+            }
+        };
+        Ok(row.map(
+            |(user_id, username, password_hash, status, auth_version)| LoginCredential {
+                user_id,
+                password_hash,
+                status,
+                auth_version,
+                username,
+            },
+        ))
+    }
+}
