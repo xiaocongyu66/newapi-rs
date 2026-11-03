@@ -152,15 +152,31 @@ async fn session_management_scopes_revocation_to_the_authenticated_user() {
         user_auth_version: 1,
         session_version: 1,
     };
-    assert!(!auth.revoke_sid(&foreign, other.sid(), NOW + 1).await.unwrap());
+    assert!(
+        !auth
+            .revoke_sid(&foreign, other.sid(), NOW + 1)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         auth.revoke_sid(&identity, "  ", NOW + 1).await.err(),
         Some(SessionAuthError::SessionIdRequired),
     );
     assert_eq!(auth.revoke_others(&identity, NOW + 1).await.unwrap(), 1);
-    auth.validate(&identity, NOW + 2).await.expect("保留当前会话");
-    assert!(!auth.revoke_sid(&identity, other.sid(), NOW + 2).await.unwrap());
-    assert!(auth.revoke_sid(&identity, current.sid(), NOW + 2).await.unwrap());
+    auth.validate(&identity, NOW + 2)
+        .await
+        .expect("保留当前会话");
+    assert!(
+        !auth
+            .revoke_sid(&identity, other.sid(), NOW + 2)
+            .await
+            .unwrap()
+    );
+    assert!(
+        auth.revoke_sid(&identity, current.sid(), NOW + 2)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         auth.validate(&identity, NOW + 3).await.err(),
         Some(SessionAuthError::SessionRevoked),
@@ -233,8 +249,8 @@ async fn current_refresh_after_auth_version_change_preserves_terminal_failure() 
         .refresh(first.raw().expose_secret(), None, NOW + 1)
         .await
         .expect("取得当前有效 refresh");
-    let current = RefreshCredential::parse(issued.refresh_token.expose_secret())
-        .expect("解析当前 refresh");
+    let current =
+        RefreshCredential::parse(issued.refresh_token.expose_secret()).expect("解析当前 refresh");
     let repository = SessionRepository::new(db.clone());
     let before = repository
         .authoritative(first.sid())
@@ -366,8 +382,8 @@ async fn pending_fence_failure_leaves_sql_and_old_access_active() {
         .expect("读取 pending 失败后的 SQL 状态")
         .expect("保留会话行");
     assert_eq!(after.metadata, before.metadata);
-    let current = RefreshCredential::parse(issued.refresh_token.expose_secret())
-        .expect("解析当前 refresh");
+    let current =
+        RefreshCredential::parse(issued.refresh_token.expose_secret()).expect("解析当前 refresh");
     assert!(after.current_hash_matches(&digest(
         &AuthKeys::new("fixture-session-secret"),
         current.secret(),

@@ -28,7 +28,10 @@ fn checked<T>(result: Result<T, sqlx::Error>, action: &'static str) -> T {
 async fn execute(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         checked(
-            sqlx::QueryBuilder::new(statement).build().execute(pool).await,
+            sqlx::QueryBuilder::new(statement)
+                .build()
+                .execute(pool)
+                .await,
             "execute fixed SQL",
         );
     });
@@ -82,33 +85,60 @@ async fn seed(db: &Database, profile: &UserProfile) {
         let mut insert = sqlx::QueryBuilder::new(
             "INSERT INTO users (id,username,display_name,role,status,email,github_id,discord_id,oidc_id,wechat_id,telegram_id,\"group\",quota,used_quota,request_count,aff_code,aff_count,aff_quota,aff_history,inviter_id,linux_do_id,setting,stripe_customer,password,access_token,remark,auth_version) VALUES (",
         );
-        insert.push_bind(profile.id)
-            .push(",").push_bind(&profile.username)
-            .push(",").push_bind(&profile.display_name)
-            .push(",").push_bind(profile.role)
-            .push(",").push_bind(profile.status)
-            .push(",").push_bind(&profile.email)
-            .push(",").push_bind(&profile.github_id)
-            .push(",").push_bind(&profile.discord_id)
-            .push(",").push_bind(&profile.oidc_id)
-            .push(",").push_bind(&profile.wechat_id)
-            .push(",").push_bind(&profile.telegram_id)
-            .push(",").push_bind(&profile.group)
-            .push(",").push_bind(profile.quota)
-            .push(",").push_bind(profile.used_quota)
-            .push(",").push_bind(profile.request_count)
-            .push(",").push_bind(&profile.aff_code)
-            .push(",").push_bind(profile.aff_count)
-            .push(",").push_bind(profile.aff_quota)
-            .push(",").push_bind(profile.aff_history_quota)
-            .push(",").push_bind(profile.inviter_id)
-            .push(",").push_bind(&profile.linux_do_id)
-            .push(",").push_bind(&profile.setting)
-            .push(",").push_bind(&profile.stripe_customer)
-            .push(",").push_bind("synthetic-password-not-for-auth")
-            .push(",").push_bind("synthetic-management-token")
-            .push(",").push_bind("admin-only-fixture-remark")
-            .push(",").push_bind(777_i64)
+        insert
+            .push_bind(profile.id)
+            .push(",")
+            .push_bind(&profile.username)
+            .push(",")
+            .push_bind(&profile.display_name)
+            .push(",")
+            .push_bind(profile.role)
+            .push(",")
+            .push_bind(profile.status)
+            .push(",")
+            .push_bind(&profile.email)
+            .push(",")
+            .push_bind(&profile.github_id)
+            .push(",")
+            .push_bind(&profile.discord_id)
+            .push(",")
+            .push_bind(&profile.oidc_id)
+            .push(",")
+            .push_bind(&profile.wechat_id)
+            .push(",")
+            .push_bind(&profile.telegram_id)
+            .push(",")
+            .push_bind(&profile.group)
+            .push(",")
+            .push_bind(profile.quota)
+            .push(",")
+            .push_bind(profile.used_quota)
+            .push(",")
+            .push_bind(profile.request_count)
+            .push(",")
+            .push_bind(&profile.aff_code)
+            .push(",")
+            .push_bind(profile.aff_count)
+            .push(",")
+            .push_bind(profile.aff_quota)
+            .push(",")
+            .push_bind(profile.aff_history_quota)
+            .push(",")
+            .push_bind(profile.inviter_id)
+            .push(",")
+            .push_bind(&profile.linux_do_id)
+            .push(",")
+            .push_bind(&profile.setting)
+            .push(",")
+            .push_bind(&profile.stripe_customer)
+            .push(",")
+            .push_bind("synthetic-password-not-for-auth")
+            .push(",")
+            .push_bind("synthetic-management-token")
+            .push(",")
+            .push_bind("admin-only-fixture-remark")
+            .push(",")
+            .push_bind(777_i64)
             .push(")");
         checked(insert.build().execute(pool).await, "seed profile");
     });
@@ -128,8 +158,15 @@ async fn scenarios(db: &Database) {
 
     backend!(db, pool, {
         let mut insert = sqlx::QueryBuilder::new("INSERT INTO users (id,password) VALUES (");
-        insert.push_bind(18_i64).push(",").push_bind("synthetic-legacy").push(")");
-        checked(insert.build().execute(pool).await, "seed nullable legacy row");
+        insert
+            .push_bind(18_i64)
+            .push(",")
+            .push_bind("synthetic-legacy")
+            .push(")");
+        checked(
+            insert.build().execute(pool).await,
+            "seed nullable legacy row",
+        );
     });
     // 所有旧可空列均回到 Go 零值，不能擅自赋 role=1 或 group=default。
     let null_profile = UserProfile {
@@ -157,22 +194,32 @@ async fn scenarios(db: &Database) {
         setting: String::new(),
         stripe_customer: String::new(),
     };
-    assert_eq!(checked(repo.by_id(18).await, "read NULL legacy row"), Some(null_profile));
+    assert_eq!(
+        checked(repo.by_id(18).await, "read NULL legacy row"),
+        Some(null_profile)
+    );
 
     // 无效 JSON 也保留原文，读取边界不替后续组装层解析设置。
     backend!(db, pool, {
         let mut update = sqlx::QueryBuilder::new("UPDATE users SET setting=");
-        update.push_bind("not-json").push(" WHERE id=").push_bind(18_i64);
+        update
+            .push_bind("not-json")
+            .push(" WHERE id=")
+            .push_bind(18_i64);
         checked(update.build().execute(pool).await, "update raw setting");
     });
     assert_eq!(
-        checked(repo.by_id(18).await, "read raw setting").expect("legacy row").setting,
+        checked(repo.by_id(18).await, "read raw setting")
+            .expect("legacy row")
+            .setting,
         "not-json"
     );
     backend!(db, pool, {
         let mut update = sqlx::QueryBuilder::new("UPDATE users SET deleted_at=CAST(");
-        update.push_bind("2026-01-01 00:00:00")
-            .push(" AS TIMESTAMP) WHERE id=").push_bind(17_i64);
+        update
+            .push_bind("2026-01-01 00:00:00")
+            .push(" AS TIMESTAMP) WHERE id=")
+            .push_bind(17_i64);
         checked(update.build().execute(pool).await, "soft delete profile");
     });
     assert!(checked(repo.by_id(17).await, "read deleted profile").is_none());
@@ -193,7 +240,10 @@ async fn sqlite_user_profile_contract() {
         .create_if_missing(true)
         .disable_statement_logging();
     let pool = checked(
-        SqlitePoolOptions::new().max_connections(2).connect_with(options).await,
+        SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await,
         "connect SQLite fixture",
     );
     let db = Database::Sqlite(pool);
@@ -210,11 +260,15 @@ async fn sqlite_user_profile_contract() {
 async fn postgres_user_profile_contract() {
     let dsn = std::env::var("TEST_POSTGRES_DSN")
         .expect("TEST_POSTGRES_DSN required; PostgreSQL must not be skipped");
-    let options: PgConnectOptions = dsn.parse()
+    let options: PgConnectOptions = dsn
+        .parse()
         .unwrap_or_else(|_| panic!("invalid PostgreSQL fixture config"));
     let options = options.disable_statement_logging();
     let admin = checked(
-        PgPoolOptions::new().max_connections(1).connect_with(options.clone()).await,
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await,
         "connect PostgreSQL fixture",
     );
     let schema = format!(
@@ -223,22 +277,33 @@ async fn postgres_user_profile_contract() {
         NEXT.fetch_add(1, Ordering::Relaxed)
     );
     // DDL 标识符无法绑定，仅允许固定前缀与进程内生成的数字/下划线。
-    assert!(schema.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'));
+    assert!(
+        schema
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    );
     let mut create = sqlx::QueryBuilder::new("CREATE SCHEMA \"");
     create.push(&schema).push("\"");
-    checked(create.build().execute(&admin).await, "create isolated schema");
+    checked(
+        create.build().execute(&admin).await,
+        "create isolated schema",
+    );
     let search_path = schema.clone();
     let pool = checked(
-        PgPoolOptions::new().max_connections(2)
+        PgPoolOptions::new()
+            .max_connections(2)
             .after_connect(move |conn, _| {
                 let path = search_path.clone();
                 Box::pin(async move {
                     sqlx::query("SELECT set_config('search_path', $1, false)")
-                        .bind(path).execute(conn).await?;
+                        .bind(path)
+                        .execute(conn)
+                        .await?;
                     Ok(())
                 })
             })
-            .connect_with(options).await,
+            .connect_with(options)
+            .await,
         "connect isolated PostgreSQL pool",
     );
     let db = Database::Postgres(pool);
@@ -250,6 +315,9 @@ async fn postgres_user_profile_contract() {
     ));
     let mut drop_schema = sqlx::QueryBuilder::new("DROP SCHEMA \"");
     drop_schema.push(&schema).push("\" CASCADE");
-    checked(drop_schema.build().execute(&admin).await, "drop isolated schema");
+    checked(
+        drop_schema.build().execute(&admin).await,
+        "drop isolated schema",
+    );
     admin.close().await;
 }

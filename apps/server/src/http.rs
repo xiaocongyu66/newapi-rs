@@ -80,7 +80,10 @@ fn build_router(state: AppState, session_routes: bool) -> Router {
             .route("/api/user/auth/logout", post(logout))
             .route("/api/user/sessions", get(sessions))
             .route("/api/user/sessions/{sid}", delete(delete_session))
-            .route("/api/user/sessions/revoke-others", post(revoke_other_sessions))
+            .route(
+                "/api/user/sessions/revoke-others",
+                post(revoke_other_sessions),
+            )
     } else {
         app
     };
@@ -529,14 +532,18 @@ async fn session_identity(
     now: i64,
 ) -> Result<newapi_identity::AuthIdentity, Response> {
     let auth = state.auth().ok_or_else(|| {
-        no_store(auth_failure(StatusCode::SERVICE_UNAVAILABLE, "AUTH_INTERNAL_ERROR"))
+        no_store(auth_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AUTH_INTERNAL_ERROR",
+        ))
     })?;
-    let token = bearer(headers).ok_or_else(|| {
-        no_store(auth_failure(StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED"))
-    })?;
+    let token = bearer(headers)
+        .ok_or_else(|| no_store(auth_failure(StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED")))?;
     auth.identify(token, now).await.map_err(|error| {
         let (status, code) = match error {
-            SessionAuthError::Storage(_) => (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR"),
+            SessionAuthError::Storage(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
+            }
             _ => (StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED"),
         };
         no_store(auth_failure(status, code))
@@ -555,11 +562,17 @@ async fn delete_session(
     };
     let sid = sid.trim();
     if sid.is_empty() {
-        return no_store((StatusCode::BAD_REQUEST, Json(AuthFailure {
-            success: false,
-            code: "AUTH_SESSION_ID_REQUIRED",
-            message: "session id is required",
-        })).into_response());
+        return no_store(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(AuthFailure {
+                    success: false,
+                    code: "AUTH_SESSION_ID_REQUIRED",
+                    message: "session id is required",
+                }),
+            )
+                .into_response(),
+        );
     }
     let auth = state.auth().expect("身份验证已确认服务存在");
     match auth.revoke_sid(&identity, sid, now).await {
@@ -568,19 +581,29 @@ async fn delete_session(
                 revoked_sid: sid.to_owned(),
                 current: sid == identity.sid,
             });
-            if cookie_value(&headers, REFRESH_COOKIE).and_then(|raw| {
-                newapi_identity::crypto::RefreshCredential::parse(&raw).ok()
-            }).is_some_and(|credential| credential.sid() == sid) {
+            if cookie_value(&headers, REFRESH_COOKIE)
+                .and_then(|raw| newapi_identity::crypto::RefreshCredential::parse(&raw).ok())
+                .is_some_and(|credential| credential.sid() == sid)
+            {
                 clear_cookie(&mut response, state.session_cookie().secure);
             }
             no_store(response)
         }
-        Ok(false) => no_store((StatusCode::NOT_FOUND, Json(AuthFailure {
-            success: false,
-            code: "AUTH_SESSION_NOT_FOUND",
-            message: "session not found",
-        })).into_response()),
-        Err(_) => no_store(auth_failure(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")),
+        Ok(false) => no_store(
+            (
+                StatusCode::NOT_FOUND,
+                Json(AuthFailure {
+                    success: false,
+                    code: "AUTH_SESSION_NOT_FOUND",
+                    message: "session not found",
+                }),
+            )
+                .into_response(),
+        ),
+        Err(_) => no_store(auth_failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AUTH_INTERNAL_ERROR",
+        )),
     }
 }
 
@@ -593,11 +616,23 @@ async fn revoke_other_sessions(State(state): State<AppState>, headers: HeaderMap
     let auth = state.auth().expect("身份验证已确认服务存在");
     match auth.revoke_others(&identity, now).await {
         Ok(revoked_count) => no_store(success_data(RevokedOthersBody { revoked_count })),
-        Err(SessionAuthError::BatchFailed { committed_count, .. }) => {
-            tracing::error!(event = "session_batch_failure", committed_count, "会话批次撤销未全部完成");
-            no_store(auth_failure(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR"))
+        Err(SessionAuthError::BatchFailed {
+            committed_count, ..
+        }) => {
+            tracing::error!(
+                event = "session_batch_failure",
+                committed_count,
+                "会话批次撤销未全部完成"
+            );
+            no_store(auth_failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_INTERNAL_ERROR",
+            ))
         }
-        Err(_) => no_store(auth_failure(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")),
+        Err(_) => no_store(auth_failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AUTH_INTERNAL_ERROR",
+        )),
     }
 }
 
@@ -797,7 +832,8 @@ mod tests {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
-            .await.unwrap();
+            .await
+            .unwrap();
         for ddl in [
             "CREATE TABLE users (id INTEGER PRIMARY KEY,status INTEGER,auth_version BIGINT,deleted_at TIMESTAMP)",
             "INSERT INTO users VALUES (1,1,1,NULL),(2,1,1,NULL)",
@@ -813,47 +849,122 @@ mod tests {
         let other = RefreshCredential::generate().unwrap();
         let foreign = RefreshCredential::generate().unwrap();
         for (credential, user_id) in [(&current, 1), (&other, 1), (&foreign, 2)] {
-            repo.create(CreateSession {
-                sid: credential.sid().to_owned(), user_id,
-                expected_auth_version: Some(1),
-                refresh_hash: RefreshHash::from_lower_hex(keys.refresh_hash(credential.secret()).expose_secret().to_owned()).unwrap(),
-                login_method: "password".into(), ip: "127.0.0.1".into(), user_agent: "fixture".into(),
-            }, SessionLimits::default(), now).await.unwrap();
+            repo.create(
+                CreateSession {
+                    sid: credential.sid().to_owned(),
+                    user_id,
+                    expected_auth_version: Some(1),
+                    refresh_hash: RefreshHash::from_lower_hex(
+                        keys.refresh_hash(credential.secret())
+                            .expose_secret()
+                            .to_owned(),
+                    )
+                    .unwrap(),
+                    login_method: "password".into(),
+                    ip: "127.0.0.1".into(),
+                    user_agent: "fixture".into(),
+                },
+                SessionLimits::default(),
+                now,
+            )
+            .await
+            .unwrap();
         }
-        let token = keys.issue_access(&newapi_identity::AuthIdentity {
-            user_id: 1, sid: current.sid().into(), user_auth_version: 1, session_version: 1,
-        }, now).unwrap();
+        let token = keys
+            .issue_access(
+                &newapi_identity::AuthIdentity {
+                    user_id: 1,
+                    sid: current.sid().into(),
+                    user_auth_version: 1,
+                    session_version: 1,
+                },
+                now,
+            )
+            .unwrap();
         let app = build_router(auth_state(db.clone(), false), true);
         let authorization = format!("Bearer {}", token.token.expose_secret());
-        let response = app.clone().oneshot(Request::builder().method(Method::DELETE)
-            .uri(format!("/api/user/sessions/{}", foreign.sid()))
-            .header(header::AUTHORIZATION, &authorization)
-            .body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/user/sessions/{}", foreign.sid()))
+                    .header(header::AUTHORIZATION, &authorization)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
-        assert!(std::str::from_utf8(&body).unwrap().contains("AUTH_SESSION_NOT_FOUND"));
-        let response = app.clone().oneshot(Request::builder().method(Method::DELETE)
-            .uri(format!("/api/user/sessions/{}", other.sid()))
-            .header(header::AUTHORIZATION, &authorization)
-            .header(header::COOKIE, format!("new_api_refresh={}", current.raw().expose_secret()))
-            .body(Body::empty()).unwrap()).await.unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("AUTH_SESSION_NOT_FOUND")
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/user/sessions/{}", other.sid()))
+                    .header(header::AUTHORIZATION, &authorization)
+                    .header(
+                        header::COOKIE,
+                        format!("new_api_refresh={}", current.raw().expose_secret()),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(!response.headers().contains_key(header::SET_COOKIE));
-        let response = app.clone().oneshot(Request::builder().method(Method::POST)
-            .uri("/api/user/sessions/revoke-others")
-            .header(header::AUTHORIZATION, &authorization)
-            .body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/user/sessions/revoke-others")
+                    .header(header::AUTHORIZATION, &authorization)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
-        assert!(std::str::from_utf8(&body).unwrap().contains("\"revoked_count\":0"));
-        let response = app.oneshot(Request::builder().method(Method::DELETE)
-            .uri(format!("/api/user/sessions/{}", current.sid()))
-            .header(header::AUTHORIZATION, &authorization)
-            .header(header::COOKIE, format!("new_api_refresh={}", current.raw().expose_secret()))
-            .body(Body::empty()).unwrap()).await.unwrap();
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("\"revoked_count\":0")
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::DELETE)
+                    .uri(format!("/api/user/sessions/{}", current.sid()))
+                    .header(header::AUTHORIZATION, &authorization)
+                    .header(
+                        header::COOKIE,
+                        format!("new_api_refresh={}", current.raw().expose_secret()),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key(header::SET_COOKIE));
-        assert_eq!(repo.authoritative(foreign.sid()).await.unwrap().unwrap().metadata.status, "active");
+        assert_eq!(
+            repo.authoritative(foreign.sid())
+                .await
+                .unwrap()
+                .unwrap()
+                .metadata
+                .status,
+            "active"
+        );
         db.close().await;
     }
 

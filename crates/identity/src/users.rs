@@ -51,28 +51,66 @@ macro_rules! profile {
         let row = $row;
         UserProfile {
             id: row.try_get("id")?,
-            username: row.try_get::<Option<String>, _>("username")?.unwrap_or_default(),
-            display_name: row.try_get::<Option<String>, _>("display_name")?.unwrap_or_default(),
+            username: row
+                .try_get::<Option<String>, _>("username")?
+                .unwrap_or_default(),
+            display_name: row
+                .try_get::<Option<String>, _>("display_name")?
+                .unwrap_or_default(),
             role: row.try_get::<Option<i64>, _>("role")?.unwrap_or_default(),
             status: row.try_get::<Option<i64>, _>("status")?.unwrap_or_default(),
-            email: row.try_get::<Option<String>, _>("email")?.unwrap_or_default(),
-            github_id: row.try_get::<Option<String>, _>("github_id")?.unwrap_or_default(),
-            discord_id: row.try_get::<Option<String>, _>("discord_id")?.unwrap_or_default(),
-            oidc_id: row.try_get::<Option<String>, _>("oidc_id")?.unwrap_or_default(),
-            wechat_id: row.try_get::<Option<String>, _>("wechat_id")?.unwrap_or_default(),
-            telegram_id: row.try_get::<Option<String>, _>("telegram_id")?.unwrap_or_default(),
-            group: row.try_get::<Option<String>, _>("group")?.unwrap_or_default(),
+            email: row
+                .try_get::<Option<String>, _>("email")?
+                .unwrap_or_default(),
+            github_id: row
+                .try_get::<Option<String>, _>("github_id")?
+                .unwrap_or_default(),
+            discord_id: row
+                .try_get::<Option<String>, _>("discord_id")?
+                .unwrap_or_default(),
+            oidc_id: row
+                .try_get::<Option<String>, _>("oidc_id")?
+                .unwrap_or_default(),
+            wechat_id: row
+                .try_get::<Option<String>, _>("wechat_id")?
+                .unwrap_or_default(),
+            telegram_id: row
+                .try_get::<Option<String>, _>("telegram_id")?
+                .unwrap_or_default(),
+            group: row
+                .try_get::<Option<String>, _>("group")?
+                .unwrap_or_default(),
             quota: row.try_get::<Option<i64>, _>("quota")?.unwrap_or_default(),
-            used_quota: row.try_get::<Option<i64>, _>("used_quota")?.unwrap_or_default(),
-            request_count: row.try_get::<Option<i64>, _>("request_count")?.unwrap_or_default(),
-            aff_code: row.try_get::<Option<String>, _>("aff_code")?.unwrap_or_default(),
-            aff_count: row.try_get::<Option<i64>, _>("aff_count")?.unwrap_or_default(),
-            aff_quota: row.try_get::<Option<i64>, _>("aff_quota")?.unwrap_or_default(),
-            aff_history_quota: row.try_get::<Option<i64>, _>("aff_history_quota")?.unwrap_or_default(),
-            inviter_id: row.try_get::<Option<i64>, _>("inviter_id")?.unwrap_or_default(),
-            linux_do_id: row.try_get::<Option<String>, _>("linux_do_id")?.unwrap_or_default(),
-            setting: row.try_get::<Option<String>, _>("setting")?.unwrap_or_default(),
-            stripe_customer: row.try_get::<Option<String>, _>("stripe_customer")?.unwrap_or_default(),
+            used_quota: row
+                .try_get::<Option<i64>, _>("used_quota")?
+                .unwrap_or_default(),
+            request_count: row
+                .try_get::<Option<i64>, _>("request_count")?
+                .unwrap_or_default(),
+            aff_code: row
+                .try_get::<Option<String>, _>("aff_code")?
+                .unwrap_or_default(),
+            aff_count: row
+                .try_get::<Option<i64>, _>("aff_count")?
+                .unwrap_or_default(),
+            aff_quota: row
+                .try_get::<Option<i64>, _>("aff_quota")?
+                .unwrap_or_default(),
+            aff_history_quota: row
+                .try_get::<Option<i64>, _>("aff_history_quota")?
+                .unwrap_or_default(),
+            inviter_id: row
+                .try_get::<Option<i64>, _>("inviter_id")?
+                .unwrap_or_default(),
+            linux_do_id: row
+                .try_get::<Option<String>, _>("linux_do_id")?
+                .unwrap_or_default(),
+            setting: row
+                .try_get::<Option<String>, _>("setting")?
+                .unwrap_or_default(),
+            stripe_customer: row
+                .try_get::<Option<String>, _>("stripe_customer")?
+                .unwrap_or_default(),
         }
     }};
 }

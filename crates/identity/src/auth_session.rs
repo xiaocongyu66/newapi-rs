@@ -296,7 +296,13 @@ impl<F: RevocationFence> SessionAuth<F> {
     ) -> Result<u64, SessionAuthError> {
         match self
             .repository
-            .revoke_others(&self.fence, identity.user_id, &identity.sid, "user_revoked_others", now)
+            .revoke_others(
+                &self.fence,
+                identity.user_id,
+                &identity.sid,
+                "user_revoked_others",
+                now,
+            )
             .await
         {
             Ok(report) => {
