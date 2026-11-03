@@ -62,18 +62,27 @@ fn failure(status: StatusCode, message: &'static str) -> Response {
 /// JSON 404, including /api and trailing slashes. These are explicit P1 choices,
 /// not claims of equivalence with the unmeasured Go/Fiber middleware chain.
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    build_router(state, false)
+}
+
+fn build_router(state: AppState, session_routes: bool) -> Router {
+    let app = Router::new()
         .route("/api/notice", get(notice))
         .route("/api/about", get(about))
         .route("/api/home_page_content", get(home_page_content))
         .route("/api/user-agreement", get(user_agreement))
         .route("/api/privacy-policy", get(privacy_policy))
         .route("/health/live", get(live))
-        .route("/health/ready", get(ready))
-        .route("/api/user/auth/refresh", post(refresh))
-        .route("/api/user/auth/logout", post(logout))
-        .route("/api/user/sessions", get(sessions))
-        .fallback(not_found)
+        .route("/health/ready", get(ready));
+    // 完整响应与保护链尚未就绪；生产入口不会注册会话路由。
+    let app = if session_routes {
+        app.route("/api/user/auth/refresh", post(refresh))
+            .route("/api/user/auth/logout", post(logout))
+            .route("/api/user/sessions", get(sessions))
+    } else {
+        app
+    };
+    app.fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(state)
         .layer(middleware::from_fn(boundary))
@@ -232,20 +241,26 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     }
 }
 
-fn single_header(headers: &HeaderMap, name: header::HeaderName) -> Vec<&str> {
-    headers
-        .get_all(name)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .collect()
+fn single_header(
+    headers: &HeaderMap,
+    name: header::HeaderName,
+) -> Result<Vec<&str>, axum::http::header::ToStrError> {
+    headers.get_all(name).iter().map(HeaderValue::to_str).collect()
 }
 
 /// 仅在 Secure Cookie 模式校验来源；明文本地开发保持原行为。
 fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
     let cookie = state.session_cookie();
-    let host = single_header(headers, header::HOST);
-    let origin = single_header(headers, header::ORIGIN);
-    let referer = single_header(headers, header::REFERER);
+    if !cookie.secure {
+        return true;
+    }
+    let (Ok(host), Ok(origin), Ok(referer)) = (
+        single_header(headers, header::HOST),
+        single_header(headers, header::ORIGIN),
+        single_header(headers, header::REFERER),
+    ) else {
+        return false;
+    };
     let trusted: Vec<&str> = cookie.trusted_origins.iter().map(String::as_str).collect();
     check_session_origin(&OriginRequest {
         secure_cookie: cookie.secure,
@@ -384,7 +399,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 
     // 有有效访问令牌时按其 SID 注销，并只在 Cookie 属于同一会话时清 Cookie。
     if let Some(token) = bearer(&headers)
-        && let Ok(identity) = auth.identify(token, now).await
+        && let Ok(identity) = auth.parse_access(token, now)
     {
         if expected.is_some_and(|value| value != identity.sid.as_str()) {
             return no_store(auth_failure(StatusCode::CONFLICT, "AUTH_SESSION_MISMATCH"));
@@ -402,10 +417,16 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
                 .is_some_and(|(sid, _)| sid == identity.sid.as_str()),
             None => false,
         };
-        if cookie_cleared {
-            let _ = auth
+        if cookie_cleared
+            && auth
                 .logout(raw_cookie.as_deref(), Some(identity.sid.as_str()), now)
-                .await;
+                .await
+                .is_err()
+        {
+            return no_store(auth_failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_INTERNAL_ERROR",
+            ));
         }
         let mut response = success_data(LogoutBody {
             revoked_sid: identity.sid,
@@ -452,11 +473,20 @@ async fn sessions(State(state): State<AppState>, headers: HeaderMap) -> Response
         return no_store(auth_failure(StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED"));
     };
     let now = now_seconds();
-    let Ok(identity) = auth.identify(token, now).await else {
-        return no_store(auth_failure(
-            StatusCode::UNAUTHORIZED,
-            "AUTH_SESSION_REVOKED",
-        ));
+    let identity = match auth.identify(token, now).await {
+        Ok(identity) => identity,
+        Err(SessionAuthError::Storage(_)) => {
+            return no_store(auth_failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_INTERNAL_ERROR",
+            ));
+        }
+        Err(_) => {
+            return no_store(auth_failure(
+                StatusCode::UNAUTHORIZED,
+                "AUTH_SESSION_REVOKED",
+            ));
+        }
     };
     match auth.sessions(&identity, now).await {
         Ok(list) => {
@@ -536,6 +566,91 @@ async fn boundary_with_timeout(request: Request, next: Next, timeout: Duration) 
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    fn auth_state(db: newapi_storage::Database, secure: bool) -> AppState {
+        use newapi_identity::{auth_session::{AuthFence, SessionAuth}, crypto::AuthKeys, sessions::NoCache};
+        AppState::default().bind_auth(
+            std::sync::Arc::new(SessionAuth::with_fence(
+                db,
+                AuthKeys::new("test-session-secret"),
+                AuthFence::Disabled(NoCache::explicitly_disabled()),
+            )),
+            newapi_config::SessionCookieSettings {
+                secure,
+                trusted_origins: vec!["https://console.example".into()],
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn storage_failures_never_become_logout_success_or_session_unauthorized() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
+        pool.close().await;
+        let state = auth_state(newapi_storage::Database::Sqlite(pool), false);
+        let now = now_seconds();
+        let identity = newapi_identity::AuthIdentity {
+            user_id: 1,
+            sid: "ffffffff-ffff-4fff-8fff-ffffffffffff".into(),
+            user_auth_version: 1,
+            session_version: 1,
+        };
+        let token = newapi_identity::crypto::AuthKeys::new("test-session-secret")
+            .issue_access(&identity, now)
+            .unwrap();
+        for path in ["/api/user/auth/logout", "/api/user/sessions"] {
+            let response = build_router(state.clone(), true)
+                .oneshot(Request::builder()
+                    .method(if path.ends_with("logout") { Method::POST } else { Method::GET })
+                    .uri(path)
+                    .header(header::AUTHORIZATION, format!("Bearer {}", token.token.expose_secret()))
+                    .header(header::COOKIE, "new_api_refresh=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.secret")
+                    .body(Body::empty()).unwrap())
+                .await.unwrap();
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(!response.headers().contains_key(header::SET_COOKIE));
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert!(std::str::from_utf8(&body).unwrap().contains("\"code\":\"AUTH_INTERNAL_ERROR\""));
+        }
+        let response = build_router(state, true)
+            .oneshot(Request::builder().method(Method::POST).uri("/api/user/auth/logout")
+                .header(header::COOKIE, "new_api_refresh=ffffffff-ffff-4fff-8fff-ffffffffffff.secret")
+                .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+
+    #[tokio::test]
+    async fn secure_origin_rejects_undecodable_values_without_fallback() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:").unwrap();
+        let state = auth_state(newapi_storage::Database::Sqlite(pool), true);
+        for second_valid in [false, true] {
+            let mut request = Request::builder().method(Method::POST)
+                .uri("/api/user/auth/refresh")
+                .header(header::HOST, "console.example")
+                .header(header::REFERER, "https://console.example/")
+                .body(Body::empty()).unwrap();
+            request.headers_mut().append(header::ORIGIN, HeaderValue::from_bytes(b"\xff").unwrap());
+            if second_valid {
+                request.headers_mut().append(header::ORIGIN, HeaderValue::from_static("https://console.example"));
+            }
+            let response = build_router(state.clone(), true).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert!(std::str::from_utf8(&body).unwrap().contains("\"code\":\"AUTH_ORIGIN_FORBIDDEN\""));
+        }
+    }
+
+    #[tokio::test]
+    async fn incomplete_session_routes_are_not_public() {
+        for (method, path) in [(Method::POST, "/api/user/auth/refresh"), (Method::POST, "/api/user/auth/logout"), (Method::GET, "/api/user/sessions")] {
+            let response = router(AppState::default()).oneshot(Request::builder()
+                .method(method).uri(path).body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+    }
 
     #[test]
     fn cookie_and_bearer_parsing_rejects_ambiguity() {

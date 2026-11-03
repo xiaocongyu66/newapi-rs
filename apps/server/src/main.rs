@@ -15,7 +15,7 @@ async fn main() -> ExitCode {
     // can contain SQL, credentials or URIs. RUST_LOG is deliberately not used.
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter("off,newapi_server=info")
+        .with_env_filter("off,newapi_server=info,newapi_identity::auth_session=error")
         .with_target(false)
         .init();
     install_safe_panic_hook();

@@ -1,5 +1,7 @@
 //! 浏览器会话的刷新与注销编排；不伪造用户资料，不记录原始凭证。
 //! 时间由调用方注入，撤销必须经过显式 fence，失败不得降级为无缓存。
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use newapi_storage::Database;
 
 use crate::crypto::{AuthKeys, RefreshCredential};
@@ -89,6 +91,7 @@ pub struct SessionAuth<F: RevocationFence> {
     repository: SessionRepository,
     keys: AuthKeys,
     fence: F,
+    terminal_fence_failures: AtomicU64,
 }
 
 impl SessionAuth<AuthFence> {
@@ -111,6 +114,24 @@ impl<F: RevocationFence> SessionAuth<F> {
             repository: SessionRepository::new(db),
             keys,
             fence,
+            terminal_fence_failures: AtomicU64::new(0),
+        }
+    }
+
+    pub fn terminal_fence_failures(&self) -> u64 {
+        self.terminal_fence_failures.load(Ordering::Relaxed)
+    }
+
+    fn observe_revoke(&self, report: crate::sessions::RevokeReport) {
+        self.terminal_fence_failures
+            .fetch_add(report.terminal_fence_failures, Ordering::Relaxed);
+        if report.terminal_fence_failures > 0 {
+            tracing::error!(
+                target: "newapi_identity::auth_session",
+                event = "terminal_fence_failure",
+                failures = report.terminal_fence_failures,
+                "已提交会话撤销的终态缓存写入失败"
+            );
         }
     }
 
@@ -156,7 +177,8 @@ impl<F: RevocationFence> SessionAuth<F> {
                 }
                 self.issue(record, &next, now)
             }
-            Ok(RefreshOutcome::Reused(_)) | Ok(RefreshOutcome::UserSecurityChanged(_)) => {
+            Ok(RefreshOutcome::Reused(report)) | Ok(RefreshOutcome::UserSecurityChanged(report)) => {
+                self.observe_revoke(report);
                 Err(SessionAuthError::SessionRevoked)
             }
             Err(error) => Err(error.into()),
@@ -195,7 +217,10 @@ impl<F: RevocationFence> SessionAuth<F> {
             .revoke_by_refresh(&self.fence, credential.sid(), &presented, "logout", now)
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(report) => {
+                self.observe_revoke(report);
+                Ok(())
+            }
             Err(SessionError::Invalid | SessionError::NotFound | SessionError::Inactive) => Ok(()),
             Err(error) => Err(error.into()),
         }
@@ -207,15 +232,22 @@ impl<F: RevocationFence> SessionAuth<F> {
         raw_access: &str,
         now: i64,
     ) -> Result<AuthIdentity, SessionAuthError> {
-        let identity = self
-            .keys
-            .parse_access(raw_access, now)
-            .map_err(|_| SessionAuthError::SessionRevoked)?;
+        let identity = self.parse_access(raw_access, now)?;
         self.validate(&identity, now).await?;
         Ok(identity)
     }
 
-    /// 按访问令牌绑定的 SID 注销；调用方须已通过 identify 验证。
+    pub fn parse_access(
+        &self,
+        raw_access: &str,
+        now: i64,
+    ) -> Result<AuthIdentity, SessionAuthError> {
+        self.keys
+            .parse_access(raw_access, now)
+            .map_err(|_| SessionAuthError::SessionRevoked)
+    }
+
+    /// 按已验签访问令牌绑定的用户与 SID 注销，不依赖会话仍活跃。
     pub async fn revoke_session(
         &self,
         identity: &AuthIdentity,
@@ -224,7 +256,7 @@ impl<F: RevocationFence> SessionAuth<F> {
         self.repository
             .revoke(&self.fence, identity.user_id, &identity.sid, "logout", now)
             .await
-            .map(|_| ())
+            .map(|report| self.observe_revoke(report))
             .map_err(SessionAuthError::from)
     }
 

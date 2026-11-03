@@ -6,7 +6,8 @@
 
 - 身份纯算法、setup 仓储当前测试及 security 纯决策：独立限定 PASS，提交 `72cf7c93a3a9d5d7ce7eb45063d8b0f3f7da4f69`，Actions run `41469554946` attempt 1。PG9.6/17 各46个 workspace 测试通过，无失败/忽略；fmt/check/clippy 与已提交根锁验证通过。Go crypto 与40个 Origin 输入均实际生成并由Rust消费；主执行者抽查状态、测试统计及锁摘要一致。
 - 会话 DB 仓储及显式撤销 fence 端口：提交 `3656ce2293cfea935c5d419d634bd7e89c5db7c3`，尚待远程及独立验收；不包含真实 Redis active-cache/Lua/TTL、users 缓存栅栏或认证 HTTP 接线。
-- 会话编排（refresh/logout/identify/sessions）+ 三个会话端点：提交 `6bb5da6` 及后续，尚待远程与独立验收。端点已接线 Cookie（`new_api_refresh`、Path=`/api/user/auth`、HttpOnly、SameSite=Strict、Secure 可配）、Secure 模式 Origin 守卫、错误码映射。**未完成**：响应未包含 `user:SelfUser` 投影（依赖未移植的权限/额度端口）；`GET /api/user/sessions` 未区分 UserAuth 401 与缺 browser-session 403 `AUTH_SESSION_REQUIRED`；DELETE/revoke-others 未实现；限流、Turnstile、login/2FA 仍由相邻切片负责。Redis 仅在配置 `REDIS_CONN_STRING` 时启用，连接失败终止启动而非静默降级。
+- `23e84de` / run `41587051202` 虽通过两个矩阵各72项测试，独立复核仍为 FAIL：注销存储错误回退、列表故障误401、Origin非法头值丢弃、终态fence报告丢失。当前修复切片尚未远程验收；三个会话端点已从生产router移除，仅供隔离测试。SelfUser、限流和完整UserAuth保护补齐前不得重新开放，不增加运行期开关绕过。
+- 会话编排（refresh/logout/identify/sessions）+ 三个会话端点（以下描述实现草稿，不代表已开放）：提交 `6bb5da6` 及后续，尚待远程与独立验收。端点已接线 Cookie（`new_api_refresh`、Path=`/api/user/auth`、HttpOnly、SameSite=Strict、Secure 可配）、Secure 模式 Origin 守卫、错误码映射。**未完成**：响应未包含 `user:SelfUser` 投影（依赖未移植的权限/额度端口）；`GET /api/user/sessions` 未区分 UserAuth 401 与缺 browser-session 403 `AUTH_SESSION_REQUIRED`；DELETE/revoke-others 未实现；限流、Turnstile、login/2FA 仍由相邻切片负责。Redis 仅在配置 `REDIS_CONN_STRING` 时启用，连接失败终止启动而非静默降级。
 - 未关闭问题：run `41464623155` 中 SQLite setup 全量测试曾出现失败。后续诊断和格式提交中未复现，尚无根因和生产修复证据；保留测试与安全动作/错误码诊断，禁止将单次绿灯标为修复。
 - 会话元数据 UTF-8 截断兼容边界仍待决定；不将内部 `MetadataEncodingUnsupported` 直接映射为HTTP 400，也不静默丢弃或替换原数据。
 - 本记录不是整个P2验收。登录、刷新、注销及会话管理端点必须在权威会话/用户状态与撤销链完整接入后开放；后续邮件、验证码、2FA、API Key、权限、限流等仍依主计划完成。

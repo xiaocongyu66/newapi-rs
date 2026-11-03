@@ -43,6 +43,80 @@ async fn fixture() -> (Database, SessionAuth<newapi_identity::sessions::NoCache>
     (db, auth)
 }
 
+struct TerminalFailure;
+
+impl newapi_identity::sessions::RevocationFence for TerminalFailure {
+    async fn revoking(
+        &self,
+        _: &newapi_identity::sessions::SessionMetadata,
+        _: i64,
+        _: &str,
+    ) -> Result<(), newapi_identity::sessions::SessionError> {
+        Ok(())
+    }
+
+    async fn revoked(
+        &self,
+        _: &newapi_identity::sessions::SessionMetadata,
+        _: i64,
+    ) -> Result<(), newapi_identity::sessions::SessionError> {
+        Err(newapi_identity::sessions::SessionError::Fence)
+    }
+}
+
+#[tokio::test]
+async fn committed_logout_preserves_terminal_failure_observability() {
+    let (db, _) = fixture().await;
+    let first = credential();
+    seed(&db, &first).await;
+    let auth = SessionAuth::new(db.clone(), AuthKeys::new("fixture-session-secret"), TerminalFailure);
+    auth.logout(Some(first.raw().expose_secret()), None, NOW + 1)
+        .await.expect("已提交撤销不伪造回滚");
+    assert_eq!(auth.terminal_fence_failures(), 1);
+    let record = SessionRepository::new(db.clone()).authoritative(first.sid())
+        .await.unwrap().unwrap();
+    assert_eq!(record.metadata.status, "revoked");
+    db.close().await;
+}
+
+#[tokio::test]
+async fn bearer_revoke_and_refresh_reuse_preserve_terminal_failures() {
+    let (db, _) = fixture().await;
+    let auth = SessionAuth::new(
+        db.clone(),
+        AuthKeys::new("fixture-session-secret"),
+        TerminalFailure,
+    );
+    let bearer_session = credential();
+    seed(&db, &bearer_session).await;
+    auth.revoke_session(
+        &newapi_identity::AuthIdentity {
+            user_id: 1,
+            sid: bearer_session.sid().into(),
+            user_auth_version: 3,
+            session_version: 1,
+        },
+        NOW + 1,
+    ).await.expect("撤销已提交");
+    assert_eq!(auth.terminal_fence_failures(), 1);
+
+    let reused = credential();
+    seed(&db, &reused).await;
+    auth.refresh(reused.raw().expose_secret(), None, NOW + 1)
+        .await.expect("首次刷新");
+    assert_eq!(
+        auth.refresh(reused.raw().expose_secret(), None, NOW + 32).await.err(),
+        Some(SessionAuthError::SessionRevoked),
+    );
+    assert_eq!(auth.terminal_fence_failures(), 2);
+    for sid in [bearer_session.sid(), reused.sid()] {
+        let record = SessionRepository::new(db.clone()).authoritative(sid)
+            .await.unwrap().unwrap();
+        assert_eq!(record.metadata.status, "revoked");
+    }
+    db.close().await;
+}
+
 fn digest(key: &AuthKeys, secret: &str) -> RefreshHash {
     let value = key.refresh_hash(secret).expose_secret().to_owned();
     RefreshHash::from_lower_hex(value).expect("digest")
