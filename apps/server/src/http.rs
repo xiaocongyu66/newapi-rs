@@ -245,7 +245,11 @@ fn single_header(
     headers: &HeaderMap,
     name: header::HeaderName,
 ) -> Result<Vec<&str>, axum::http::header::ToStrError> {
-    headers.get_all(name).iter().map(HeaderValue::to_str).collect()
+    headers
+        .get_all(name)
+        .iter()
+        .map(HeaderValue::to_str)
+        .collect()
 }
 
 /// 仅在 Secure Cookie 模式校验来源；明文本地开发保持原行为。
@@ -568,7 +572,11 @@ mod tests {
     use tower::ServiceExt;
 
     fn auth_state(db: newapi_storage::Database, secure: bool) -> AppState {
-        use newapi_identity::{auth_session::{AuthFence, SessionAuth}, crypto::AuthKeys, sessions::NoCache};
+        use newapi_identity::{
+            auth_session::{AuthFence, SessionAuth},
+            crypto::AuthKeys,
+            sessions::NoCache,
+        };
         AppState::default().bind_auth(
             std::sync::Arc::new(SessionAuth::with_fence(
                 db,
@@ -601,22 +609,50 @@ mod tests {
             .unwrap();
         for path in ["/api/user/auth/logout", "/api/user/sessions"] {
             let response = build_router(state.clone(), true)
-                .oneshot(Request::builder()
-                    .method(if path.ends_with("logout") { Method::POST } else { Method::GET })
-                    .uri(path)
-                    .header(header::AUTHORIZATION, format!("Bearer {}", token.token.expose_secret()))
-                    .header(header::COOKIE, "new_api_refresh=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.secret")
-                    .body(Body::empty()).unwrap())
-                .await.unwrap();
+                .oneshot(
+                    Request::builder()
+                        .method(if path.ends_with("logout") {
+                            Method::POST
+                        } else {
+                            Method::GET
+                        })
+                        .uri(path)
+                        .header(
+                            header::AUTHORIZATION,
+                            format!("Bearer {}", token.token.expose_secret()),
+                        )
+                        .header(
+                            header::COOKIE,
+                            "new_api_refresh=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.secret",
+                        )
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
             assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
             assert!(!response.headers().contains_key(header::SET_COOKIE));
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
-            assert!(std::str::from_utf8(&body).unwrap().contains("\"code\":\"AUTH_INTERNAL_ERROR\""));
+            assert!(
+                std::str::from_utf8(&body)
+                    .unwrap()
+                    .contains("\"code\":\"AUTH_INTERNAL_ERROR\"")
+            );
         }
         let response = build_router(state, true)
-            .oneshot(Request::builder().method(Method::POST).uri("/api/user/auth/logout")
-                .header(header::COOKIE, "new_api_refresh=ffffffff-ffff-4fff-8fff-ffffffffffff.secret")
-                .body(Body::empty()).unwrap()).await.unwrap();
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/user/auth/logout")
+                    .header(
+                        header::COOKIE,
+                        "new_api_refresh=ffffffff-ffff-4fff-8fff-ffffffffffff.secret",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!response.headers().contains_key(header::SET_COOKIE));
     }
@@ -624,30 +660,57 @@ mod tests {
     #[tokio::test]
     async fn secure_origin_rejects_undecodable_values_without_fallback() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect_lazy("sqlite::memory:").unwrap();
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
         let state = auth_state(newapi_storage::Database::Sqlite(pool), true);
         for second_valid in [false, true] {
-            let mut request = Request::builder().method(Method::POST)
+            let mut request = Request::builder()
+                .method(Method::POST)
                 .uri("/api/user/auth/refresh")
                 .header(header::HOST, "console.example")
                 .header(header::REFERER, "https://console.example/")
-                .body(Body::empty()).unwrap();
-            request.headers_mut().append(header::ORIGIN, HeaderValue::from_bytes(b"\xff").unwrap());
+                .body(Body::empty())
+                .unwrap();
+            request
+                .headers_mut()
+                .append(header::ORIGIN, HeaderValue::from_bytes(b"\xff").unwrap());
             if second_valid {
-                request.headers_mut().append(header::ORIGIN, HeaderValue::from_static("https://console.example"));
+                request.headers_mut().append(
+                    header::ORIGIN,
+                    HeaderValue::from_static("https://console.example"),
+                );
             }
-            let response = build_router(state.clone(), true).oneshot(request).await.unwrap();
+            let response = build_router(state.clone(), true)
+                .oneshot(request)
+                .await
+                .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
-            assert!(std::str::from_utf8(&body).unwrap().contains("\"code\":\"AUTH_ORIGIN_FORBIDDEN\""));
+            assert!(
+                std::str::from_utf8(&body)
+                    .unwrap()
+                    .contains("\"code\":\"AUTH_ORIGIN_FORBIDDEN\"")
+            );
         }
     }
 
     #[tokio::test]
     async fn incomplete_session_routes_are_not_public() {
-        for (method, path) in [(Method::POST, "/api/user/auth/refresh"), (Method::POST, "/api/user/auth/logout"), (Method::GET, "/api/user/sessions")] {
-            let response = router(AppState::default()).oneshot(Request::builder()
-                .method(method).uri(path).body(Body::empty()).unwrap()).await.unwrap();
+        for (method, path) in [
+            (Method::POST, "/api/user/auth/refresh"),
+            (Method::POST, "/api/user/auth/logout"),
+            (Method::GET, "/api/user/sessions"),
+        ] {
+            let response = router(AppState::default())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
     }

@@ -69,12 +69,20 @@ async fn committed_logout_preserves_terminal_failure_observability() {
     let (db, _) = fixture().await;
     let first = credential();
     seed(&db, &first).await;
-    let auth = SessionAuth::new(db.clone(), AuthKeys::new("fixture-session-secret"), TerminalFailure);
+    let auth = SessionAuth::new(
+        db.clone(),
+        AuthKeys::new("fixture-session-secret"),
+        TerminalFailure,
+    );
     auth.logout(Some(first.raw().expose_secret()), None, NOW + 1)
-        .await.expect("已提交撤销不伪造回滚");
+        .await
+        .expect("已提交撤销不伪造回滚");
     assert_eq!(auth.terminal_fence_failures(), 1);
-    let record = SessionRepository::new(db.clone()).authoritative(first.sid())
-        .await.unwrap().unwrap();
+    let record = SessionRepository::new(db.clone())
+        .authoritative(first.sid())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.metadata.status, "revoked");
     db.close().await;
 }
@@ -97,21 +105,29 @@ async fn bearer_revoke_and_refresh_reuse_preserve_terminal_failures() {
             session_version: 1,
         },
         NOW + 1,
-    ).await.expect("撤销已提交");
+    )
+    .await
+    .expect("撤销已提交");
     assert_eq!(auth.terminal_fence_failures(), 1);
 
     let reused = credential();
     seed(&db, &reused).await;
     auth.refresh(reused.raw().expose_secret(), None, NOW + 1)
-        .await.expect("首次刷新");
+        .await
+        .expect("首次刷新");
     assert_eq!(
-        auth.refresh(reused.raw().expose_secret(), None, NOW + 32).await.err(),
+        auth.refresh(reused.raw().expose_secret(), None, NOW + 32)
+            .await
+            .err(),
         Some(SessionAuthError::SessionRevoked),
     );
     assert_eq!(auth.terminal_fence_failures(), 2);
     for sid in [bearer_session.sid(), reused.sid()] {
-        let record = SessionRepository::new(db.clone()).authoritative(sid)
-            .await.unwrap().unwrap();
+        let record = SessionRepository::new(db.clone())
+            .authoritative(sid)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(record.metadata.status, "revoked");
     }
     db.close().await;

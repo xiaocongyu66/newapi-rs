@@ -177,7 +177,8 @@ impl<F: RevocationFence> SessionAuth<F> {
                 }
                 self.issue(record, &next, now)
             }
-            Ok(RefreshOutcome::Reused(report)) | Ok(RefreshOutcome::UserSecurityChanged(report)) => {
+            Ok(RefreshOutcome::Reused(report))
+            | Ok(RefreshOutcome::UserSecurityChanged(report)) => {
                 self.observe_revoke(report);
                 Err(SessionAuthError::SessionRevoked)
             }
