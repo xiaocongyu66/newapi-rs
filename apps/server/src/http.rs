@@ -530,23 +530,22 @@ async fn session_identity(
     state: &AppState,
     headers: &HeaderMap,
     now: i64,
-) -> Result<newapi_identity::AuthIdentity, Response> {
-    let auth = state.auth().ok_or_else(|| {
-        no_store(auth_failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "AUTH_INTERNAL_ERROR",
-        ))
-    })?;
+) -> Result<newapi_identity::AuthIdentity, (StatusCode, &'static str)> {
+    let auth = state.auth().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "AUTH_INTERNAL_ERROR",
+    ))?;
     let token = bearer(headers)
-        .ok_or_else(|| no_store(auth_failure(StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED")))?;
-    auth.identify(token, now).await.map_err(|error| {
-        let (status, code) = match error {
-            SessionAuthError::Storage(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
-            }
-            _ => (StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED"),
-        };
-        no_store(auth_failure(status, code))
+        .ok_or((StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED"))?;
+    auth.identify(token, now).await.map_err(|error| match error {
+        SessionAuthError::Storage(_) | SessionAuthError::BatchFailed { .. } => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
+        }
+        SessionAuthError::RefreshInvalid | SessionAuthError::SessionRevoked
+        | SessionAuthError::SessionMismatch | SessionAuthError::Race
+        | SessionAuthError::SessionIdRequired => {
+            (StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED")
+        }
     })
 }
 
@@ -558,7 +557,7 @@ async fn delete_session(
     let now = now_seconds();
     let identity = match session_identity(&state, &headers, now).await {
         Ok(identity) => identity,
-        Err(response) => return response,
+        Err((status, code)) => return no_store(auth_failure(status, code)),
     };
     let sid = sid.trim();
     if sid.is_empty() {
@@ -611,7 +610,7 @@ async fn revoke_other_sessions(State(state): State<AppState>, headers: HeaderMap
     let now = now_seconds();
     let identity = match session_identity(&state, &headers, now).await {
         Ok(identity) => identity,
-        Err(response) => return response,
+        Err((status, code)) => return no_store(auth_failure(status, code)),
     };
     let auth = state.auth().expect("身份验证已确认服务存在");
     match auth.revoke_others(&identity, now).await {
