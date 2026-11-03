@@ -1,7 +1,5 @@
 //! 浏览器会话的刷新与注销编排；不伪造用户资料，不记录原始凭证。
 //! 时间由调用方注入，撤销必须经过显式 fence，失败不得降级为无缓存。
-use std::future::Future;
-
 use newapi_storage::Database;
 
 use crate::crypto::{AuthKeys, RefreshCredential};
@@ -62,30 +60,26 @@ pub enum AuthFence {
 }
 
 impl RevocationFence for AuthFence {
-    fn revoking(
+    async fn revoking(
         &self,
         session: &crate::sessions::SessionMetadata,
         now: i64,
         reason: &str,
-    ) -> impl Future<Output = Result<(), SessionError>> + Send {
-        async move {
-            match self {
-                Self::Disabled(fence) => fence.revoking(session, now, reason).await,
-                Self::Redis(fence) => fence.revoking(session, now, reason).await,
-            }
+    ) -> Result<(), SessionError> {
+        match self {
+            Self::Disabled(fence) => fence.revoking(session, now, reason).await,
+            Self::Redis(fence) => fence.revoking(session, now, reason).await,
         }
     }
 
-    fn revoked(
+    async fn revoked(
         &self,
         session: &crate::sessions::SessionMetadata,
         now: i64,
-    ) -> impl Future<Output = Result<(), SessionError>> + Send {
-        async move {
-            match self {
-                Self::Disabled(fence) => fence.revoked(session, now).await,
-                Self::Redis(fence) => fence.revoked(session, now).await,
-            }
+    ) -> Result<(), SessionError> {
+        match self {
+            Self::Disabled(fence) => fence.revoked(session, now).await,
+            Self::Redis(fence) => fence.revoked(session, now).await,
         }
     }
 }
@@ -130,10 +124,10 @@ impl<F: RevocationFence> SessionAuth<F> {
     ) -> Result<RefreshResult, SessionAuthError> {
         let credential = RefreshCredential::parse(raw_refresh_token)
             .map_err(|_| SessionAuthError::RefreshInvalid)?;
-        if let Some(expected) = expected_sid.map(str::trim).filter(|v| !v.is_empty()) {
-            if expected != credential.sid() {
-                return Err(SessionAuthError::SessionMismatch);
-            }
+        if let Some(expected) = expected_sid.map(str::trim).filter(|v| !v.is_empty())
+            && expected != credential.sid()
+        {
+            return Err(SessionAuthError::SessionMismatch);
         }
         let presented = hash(&self.keys, credential.secret());
         let next = self.keys.next_refresh(&credential);
@@ -182,10 +176,10 @@ impl<F: RevocationFence> SessionAuth<F> {
         let Ok(credential) = RefreshCredential::parse(raw) else {
             return Ok(());
         };
-        if let Some(expected) = expected_sid.map(str::trim).filter(|v| !v.is_empty()) {
-            if expected != credential.sid() {
-                return Err(SessionAuthError::SessionMismatch);
-            }
+        if let Some(expected) = expected_sid.map(str::trim).filter(|v| !v.is_empty())
+            && expected != credential.sid()
+        {
+            return Err(SessionAuthError::SessionMismatch);
         }
         if self
             .repository

@@ -370,6 +370,18 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .filter(|value| !value.is_empty());
     let raw_cookie = cookie_value(&headers, REFRESH_COOKIE);
 
+    // 原实现先比较 Cookie SID 与期望 SID：不一致即 409，且不清 Cookie。
+    if let Some(expected) = expected
+        && let Some(cookie_sid) = raw_cookie.as_deref().and_then(|raw| {
+            newapi_identity::crypto::RefreshCredential::parse(raw)
+                .ok()
+                .map(|credential| credential.sid().to_owned())
+        })
+        && expected != cookie_sid.as_str()
+    {
+        return no_store(auth_failure(StatusCode::CONFLICT, "AUTH_SESSION_MISMATCH"));
+    }
+
     // 有有效访问令牌时按其 SID 注销，并只在 Cookie 属于同一会话时清 Cookie。
     if let Some(token) = bearer(&headers) {
         if let Ok(identity) = auth.identify(token, now).await {
