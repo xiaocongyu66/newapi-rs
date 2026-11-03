@@ -22,7 +22,10 @@ fn validation_uses_fixed_error_and_rejects_zero_ttl_or_entries() {
     }
 }
 
-fn request<'a>(user_scope: CacheScope<'a>, channel_scope: CacheScope<'a>) -> ResponseCacheRequest<'a> {
+fn request<'a>(
+    user_scope: CacheScope<'a>,
+    channel_scope: CacheScope<'a>,
+) -> ResponseCacheRequest<'a> {
     ResponseCacheRequest {
         method: "POST",
         streaming: false,
@@ -35,20 +38,93 @@ fn request<'a>(user_scope: CacheScope<'a>, channel_scope: CacheScope<'a>) -> Res
 
 #[test]
 fn eligibility_requires_non_streaming_complete_material_and_authenticated_scopes() {
-    assert!(request(CacheScope::Unauthenticated, CacheScope::Authenticated("channel-id")).cache_key().is_err());
-    assert!(request(CacheScope::Authenticated("user-id"), CacheScope::Unauthenticated).cache_key().is_err());
-    assert!(request(CacheScope::Authenticated("user-id"), CacheScope::Authenticated("channel-id")).cache_key().is_ok());
-    assert!(ResponseCacheRequest { streaming: true, ..request(CacheScope::Authenticated("u"), CacheScope::Authenticated("c")) }.cache_key().is_err());
-    assert!(ResponseCacheRequest { system_prompt: None, preset: None, ..request(CacheScope::Authenticated("u"), CacheScope::Authenticated("c")) }.cache_key().is_err());
+    assert!(
+        request(
+            CacheScope::Unauthenticated,
+            CacheScope::Authenticated("channel-id")
+        )
+        .cache_key()
+        .is_err()
+    );
+    assert!(
+        request(
+            CacheScope::Authenticated("user-id"),
+            CacheScope::Unauthenticated
+        )
+        .cache_key()
+        .is_err()
+    );
+    assert!(
+        request(
+            CacheScope::Authenticated("user-id"),
+            CacheScope::Authenticated("channel-id")
+        )
+        .cache_key()
+        .is_ok()
+    );
+    assert!(
+        ResponseCacheRequest {
+            streaming: true,
+            ..request(
+                CacheScope::Authenticated("u"),
+                CacheScope::Authenticated("c")
+            )
+        }
+        .cache_key()
+        .is_err()
+    );
+    assert!(
+        ResponseCacheRequest {
+            system_prompt: None,
+            preset: None,
+            ..request(
+                CacheScope::Authenticated("u"),
+                CacheScope::Authenticated("c")
+            )
+        }
+        .cache_key()
+        .is_err()
+    );
 }
 
 #[test]
 fn key_changes_with_method_material_and_scopes_without_exposing_values() {
-    let base = request(CacheScope::Authenticated("user-secret"), CacheScope::Authenticated("channel-secret")).cache_key().unwrap();
-    let changed_method = ResponseCacheRequest { method: "GET", ..request(CacheScope::Authenticated("user-secret"), CacheScope::Authenticated("channel-secret")) }.cache_key().unwrap();
-    let changed_prompt = ResponseCacheRequest { system_prompt: Some("other"), ..request(CacheScope::Authenticated("user-secret"), CacheScope::Authenticated("channel-secret")) }.cache_key().unwrap();
-    let changed_user = request(CacheScope::Authenticated("other-user"), CacheScope::Authenticated("channel-secret")).cache_key().unwrap();
-    let changed_channel = request(CacheScope::Authenticated("user-secret"), CacheScope::Authenticated("other-channel")).cache_key().unwrap();
+    let base = request(
+        CacheScope::Authenticated("user-secret"),
+        CacheScope::Authenticated("channel-secret"),
+    )
+    .cache_key()
+    .unwrap();
+    let changed_method = ResponseCacheRequest {
+        method: "GET",
+        ..request(
+            CacheScope::Authenticated("user-secret"),
+            CacheScope::Authenticated("channel-secret"),
+        )
+    }
+    .cache_key()
+    .unwrap();
+    let changed_prompt = ResponseCacheRequest {
+        system_prompt: Some("other"),
+        ..request(
+            CacheScope::Authenticated("user-secret"),
+            CacheScope::Authenticated("channel-secret"),
+        )
+    }
+    .cache_key()
+    .unwrap();
+    let changed_user = request(
+        CacheScope::Authenticated("other-user"),
+        CacheScope::Authenticated("channel-secret"),
+    )
+    .cache_key()
+    .unwrap();
+    let changed_channel = request(
+        CacheScope::Authenticated("user-secret"),
+        CacheScope::Authenticated("other-channel"),
+    )
+    .cache_key()
+    .unwrap();
     assert_ne!(base, changed_method);
     assert_ne!(base, changed_prompt);
     assert_ne!(base, changed_user);

@@ -414,7 +414,10 @@ async fn identify_rejects_disabled_and_soft_deleted_users_without_storage_classi
             "deleted_at" => "UPDATE users SET deleted_at=1 WHERE id=1",
             _ => unreachable!(),
         };
-        sqlx::query(query).execute(pool).await.expect("更新用户状态");
+        sqlx::query(query)
+            .execute(pool)
+            .await
+            .expect("更新用户状态");
         assert_eq!(
             auth.identify(issued.access_token.expose_secret(), NOW + 2)
                 .await

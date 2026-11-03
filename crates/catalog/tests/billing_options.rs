@@ -1,5 +1,5 @@
 use newapi_catalog::{
-    plan_billing_options_merge, BillingSettingRecord, LegacyBillingRecord, MergeError, PlanStep,
+    BillingSettingRecord, LegacyBillingRecord, MergeError, PlanStep, plan_billing_options_merge,
 };
 
 fn legacy(model: &str, mode: Option<&str>, expr: Option<&str>) -> LegacyBillingRecord {
@@ -48,7 +48,10 @@ fn malformed_inputs_fail_without_partial_success() {
     ));
     assert!(matches!(
         plan_billing_options_merge(
-            &[legacy("same", Some("a"), None), legacy("same", Some("b"), None)],
+            &[
+                legacy("same", Some("a"), None),
+                legacy("same", Some("b"), None)
+            ],
             &[]
         ),
         Err(MergeError::DuplicateLegacyModel)
@@ -56,7 +59,10 @@ fn malformed_inputs_fail_without_partial_success() {
     assert!(matches!(
         plan_billing_options_merge(
             &[],
-            &[target("same", Some("a"), None), target("same", None, Some("b"))]
+            &[
+                target("same", Some("a"), None),
+                target("same", None, Some("b"))
+            ]
         ),
         Err(MergeError::DuplicateTargetModel)
     ));

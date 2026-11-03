@@ -47,8 +47,12 @@ impl ChannelPromptSettings {
 fn builtin_preset(name: &str) -> Option<&'static str> {
     match name {
         "default" => Some("You are a helpful, accurate assistant."),
-        "coding" => Some("You are a careful software engineering assistant. Provide correct, maintainable code."),
-        "reasoning" => Some("You are a rigorous reasoning assistant. State assumptions and check conclusions."),
+        "coding" => Some(
+            "You are a careful software engineering assistant. Provide correct, maintainable code.",
+        ),
+        "reasoning" => {
+            Some("You are a rigorous reasoning assistant. State assumptions and check conclusions.")
+        }
         _ => None,
     }
 }

@@ -57,7 +57,10 @@ pub fn parse_authorization(headers: &HeaderMap) -> Result<ParsedCredential, Auth
         if token.is_empty() {
             return Err(AuthHeaderError::Empty);
         }
-        if token.split(go_space).any(|part| part.eq_ignore_ascii_case("Bearer")) {
+        if token
+            .split(go_space)
+            .any(|part| part.eq_ignore_ascii_case("Bearer"))
+        {
             return Err(AuthHeaderError::Multiple);
         }
         return Ok(AuthCredential::Bearer(token.to_owned()));
@@ -84,7 +87,9 @@ pub fn map_user_auth_error(error: UserAuthError) -> (StatusCode, &'static str) {
 pub fn require_session(kind: CredentialKind) -> Result<(), (StatusCode, &'static str)> {
     match kind {
         CredentialKind::DashboardSession => Ok(()),
-        CredentialKind::PersonalAccessToken => Err((StatusCode::FORBIDDEN, "AUTH_SESSION_REQUIRED")),
+        CredentialKind::PersonalAccessToken => {
+            Err((StatusCode::FORBIDDEN, "AUTH_SESSION_REQUIRED"))
+        }
     }
 }
 
@@ -125,14 +130,26 @@ mod tests {
         for scheme in ["Bearer", "BEARER", "bearer", "bEaReR"] {
             assert_credential(&format!("{scheme} opaque.+/="), true, "opaque.+/=");
         }
-        assert_credential("Bearer eyJhbGci.opaque.signature", true, "eyJhbGci.opaque.signature");
-        assert_credential("eyJhbGci.opaque.signature", false, "eyJhbGci.opaque.signature");
+        assert_credential(
+            "Bearer eyJhbGci.opaque.signature",
+            true,
+            "eyJhbGci.opaque.signature",
+        );
+        assert_credential(
+            "eyJhbGci.opaque.signature",
+            false,
+            "eyJhbGci.opaque.signature",
+        );
         assert_credential("opaque.+/=", false, "opaque.+/=");
     }
 
     #[test]
     fn scheme_separators_follow_go_but_token_bytes_are_preserved() {
-        assert_credential(" \tBEARER\t \topaque +/=.\tend  ", true, "opaque +/=.\tend  ");
+        assert_credential(
+            " \tBEARER\t \topaque +/=.\tend  ",
+            true,
+            "opaque +/=.\tend  ",
+        );
         assert_credential("Bearer opaque  ", true, "opaque  ");
         assert_credential("  opaque.+/=\t", false, "  opaque.+/=\t");
         assert_credential("Bearerish", false, "Bearerish");
@@ -148,7 +165,10 @@ mod tests {
             assert_error(&headers(value), AuthHeaderError::Unsupported);
         }
         let mut invalid = HeaderMap::new();
-        invalid.insert(AUTHORIZATION, HeaderValue::from_bytes(b"Bearer \xff").unwrap());
+        invalid.insert(
+            AUTHORIZATION,
+            HeaderValue::from_bytes(b"Bearer \xff").unwrap(),
+        );
         assert_error(&invalid, AuthHeaderError::Unsupported);
     }
 
@@ -187,11 +207,31 @@ mod tests {
     #[test]
     fn user_auth_errors_have_fixed_status_and_code() {
         for (error, status, code) in [
-            (UserAuthError::InvalidCredential, StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED"),
-            (UserAuthError::UserDisabled, StatusCode::UNAUTHORIZED, "AUTH_USER_DISABLED"),
-            (UserAuthError::UserInvalid, StatusCode::UNAUTHORIZED, "AUTH_USER_INVALID"),
-            (UserAuthError::InsufficientRole, StatusCode::FORBIDDEN, "AUTH_INSUFFICIENT_PRIVILEGE"),
-            (UserAuthError::Storage, StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR"),
+            (
+                UserAuthError::InvalidCredential,
+                StatusCode::UNAUTHORIZED,
+                "AUTH_UNAUTHORIZED",
+            ),
+            (
+                UserAuthError::UserDisabled,
+                StatusCode::UNAUTHORIZED,
+                "AUTH_USER_DISABLED",
+            ),
+            (
+                UserAuthError::UserInvalid,
+                StatusCode::UNAUTHORIZED,
+                "AUTH_USER_INVALID",
+            ),
+            (
+                UserAuthError::InsufficientRole,
+                StatusCode::FORBIDDEN,
+                "AUTH_INSUFFICIENT_PRIVILEGE",
+            ),
+            (
+                UserAuthError::Storage,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_INTERNAL_ERROR",
+            ),
         ] {
             assert_eq!(map_user_auth_error(error), (status, code));
         }

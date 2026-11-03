@@ -28,7 +28,10 @@ fn checked<T>(result: Result<T, sqlx::Error>, action: &'static str) -> T {
 
 async fn execute(db: &Database, statement: &str) {
     backend!(db, pool, {
-        checked(sqlx::query(statement).execute(pool).await, "execute fixture SQL");
+        checked(
+            sqlx::query(statement).execute(pool).await,
+            "execute fixture SQL",
+        );
     });
 }
 
@@ -81,8 +84,8 @@ async fn scenarios(db: &Database) {
     // 长度、base64、点号和空白都不属于仓储的格式规则。
     for raw in ["x", "a.b.c", " 特殊.' OR 1=1 -- ", "", "Bearer raw"] {
         seed(db, Some(raw)).await;
-        let auth = checked(repo.by_token(raw).await, "exact token lookup")
-            .expect("matched user snapshot");
+        let auth =
+            checked(repo.by_token(raw).await, "exact token lookup").expect("matched user snapshot");
         assert_eq!(auth, identity());
         assert_eq!(authorize(&auth, 10), Ok(()));
         assert!(checked(repo.by_token(&format!("{raw}!")).await, "changed token").is_none());
@@ -98,11 +101,15 @@ async fn scenarios(db: &Database) {
     let raw = "synthetic-pat.fixture";
     seed(db, Some(raw)).await;
     execute(db, "UPDATE users SET role=100,status=2,auth_version=8").await;
-    let auth = checked(repo.by_token(raw).await, "fresh authoritative snapshot")
-        .expect("current user");
+    let auth =
+        checked(repo.by_token(raw).await, "fresh authoritative snapshot").expect("current user");
     assert_eq!((auth.role, auth.status, auth.auth_version), (100, 2, 8));
     assert_eq!(authorize(&auth, 1), Err(UserAuthError::UserDisabled));
-    execute(db, "UPDATE users SET deleted_at=CAST('2026-01-01 00:00:00' AS TIMESTAMP)").await;
+    execute(
+        db,
+        "UPDATE users SET deleted_at=CAST('2026-01-01 00:00:00' AS TIMESTAMP)",
+    )
+    .await;
     assert!(checked(repo.by_token(raw).await, "soft deleted user").is_none());
     execute(db, "DELETE FROM users").await;
 
@@ -113,7 +120,11 @@ async fn scenarios(db: &Database) {
         match repo.by_token(raw).await {
             Err(sqlx::Error::ColumnDecode { index, source }) => {
                 assert_eq!(index, column);
-                assert!(source.downcast_ref::<sqlx::error::UnexpectedNullError>().is_some());
+                assert!(
+                    source
+                        .downcast_ref::<sqlx::error::UnexpectedNullError>()
+                        .is_some()
+                );
             }
             _ => panic!("required NULL must fail closed with fixed ColumnDecode"),
         }
@@ -131,7 +142,10 @@ async fn scenarios(db: &Database) {
 
 #[test]
 fn authorize_classification_and_go_order() {
-    for credential in [CredentialKind::DashboardSession, CredentialKind::PersonalAccessToken] {
+    for credential in [
+        CredentialKind::DashboardSession,
+        CredentialKind::PersonalAccessToken,
+    ] {
         let mut auth = identity();
         auth.credential = credential;
         for status in [i64::MIN, -1, 0, 2, 3, i64::MAX] {
@@ -164,13 +178,23 @@ fn authorize_classification_and_go_order() {
         for role in [0, 1, 10, 100] {
             auth.role = role;
             assert_eq!(authorize(&auth, role), Ok(()));
-            assert_eq!(authorize(&auth, role + 1), Err(UserAuthError::InsufficientRole));
+            assert_eq!(
+                authorize(&auth, role + 1),
+                Err(UserAuthError::InsufficientRole)
+            );
         }
         auth.role = 1;
         auth.auth_version = 0;
-        assert_eq!(authorize(&auth, 1), Ok(()), "no invented session version gate");
+        assert_eq!(
+            authorize(&auth, 1),
+            Ok(()),
+            "no invented session version gate"
+        );
     }
-    assert_eq!(UserAuthError::from(sqlx::Error::PoolClosed), UserAuthError::Storage);
+    assert_eq!(
+        UserAuthError::from(sqlx::Error::PoolClosed),
+        UserAuthError::Storage
+    );
     assert_ne!(UserAuthError::InvalidCredential, UserAuthError::UserInvalid);
 }
 
@@ -178,7 +202,13 @@ fn authorize_classification_and_go_order() {
 fn pat_identity_has_no_session_or_secret_fields() {
     // 穷尽解构（不使用 ..）：新增 SID/凭证字段会使此契约无法编译。
     let UserAuthIdentity {
-        user_id, username, role, status, auth_version, group, credential,
+        user_id,
+        username,
+        role,
+        status,
+        auth_version,
+        group,
+        credential,
     } = identity();
     assert_eq!(credential, CredentialKind::PersonalAccessToken);
     assert_eq!((user_id, role, status, auth_version), (17, 10, 1, 7));
@@ -197,7 +227,10 @@ async fn sqlite_user_auth_contract() {
         .create_if_missing(true)
         .disable_statement_logging();
     let pool = checked(
-        SqlitePoolOptions::new().max_connections(2).connect_with(options).await,
+        SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await,
         "connect SQLite fixture",
     );
     let db = Database::Sqlite(pool);
@@ -220,7 +253,10 @@ async fn postgres_user_auth_contract() {
         .unwrap_or_else(|_| panic!("invalid PostgreSQL fixture config"));
     let options = options.disable_statement_logging();
     let admin = checked(
-        PgPoolOptions::new().max_connections(1).connect_with(options.clone()).await,
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await,
         "connect PostgreSQL fixture",
     );
     let schema = format!(
@@ -228,9 +264,15 @@ async fn postgres_user_auth_contract() {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     );
-    assert!(schema.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'));
+    assert!(
+        schema
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    );
     checked(
-        sqlx::query(&format!("CREATE SCHEMA \"{schema}\"")).execute(&admin).await,
+        sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
+            .execute(&admin)
+            .await,
         "create isolated schema",
     );
     let search_path = schema.clone();
@@ -260,7 +302,9 @@ async fn postgres_user_auth_contract() {
         .expect_err("closed pool must remain a storage error");
     assert_eq!(UserAuthError::from(closed_pool), UserAuthError::Storage);
     checked(
-        sqlx::query(&format!("DROP SCHEMA \"{schema}\" CASCADE")).execute(&admin).await,
+        sqlx::query(&format!("DROP SCHEMA \"{schema}\" CASCADE"))
+            .execute(&admin)
+            .await,
         "drop isolated schema",
     );
     admin.close().await;

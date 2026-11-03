@@ -104,7 +104,9 @@ pub fn plan_billing_options_merge(
         let step = if nonempty(&record.mode) || nonempty(&record.expr) {
             PlanStep::KeepLegacy(record)
         } else {
-            PlanStep::DiscardEmptyLegacy { model: model.clone() }
+            PlanStep::DiscardEmptyLegacy {
+                model: model.clone(),
+            }
         };
         steps_by_model.insert(model, step);
     }
