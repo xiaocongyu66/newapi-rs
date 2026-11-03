@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-SHA = "17970da4571e81308f176a0e61a38276e5771606"
+SHA = "ec542e7050932b82a2c087004ce54131ea67a836"
 BASE = "apps/api/internal/transport/compose"
 ALIASES = dict(A="register_api.go", C="register_channels.go", Z="register_authz.go",
                D="register_dashboard.go", R="register_relay.go", V="register_video.go",

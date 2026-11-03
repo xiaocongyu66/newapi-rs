@@ -26,7 +26,7 @@ jobs:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
       SINGBOX_TAGS: with_gvisor,with_wireguard,with_utls
-      UPSTREAM_SHA: 17970da4571e81308f176a0e61a38276e5771606
+      UPSTREAM_SHA: ec542e7050932b82a2c087004ce54131ea67a836
       BASELINE_MODULE: ${{ matrix.module }}
     steps:
       - name: Initialize evidence before setup
@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: xiaocongyu66/new-api
-          ref: 17970da4571e81308f176a0e61a38276e5771606
+          ref: ec542e7050932b82a2c087004ce54131ea67a836
           persist-credentials: false
           path: upstream-reference
       - name: Verify reference and create disposable test copy

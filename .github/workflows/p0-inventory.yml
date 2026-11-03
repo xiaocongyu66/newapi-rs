@@ -26,7 +26,7 @@ jobs:
           import json, os
           from pathlib import Path
           data = {k: os.getenv(k) for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'ImageOS', 'ImageVersion')}
-          data.update(status='NOT_RUN', upstream_sha='17970da4571e81308f176a0e61a38276e5771606')
+          data.update(status='NOT_RUN', upstream_sha='ec542e7050932b82a2c087004ce54131ea67a836')
           Path(os.environ['RUNNER_TEMP'], 'p0-inventory', 'environment.json').write_text(json.dumps(data, indent=2))
           PY
       - name: Checkout migration inventory
@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: xiaocongyu66/new-api
-          ref: 17970da4571e81308f176a0e61a38276e5771606
+          ref: ec542e7050932b82a2c087004ce54131ea67a836
           persist-credentials: false
           path: upstream-reference
       - name: Compare explicit registrations, snapshots and inventory

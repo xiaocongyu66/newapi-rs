@@ -19,7 +19,7 @@ if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONM
 spec = importlib.util.spec_from_file_location("ci", Path(__file__).with_name("p1-ci.py"))
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
-SHA = "17970da4571e81308f176a0e61a38276e5771606"
+SHA = "ec542e7050932b82a2c087004ce54131ea67a836"
 
 
 def oracle():

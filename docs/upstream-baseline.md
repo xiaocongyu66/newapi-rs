@@ -66,3 +66,34 @@ MySQL≥5.7.8、PostgreSQL≥9.6是上游README声明，不是本次执行结果
 5. P8/P9在实际bundle、容器和二进制分发目录检查NOTICE、许可证、对应源代码入口和UI署名，而不是只验证仓库根存在文件。
 
 需维护者/用户确认：ClickHouse/Timescale支持范围修订、许可不明依赖的处理方式、未确认最低数据库版本的证据或显式豁免。任何豁免未批准前相关条目保持受阻。
+
+## 7. 当前同步记录（2026-11-03；远程待验收）
+
+本节记录当前同步目标；第1–6节保留为2026-11-02历史来源/审计快照，其中旧SHA、阶段状态、工作区及操作记录不改写为本轮结论。当前阶段状态以 `docs/rust-backend-migration-plan.md` 为准；旧基线的PASS或run证据不自动覆盖新基线。
+
+- 用户已授权同步本地Go参考及Rust基线；`/root/newapi` HEAD已核对为 `ec542e7050932b82a2c087004ce54131ea67a836`，旧来源为 `17970da4571e81308f176a0e61a38276e5771606`。本地Git更新不是远程验收。
+- 本轮仅将6个固定基线文件中的9处有效Go源码SHA同步为新完整SHA：`.github/workflows/p0-baseline.yml:29,53`、`.github/workflows/p0-inventory.yml:29,41`、`.github/workflows/p1-rust.yml:109,243`、`scripts/ci/check-inventory.py:14`、`scripts/ci/p1-ci.py:234`、`scripts/ci/p1-process.py:22`。Actions自身SHA、执行逻辑、校验与门禁均不变。
+- 对旧到新SHA的静态差异检查未发现P1五个公共配置handler、P2 identity/security及其用户schema、compose路由注册/快照集合直接变更；生产388项、dev额外1项的既有集合不因本次同步扩写。共享传输层取消行为变化仍需回归，不据此声称运行行为完全相同。
+
+### 7.1 新增范围与阶段归属
+
+以下Go证据路径相对 `/root/newapi`；这些是后续迁移登记，不表示本轮已经实现。
+
+| 范围 | 新基线证据 | 阶段与不可机械迁移之处 |
+|---|---|---|
+| 响应缓存 | `apps/api/internal/common/constants.go:97–104`；`apps/api/internal/settings/settings.go:133–141,261–264`；`apps/api/internal/relay/response_cache.go:41–125,173–194`；`apps/api/internal/responsecache/responsecache.go:53–70` | P3配置、P5缓存实现，受P4计费约束，P8隔离/安全回归。新增4个动态键，默认关闭；命中仍须按usage结算，不是免费响应。TTL/容量零值回默认，MaxBodySize=0则不限制大小。缓存键/提示词变换及跨用户、渠道隔离需明确验证，不机械照搬安全性描述。 |
+| 取消传播与流终止 | `apps/api/internal/transport/fiberadapter/context.go:230–248`、`server.go:79–87`；`apps/api/internal/relay/channel/api_request.go:546–551`；`apps/api/internal/transport/handler/handle_relay.go:632–637,978–983`；`apps/api/internal/gateway/scan_sse.go:324–354` | P5核心、P6协议，P7探测/任务，P4取消结算。连接断开传播取消，保留取消错误身份，健康/统计按中性处理且任务不重试；SSE支持裸[DONE]。Rust迁移生命周期语义而非Fiber内核poller实现；中性健康不等于所有取消免费。 |
+| 计费options迁移 | `apps/api/internal/dbinfra/migrate_billing_options.go:18–115`；`apps/api/main.go:411–418` | P4业务、P8升级演练、P9授权实施。ModelBillingMode/Expr合并到billing_setting.billing_mode/expr，目标已有值优先、旧行保留、坏数据保留记录；Go在master、InitOptionMap前运行。不能覆盖目标/删除旧行，也不为P1 Rust启动新增自动写旧库。 |
+| 邮件 | `apps/api/internal/common/email.go:13–23,117–158`；`apps/api/internal/common/email_smtp_sender.go:95,125–133` | P2必要验证码依赖、P7完整邮件池/配额/重试。SMTP提交共享60秒绝对截止时间，DATA接受后QUIT另限5秒；QUIT失败仅日志不判发送失败，避免误重发。不能把P2必要邮件安全语义全部推迟到P7。 |
+| 渠道提示词配置 | `apps/api/modules/relaykit/dto/channel_settings.go:24–55` | P3渠道JSON配置，P5/P6生效行为；新增system_prompt_models和system_prompt_preset，模型项→内置preset→渠道prompt。不是User表schema变更；与缓存资格/键的组合需专门回归。 |
+
+### 7.2 远程验证交接
+
+本轮未本地构建、测试、rustfmt、执行脚本、启动服务/容器；未提交推送、触发Actions、生成或重标fixture，未修改P2实现或Cargo锁。状态为**固定来源已同步，远程待验收，非PASS**。
+
+集成负责人获授权后需在GitHub-hosted Actions对包含本次修改的精确Rust集成commit执行：
+
+1. `p0-baseline.yml`：新上游SHA的公共配置、focused、full-api及full-relaykit Go基线，保留原始退出码、测试及跳过数。
+2. `p0-inventory.yml`：注册源码/快照/台账静态核对；保留既有PARTIAL/UNDETERMINED语义，不为获得绿色结果弱化门禁。
+3. `p1-rust.yml`：P1公共GET七组fixture及真实Rust进程差分；P2 crypto、origin、session-key三份Go oracle重新生成与恢复校验；现有Rust检查、SQLite/PostgreSQL及Redis相关回归。模板无须仅因SHA变化重写，旧artifact不得修改来源标签后复用。
+4. 证据绑定新上游SHA、Rust集成commit、run ID/attempt、环境、命令、退出码、测试/跳过数与artifact校验和，经独立复核后再判定新基线是否通过。其他docs中的旧SHA须区分历史证据与尚待各负责人同步的当前契约声明，不作全仓机械替换。
