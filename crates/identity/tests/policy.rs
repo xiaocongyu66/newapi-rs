@@ -296,9 +296,8 @@ async fn scenarios(db: &Database) {
 // Bound parameters keep malformed CSV data out of SQL syntax on both backends.
 async fn insert_raw(db: &Database, fields: [Option<&str>; 7]) {
     backend!(db, pool, {
-        let mut query = sqlx::QueryBuilder::new(
-            "INSERT INTO casbin_rule (ptype,v0,v1,v2,v3,v4,v5) VALUES (",
-        );
+        let mut query =
+            sqlx::QueryBuilder::new("INSERT INTO casbin_rule (ptype,v0,v1,v2,v3,v4,v5) VALUES (");
         for (index, field) in fields.into_iter().enumerate() {
             if index > 0 {
                 query.push(",");
@@ -327,45 +326,117 @@ async fn compatibility_scenarios(db: &Database, repo: &CasbinRuleRepository) {
     // CSV trims leading whitespace on all fields, but preserves trailing space.
     insert_raw(
         db,
-        [Some("p"), Some("  user:30"), Some("\tsystem"), Some(" settings"), Some(" \tdeny"), None, None],
+        [
+            Some("p"),
+            Some("  user:30"),
+            Some("\tsystem"),
+            Some(" settings"),
+            Some(" \tdeny"),
+            None,
+            None,
+        ],
     )
     .await;
-    assert!(!checked(can(repo, 30, 10, SYSTEM).await, "trimmed deny overrides role"));
+    assert!(!checked(
+        can(repo, 30, 10, SYSTEM).await,
+        "trimmed deny overrides role"
+    ));
     insert_raw(
         db,
-        [Some("p"), Some("user:34"), Some("system"), Some("settings"), Some("\u{2003}deny"), None, None],
+        [
+            Some("p"),
+            Some("user:34"),
+            Some("system"),
+            Some("settings"),
+            Some("\u{2003}deny"),
+            None,
+            None,
+        ],
     )
     .await;
-    assert!(!checked(can(repo, 34, 10, SYSTEM).await, "Unicode leading space deny"));
+    assert!(!checked(
+        can(repo, 34, 10, SYSTEM).await,
+        "Unicode leading space deny"
+    ));
     for effect in ["unknown", "deny ", "allow "] {
         insert_raw(
             db,
-            [Some("p"), Some("user:31"), Some("system"), Some("settings"), Some(effect), None, None],
+            [
+                Some("p"),
+                Some("user:31"),
+                Some("system"),
+                Some("settings"),
+                Some(effect),
+                None,
+                None,
+            ],
         )
         .await;
     }
-    assert_eq!(checked(repo.subject_effect("user:31", SYSTEM).await, "unknown effects"), None);
-    assert!(checked(can(repo, 31, 10, SYSTEM).await, "unknown effect role fallback"));
+    assert_eq!(
+        checked(
+            repo.subject_effect("user:31", SYSTEM).await,
+            "unknown effects"
+        ),
+        None
+    );
+    assert!(checked(
+        can(repo, 31, 10, SYSTEM).await,
+        "unknown effect role fallback"
+    ));
     insert_raw(
         db,
-        [Some("p"), Some("user:32"), Some("system"), Some("settings"), Some(" \t"), None, None],
+        [
+            Some("p"),
+            Some("user:32"),
+            Some("system"),
+            Some("settings"),
+            Some(" \t"),
+            None,
+            None,
+        ],
     )
     .await;
-    assert_eq!(checked(repo.subject_effect("user:32", SYSTEM).await, "whitespace effect"), Some(RuleEffect::Allow));
+    assert_eq!(
+        checked(
+            repo.subject_effect("user:32", SYSTEM).await,
+            "whitespace effect"
+        ),
+        Some(RuleEffect::Allow)
+    );
 
     // Explicit user allow must still win over a role deny.
     deny(db, "role:admin", "system", "settings").await;
     insert_raw(
         db,
-        [Some("p"), Some("user:33"), Some("system"), Some("settings"), Some("  allow"), Some(""), Some("")],
+        [
+            Some("p"),
+            Some("user:33"),
+            Some("system"),
+            Some("settings"),
+            Some("  allow"),
+            Some(""),
+            Some(""),
+        ],
     )
     .await;
-    assert!(checked(can(repo, 33, 10, SYSTEM).await, "user allow overrides role deny"));
+    assert!(checked(
+        can(repo, 33, 10, SYSTEM).await,
+        "user allow overrides role deny"
+    ));
 
     // Only a comment type is safely excluded before CSV parsing, as Go does.
     insert_raw(
         db,
-        [Some("# ignored"), Some("bad,\"\n"), None, None, None, None, None],
+        [
+            Some("# ignored"),
+            Some("bad,\"\n"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ],
     )
     .await;
     assert!(checked(can(repo, 33, 10, SYSTEM).await, "comment excluded"));
@@ -373,18 +444,114 @@ async fn compatibility_scenarios(db: &Database, repo: &CasbinRuleRepository) {
     // Reset between malformed rows so each fixture independently proves rejection.
     // Even an unrelated subject/resource or unknown effect must poison the load.
     let malformed = [
-        [Some("p"), Some("user:33"), Some(""), Some("settings"), Some(" deny"), None, None],
-        [Some("p"), None, Some("system"), Some("settings"), Some("deny"), None, None],
-        [Some("p"), Some("unrelated"), Some("system"), Some(""), Some("unknown"), None, None],
-        [Some("p"), Some("unrelated,canary"), Some("system"), Some("settings"), Some("deny"), None, None],
-        [Some("p"), Some("unrelated"), Some("system"), Some("settings"), Some("\"deny\""), None, None],
-        [Some("p"), Some("unrelated"), Some("system\ncanary"), Some("settings"), Some("deny"), None, None],
-        [Some("p"), Some("unrelated"), Some("system"), Some("settings\rcanary"), Some("deny"), None, None],
-        [Some("p"), Some("unrelated"), Some("system"), Some("settings"), Some("deny"), Some("extra"), None],
-        [Some("p"), Some("unrelated"), Some("system"), Some("settings"), None, None, Some("extra")],
-        [Some("g"), Some("user:33"), Some("system"), Some("settings"), Some("allow"), None, None],
-        [Some("p2"), Some("user:33"), Some("system"), Some("settings"), Some("allow"), None, None],
-        [Some(" p"), Some("user:33"), Some("system"), Some("settings"), Some("allow"), None, None],
+        [
+            Some("p"),
+            Some("user:33"),
+            Some(""),
+            Some("settings"),
+            Some(" deny"),
+            None,
+            None,
+        ],
+        [
+            Some("p"),
+            None,
+            Some("system"),
+            Some("settings"),
+            Some("deny"),
+            None,
+            None,
+        ],
+        [
+            Some("p"),
+            Some("unrelated"),
+            Some("system"),
+            Some(""),
+            Some("unknown"),
+            None,
+            None,
+        ],
+        [
+            Some("p"),
+            Some("unrelated,canary"),
+            Some("system"),
+            Some("settings"),
+            Some("deny"),
+            None,
+            None,
+        ],
+        [
+            Some("p"),
+            Some("unrelated"),
+            Some("system"),
+            Some("settings"),
+            Some("\"deny\""),
+            None,
+            None,
+        ],
+        [
+            Some("p"),
+            Some("unrelated"),
+            Some("system\ncanary"),
+            Some("settings"),
+            Some("deny"),
+            None,
+            None,
+        ],
+        [
+            Some("p"),
+            Some("unrelated"),
+            Some("system"),
+            Some("settings\rcanary"),
+            Some("deny"),
+            None,
+            None,
+        ],
+        [
+            Some("p"),
+            Some("unrelated"),
+            Some("system"),
+            Some("settings"),
+            Some("deny"),
+            Some("extra"),
+            None,
+        ],
+        [
+            Some("p"),
+            Some("unrelated"),
+            Some("system"),
+            Some("settings"),
+            None,
+            None,
+            Some("extra"),
+        ],
+        [
+            Some("g"),
+            Some("user:33"),
+            Some("system"),
+            Some("settings"),
+            Some("allow"),
+            None,
+            None,
+        ],
+        [
+            Some("p2"),
+            Some("user:33"),
+            Some("system"),
+            Some("settings"),
+            Some("allow"),
+            None,
+            None,
+        ],
+        [
+            Some(" p"),
+            Some("user:33"),
+            Some("system"),
+            Some("settings"),
+            Some("allow"),
+            None,
+            None,
+        ],
     ];
     for fields in malformed {
         execute(db, "DELETE FROM casbin_rule").await;
@@ -396,8 +563,14 @@ async fn compatibility_scenarios(db: &Database, repo: &CasbinRuleRepository) {
         assert_encoding_error(capabilities(repo, 33, 10).await);
         assert_encoding_error(self_user_permissions(repo, 33, 10).await);
         // Preserve Go's pre-policy short circuits, not an implicit partial load.
-        assert!(checked(can(repo, 33, 100, SYSTEM).await, "root short circuit"));
-        assert!(!checked(can(repo, 33, 1, SYSTEM).await, "plain role short circuit"));
+        assert!(checked(
+            can(repo, 33, 100, SYSTEM).await,
+            "root short circuit"
+        ));
+        assert!(!checked(
+            can(repo, 33, 1, SYSTEM).await,
+            "plain role short circuit"
+        ));
     }
     execute(db, "DELETE FROM casbin_rule").await;
     allow(db, "role:admin", "system", "settings").await;
@@ -410,8 +583,14 @@ async fn storage_error_scenarios(db: &Database) {
     assert!(can(&repo, 7, 10, SYSTEM).await.is_err());
     assert!(capabilities(&repo, 7, 10).await.is_err());
     assert!(self_user_permissions(&repo, 7, 10).await.is_err());
-    assert!(checked(can(&repo, 7, 100, SYSTEM).await, "root without storage"));
-    assert!(!checked(can(&repo, 7, 1, SYSTEM).await, "plain user without storage"));
+    assert!(checked(
+        can(&repo, 7, 100, SYSTEM).await,
+        "root without storage"
+    ));
+    assert!(!checked(
+        can(&repo, 7, 1, SYSTEM).await,
+        "plain user without storage"
+    ));
 }
 
 #[tokio::test]

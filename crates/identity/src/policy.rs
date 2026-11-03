@@ -141,7 +141,10 @@ impl CasbinRuleRepository {
         subject: &str,
         permission: Permission,
     ) -> Result<Option<RuleEffect>, sqlx::Error> {
-        Ok(self.load_snapshot().await?.subject_effect(subject, permission))
+        Ok(self
+            .load_snapshot()
+            .await?
+            .subject_effect(subject, permission))
     }
 
     async fn load_snapshot(&self) -> Result<PolicySnapshot, sqlx::Error> {
@@ -168,9 +171,9 @@ impl CasbinRuleRepository {
             }
             let fields = [v0, v1, v2, v3].map(Option::unwrap_or_default);
             if fields[..3].iter().any(String::is_empty)
-                || fields.iter().any(|value| {
-                    value.chars().any(|c| matches!(c, ',' | '"' | '\r' | '\n'))
-                })
+                || fields
+                    .iter()
+                    .any(|value| value.chars().any(|c| matches!(c, ',' | '"' | '\r' | '\n')))
             {
                 return Err(unsupported_rule());
             }
@@ -273,7 +276,10 @@ pub async fn can(
     if !is_known_permission(permission) {
         return Ok(false);
     }
-    Ok(repository.load_snapshot().await?.can(user_id, role, permission))
+    Ok(repository
+        .load_snapshot()
+        .await?
+        .can(user_id, role, permission))
 }
 
 /// 在支持的规则编码范围内保持 Go 权限输出；不支持的编码返回错误。
