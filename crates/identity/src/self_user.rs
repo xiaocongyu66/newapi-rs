@@ -23,15 +23,19 @@ pub struct SelfUserProfile {
     pub telegram_id: String,
     pub group: String,
     pub quota: i64,
+    #[serde(serialize_with = "serialize_finite")]
     pub quota_display: f64,
     pub used_quota: i64,
+    #[serde(serialize_with = "serialize_finite")]
     pub used_quota_display: f64,
     pub request_count: i64,
     pub aff_code: String,
     pub aff_count: i64,
     pub aff_quota: i64,
+    #[serde(serialize_with = "serialize_finite")]
     pub aff_quota_display: f64,
     pub aff_history_quota: i64,
+    #[serde(serialize_with = "serialize_finite")]
     pub aff_history_quota_display: f64,
     pub inviter_id: i64,
     pub linux_do_id: String,
@@ -39,6 +43,13 @@ pub struct SelfUserProfile {
     pub stripe_customer: String,
     /// Go 从 user.setting JSON 提取的原始 sidebar_modules 字符串，由调用方提供。
     pub sidebar_modules: String,
+}
+
+fn serialize_finite<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    if !value.is_finite() {
+        return Err(serde::ser::Error::custom("non-finite quota display"));
+    }
+    serializer.serialize_f64(*value)
 }
 
 /// 额度展示类型；汇率等运行时配置必须由调用方提供，不在此设默认值。
@@ -57,7 +68,7 @@ pub struct QuotaDisplaySettings {
 }
 
 impl QuotaDisplaySettings {
-    /// 与 Go billing.QuotaToDisplayAmount 逐分支一致；不处理非有限结果。
+    /// 保留 Go 的分支算术；非有限结果在响应序列化时拒绝。
     pub fn to_display(self, quota: i64) -> f64 {
         let value = quota as f64;
         match self.kind {

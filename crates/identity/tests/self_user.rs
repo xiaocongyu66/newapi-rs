@@ -168,6 +168,66 @@ fn quota_display_follows_go_billing_branches() {
 }
 
 #[test]
+fn non_finite_quota_displays_fail_serialization_instead_of_becoming_null() {
+    let cases = [
+        QuotaDisplaySettings {
+            quota_per_unit: 0.0,
+            kind: QuotaDisplayKind::Usd,
+        },
+        QuotaDisplaySettings {
+            quota_per_unit: f64::NAN,
+            kind: QuotaDisplayKind::Usd,
+        },
+        QuotaDisplaySettings {
+            quota_per_unit: 500_000.0,
+            kind: QuotaDisplayKind::Cny {
+                usd_exchange_rate: f64::INFINITY,
+            },
+        },
+        QuotaDisplaySettings {
+            quota_per_unit: 500_000.0,
+            kind: QuotaDisplayKind::Custom { rate: f64::NAN },
+        },
+        QuotaDisplaySettings {
+            quota_per_unit: 1.0,
+            kind: QuotaDisplayKind::Custom { rate: f64::MAX },
+        },
+    ];
+    for display in cases {
+        let user = assemble(SelfUserInput {
+            profile: profile("raw"),
+            permissions: permissions(false, false),
+            display,
+            sidebar_modules: String::new(),
+        });
+        assert!(serde_json::to_value(&user).is_err());
+        assert!(serde_json::to_string(&user).is_err());
+    }
+
+    for field in 0..4 {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut user = assemble(SelfUserInput {
+                profile: profile("raw"),
+                permissions: permissions(false, false),
+                display: usd(),
+                sidebar_modules: String::new(),
+            });
+            match field {
+                0 => user.profile.quota_display = value,
+                1 => user.profile.used_quota_display = value,
+                2 => user.profile.aff_quota_display = value,
+                _ => user.profile.aff_history_quota_display = value,
+            }
+            assert!(serde_json::to_value(&user).is_err());
+            assert!(serde_json::to_string(&user).is_err());
+            let error = serde_json::to_value(&user.profile)
+                .expect_err("非有限展示字段不能被单独序列化为 null");
+            assert!(error.to_string().contains("non-finite quota display"));
+        }
+    }
+}
+
+#[test]
 fn construction_requires_explicit_permissions_and_preserves_them() {
     // 输入没有 Default 或省略权限的构造路径；构造表达式必须给出权限字段。
     // 即使 role=100，组装层也不覆盖显式拒绝或推导授权。
