@@ -232,7 +232,7 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     }
 }
 
-fn single_header<'a>(headers: &'a HeaderMap, name: header::HeaderName) -> Vec<&'a str> {
+fn single_header(headers: &HeaderMap, name: header::HeaderName) -> Vec<&str> {
     headers
         .get_all(name)
         .iter()
@@ -383,39 +383,39 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     }
 
     // 有有效访问令牌时按其 SID 注销，并只在 Cookie 属于同一会话时清 Cookie。
-    if let Some(token) = bearer(&headers) {
-        if let Ok(identity) = auth.identify(token, now).await {
-            if expected.is_some_and(|value| value != identity.sid.as_str()) {
-                return no_store(auth_failure(StatusCode::CONFLICT, "AUTH_SESSION_MISMATCH"));
-            }
-            if auth.revoke_session(&identity, now).await.is_err() {
-                tracing::error!(event = "auth_storage_error", "session revoke failed");
-                return no_store(auth_failure(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "AUTH_INTERNAL_ERROR",
-                ));
-            }
-            let cookie_cleared = match raw_cookie.as_deref() {
-                Some(raw) => raw
-                    .split_once('.')
-                    .is_some_and(|(sid, _)| sid == identity.sid.as_str()),
-                None => false,
-            };
-            if cookie_cleared {
-                let _ = auth
-                    .logout(raw_cookie.as_deref(), Some(identity.sid.as_str()), now)
-                    .await;
-            }
-            let mut response = success_data(LogoutBody {
-                revoked_sid: identity.sid,
-                cookie_cleared,
-            });
-            // 只清属于本次注销会话的 Cookie，不能误清另一会话。
-            if cookie_cleared {
-                clear_cookie(&mut response, secure);
-            }
-            return no_store(response);
+    if let Some(token) = bearer(&headers)
+        && let Ok(identity) = auth.identify(token, now).await
+    {
+        if expected.is_some_and(|value| value != identity.sid.as_str()) {
+            return no_store(auth_failure(StatusCode::CONFLICT, "AUTH_SESSION_MISMATCH"));
         }
+        if auth.revoke_session(&identity, now).await.is_err() {
+            tracing::error!(event = "auth_storage_error", "session revoke failed");
+            return no_store(auth_failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_INTERNAL_ERROR",
+            ));
+        }
+        let cookie_cleared = match raw_cookie.as_deref() {
+            Some(raw) => raw
+                .split_once('.')
+                .is_some_and(|(sid, _)| sid == identity.sid.as_str()),
+            None => false,
+        };
+        if cookie_cleared {
+            let _ = auth
+                .logout(raw_cookie.as_deref(), Some(identity.sid.as_str()), now)
+                .await;
+        }
+        let mut response = success_data(LogoutBody {
+            revoked_sid: identity.sid,
+            cookie_cleared,
+        });
+        // 只清属于本次注销会话的 Cookie，不能误清另一会话。
+        if cookie_cleared {
+            clear_cookie(&mut response, secure);
+        }
+        return no_store(response);
     }
 
     match auth.logout(raw_cookie.as_deref(), expected, now).await {
