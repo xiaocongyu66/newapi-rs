@@ -207,30 +207,49 @@ impl LoginCredentialRepository {
     ) -> Result<Option<LoginCredential>, sqlx::Error> {
         let row = match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query_as::<sqlx::Sqlite, (i64, String, String, i64, i64)>(
-                    LOGIN_CREDENTIAL_BY_USERNAME,
-                )
+                sqlx::query_as::<
+                    sqlx::Sqlite,
+                    (
+                        Option<i64>,
+                        Option<String>,
+                        Option<String>,
+                        Option<i64>,
+                        Option<i64>,
+                    ),
+                >(LOGIN_CREDENTIAL_BY_USERNAME)
                 .bind(username)
                 .fetch_optional(pool)
                 .await?
             }
             Database::Postgres(pool) => {
-                sqlx::query_as::<sqlx::Postgres, (i64, String, String, i64, i64)>(
-                    LOGIN_CREDENTIAL_BY_USERNAME,
-                )
+                sqlx::query_as::<
+                    sqlx::Postgres,
+                    (
+                        Option<i64>,
+                        Option<String>,
+                        Option<String>,
+                        Option<i64>,
+                        Option<i64>,
+                    ),
+                >(LOGIN_CREDENTIAL_BY_USERNAME)
                 .bind(username)
                 .fetch_optional(pool)
                 .await?
             }
         };
-        Ok(row.map(
-            |(user_id, username, password_hash, status, auth_version)| LoginCredential {
-                user_id,
-                password_hash,
-                status,
-                auth_version,
-                username,
-            },
-        ))
+        row.map(|(user_id, username, password_hash, status, auth_version)| {
+            let missing = |column: &str| sqlx::Error::ColumnDecode {
+                index: column.to_owned(),
+                source: Box::new(sqlx::error::UnexpectedNullError),
+            };
+            Ok(LoginCredential {
+                user_id: user_id.ok_or_else(|| missing("id"))?,
+                password_hash: password_hash.ok_or_else(|| missing("password"))?,
+                status: status.ok_or_else(|| missing("status"))?,
+                auth_version: auth_version.ok_or_else(|| missing("auth_version"))?,
+                username: username.ok_or_else(|| missing("username"))?,
+            })
+        })
+        .transpose()
     }
 }

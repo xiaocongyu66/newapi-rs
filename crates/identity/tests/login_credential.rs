@@ -137,10 +137,18 @@ async fn nullable_legacy_scenarios(db: &Database) {
             );
         });
     }
-    for username in ["null-password", "null-status", "null-version"] {
+    for (username, column) in [
+        ("null-password", "password"),
+        ("null-status", "status"),
+        ("null-version", "auth_version"),
+    ] {
         assert!(
-            repo.by_username(username).await.is_err(),
-            "matched NULL credential must fail closed"
+            matches!(
+                repo.by_username(username).await,
+                Err(sqlx::Error::ColumnDecode { index, source })
+                    if index == column && source.is::<sqlx::error::UnexpectedNullError>()
+            ),
+            "matched NULL credential must fail closed: {column}"
         );
     }
     for username in ["ordinary-user", "", "NULL", "null"] {
