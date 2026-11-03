@@ -333,7 +333,7 @@ async fn compatibility_scenarios(db: &Database, repo: &CasbinRuleRepository) {
     assert!(!checked(can(repo, 30, 10, SYSTEM).await, "trimmed deny overrides role"));
     insert_raw(
         db,
-        [Some("p"), Some("user:34"), Some("system"), Some("settings"), Some("\u2003deny"), None, None],
+        [Some("p"), Some("user:34"), Some("system"), Some("settings"), Some("\u{2003}deny"), None, None],
     )
     .await;
     assert!(!checked(can(repo, 34, 10, SYSTEM).await, "Unicode leading space deny"));
