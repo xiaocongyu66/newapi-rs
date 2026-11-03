@@ -39,6 +39,12 @@ pub enum SessionAuthError {
     RefreshInvalid,
     SessionMismatch,
     SessionRevoked,
+    /// 缺失会话标识；HTTP 层映射为 400 AUTH_SESSION_ID_REQUIRED。
+    SessionIdRequired,
+    BatchFailed {
+        committed_count: u64,
+        error: SessionError,
+    },
     /// 同代首发已轮换；客户端需重新读取 Cookie 后再试。
     Race,
     Storage(SessionError),
@@ -122,7 +128,7 @@ impl<F: RevocationFence> SessionAuth<F> {
         self.terminal_fence_failures.load(Ordering::Relaxed)
     }
 
-    fn observe_revoke(&self, report: crate::sessions::RevokeReport) {
+    fn observe_revoke(&self, report: &crate::sessions::RevokeReport) {
         self.terminal_fence_failures
             .fetch_add(report.terminal_fence_failures, Ordering::Relaxed);
         if report.terminal_fence_failures > 0 {
@@ -179,7 +185,7 @@ impl<F: RevocationFence> SessionAuth<F> {
             }
             Ok(RefreshOutcome::Reused(report))
             | Ok(RefreshOutcome::UserSecurityChanged(report)) => {
-                self.observe_revoke(report);
+                self.observe_revoke(&report);
                 Err(SessionAuthError::SessionRevoked)
             }
             Err(error) => Err(error.into()),
@@ -219,7 +225,7 @@ impl<F: RevocationFence> SessionAuth<F> {
             .await
         {
             Ok(report) => {
-                self.observe_revoke(report);
+                self.observe_revoke(&report);
                 Ok(())
             }
             Err(SessionError::Invalid | SessionError::NotFound | SessionError::Inactive) => Ok(()),
@@ -257,8 +263,54 @@ impl<F: RevocationFence> SessionAuth<F> {
         self.repository
             .revoke(&self.fence, identity.user_id, &identity.sid, "logout", now)
             .await
-            .map(|report| self.observe_revoke(report))
+            .map(|report| self.observe_revoke(&report))
             .map_err(SessionAuthError::from)
+    }
+
+    /// 撤销指定会话；仅当确实撤销了活跃会话时返回 true。
+    /// 不存在的会话不是错误，由调用方映射为 404。
+    pub async fn revoke_sid(
+        &self,
+        identity: &AuthIdentity,
+        sid: &str,
+        now: i64,
+    ) -> Result<bool, SessionAuthError> {
+        let sid = sid.trim();
+        if sid.is_empty() {
+            return Err(SessionAuthError::SessionIdRequired);
+        }
+        let report = self
+            .repository
+            .revoke(&self.fence, identity.user_id, sid, "user_revoked", now)
+            .await
+            .map_err(SessionAuthError::from)?;
+        self.observe_revoke(&report);
+        Ok(report.revoked_count > 0)
+    }
+
+    /// 撤销当前会话以外的活跃会话；批次可能部分成功，累计进度如实返回。
+    pub async fn revoke_others(
+        &self,
+        identity: &AuthIdentity,
+        now: i64,
+    ) -> Result<u64, SessionAuthError> {
+        match self
+            .repository
+            .revoke_others(&self.fence, identity.user_id, &identity.sid, "user_revoked_others", now)
+            .await
+        {
+            Ok(report) => {
+                self.observe_revoke(&report);
+                Ok(report.revoked_count)
+            }
+            Err(failure) => {
+                self.observe_revoke(&failure.committed);
+                Err(SessionAuthError::BatchFailed {
+                    committed_count: failure.committed.revoked_count,
+                    error: failure.error,
+                })
+            }
+        }
     }
 
     /// 会话列表；current 由传入的当前 SID 决定，不硬编码为 true。

@@ -133,6 +133,41 @@ async fn bearer_revoke_and_refresh_reuse_preserve_terminal_failures() {
     db.close().await;
 }
 
+#[tokio::test]
+async fn session_management_scopes_revocation_to_the_authenticated_user() {
+    let (db, auth) = fixture().await;
+    let current = credential();
+    let other = credential();
+    seed(&db, &current).await;
+    seed(&db, &other).await;
+    let identity = newapi_identity::AuthIdentity {
+        user_id: 1,
+        sid: current.sid().into(),
+        user_auth_version: 3,
+        session_version: 1,
+    };
+    let foreign = newapi_identity::AuthIdentity {
+        user_id: 2,
+        sid: "foreign-session".into(),
+        user_auth_version: 1,
+        session_version: 1,
+    };
+    assert!(!auth.revoke_sid(&foreign, other.sid(), NOW + 1).await.unwrap());
+    assert_eq!(
+        auth.revoke_sid(&identity, "  ", NOW + 1).await.err(),
+        Some(SessionAuthError::SessionIdRequired),
+    );
+    assert_eq!(auth.revoke_others(&identity, NOW + 1).await.unwrap(), 1);
+    auth.validate(&identity, NOW + 2).await.expect("保留当前会话");
+    assert!(!auth.revoke_sid(&identity, other.sid(), NOW + 2).await.unwrap());
+    assert!(auth.revoke_sid(&identity, current.sid(), NOW + 2).await.unwrap());
+    assert_eq!(
+        auth.validate(&identity, NOW + 3).await.err(),
+        Some(SessionAuthError::SessionRevoked),
+    );
+    db.close().await;
+}
+
 fn digest(key: &AuthKeys, secret: &str) -> RefreshHash {
     let value = key.refresh_hash(secret).expose_secret().to_owned();
     RefreshHash::from_lower_hex(value).expect("digest")
@@ -161,6 +196,222 @@ async fn seed(db: &Database, credential: &RefreshCredential) {
 fn credential() -> RefreshCredential {
     let generated = RefreshCredential::generate().expect("credential");
     RefreshCredential::parse(generated.raw().expose_secret()).expect("parse generated")
+}
+
+struct PendingFailure;
+
+impl newapi_identity::sessions::RevocationFence for PendingFailure {
+    async fn revoking(
+        &self,
+        _: &newapi_identity::sessions::SessionMetadata,
+        _: i64,
+        _: &str,
+    ) -> Result<(), newapi_identity::sessions::SessionError> {
+        Err(newapi_identity::sessions::SessionError::Fence)
+    }
+
+    async fn revoked(
+        &self,
+        _: &newapi_identity::sessions::SessionMetadata,
+        _: i64,
+    ) -> Result<(), newapi_identity::sessions::SessionError> {
+        panic!("pending fence 失败后不得进入终态 fence");
+    }
+}
+
+#[tokio::test]
+async fn current_refresh_after_auth_version_change_preserves_terminal_failure() {
+    let (db, _) = fixture().await;
+    let first = credential();
+    seed(&db, &first).await;
+    let auth = SessionAuth::new(
+        db.clone(),
+        AuthKeys::new("fixture-session-secret"),
+        TerminalFailure,
+    );
+    let issued = auth
+        .refresh(first.raw().expose_secret(), None, NOW + 1)
+        .await
+        .expect("取得当前有效 refresh");
+    let current = RefreshCredential::parse(issued.refresh_token.expose_secret())
+        .expect("解析当前 refresh");
+    let repository = SessionRepository::new(db.clone());
+    let before = repository
+        .authoritative(first.sid())
+        .await
+        .expect("读取刷新后会话")
+        .expect("会话存在");
+    assert!(before.current_hash_matches(&digest(
+        &AuthKeys::new("fixture-session-secret"),
+        current.secret(),
+    )));
+    assert_eq!(before.metadata.status, "active");
+    assert_eq!(auth.terminal_fence_failures(), 0);
+    let Database::Sqlite(pool) = &db else {
+        panic!("fixture 必须使用 SQLite");
+    };
+    let changed = sqlx::query("UPDATE users SET auth_version=auth_version+1 WHERE id=1")
+        .execute(pool)
+        .await
+        .expect("变更用户安全版本");
+    assert_eq!(changed.rows_affected(), 1);
+
+    assert_eq!(
+        auth.refresh(issued.refresh_token.expose_secret(), None, NOW + 2)
+            .await
+            .err(),
+        Some(SessionAuthError::SessionRevoked),
+    );
+    assert_eq!(auth.terminal_fence_failures(), 1);
+    let after = repository
+        .authoritative(first.sid())
+        .await
+        .expect("读取已提交撤销")
+        .expect("保留会话行");
+    assert_eq!(after.metadata.status, "revoked");
+    assert_eq!(after.metadata.revoked_at, NOW + 2);
+    assert_eq!(after.metadata.revoked_reason, "user_security_changed");
+    db.close().await;
+}
+
+#[tokio::test]
+async fn public_revoke_commits_despite_terminal_failure_and_keeps_count() {
+    let (db, _) = fixture().await;
+    let first = credential();
+    seed(&db, &first).await;
+    let auth = SessionAuth::new(
+        db.clone(),
+        AuthKeys::new("fixture-session-secret"),
+        TerminalFailure,
+    );
+    let issued = auth
+        .refresh(first.raw().expose_secret(), None, NOW + 1)
+        .await
+        .expect("签发旧 access");
+    assert_eq!(auth.terminal_fence_failures(), 0);
+    auth.revoke_session(&issued.access_identity, NOW + 2)
+        .await
+        .expect("终态 fence 失败不回滚已提交撤销");
+    assert_eq!(auth.terminal_fence_failures(), 1);
+    let repository = SessionRepository::new(db.clone());
+    let committed = repository
+        .authoritative(first.sid())
+        .await
+        .expect("读取已提交撤销")
+        .expect("保留会话行");
+    assert_eq!(committed.metadata.status, "revoked");
+    assert_eq!(committed.metadata.revoked_at, NOW + 2);
+    assert_eq!(committed.metadata.revoked_reason, "logout");
+    assert_eq!(
+        auth.identify(issued.access_token.expose_secret(), NOW + 3)
+            .await
+            .err(),
+        Some(SessionAuthError::SessionRevoked),
+    );
+    auth.revoke_session(&issued.access_identity, NOW + 4)
+        .await
+        .expect("重复撤销幂等成功");
+    assert_eq!(auth.terminal_fence_failures(), 1);
+    let repeated = repository
+        .authoritative(first.sid())
+        .await
+        .expect("读取重复撤销结果")
+        .expect("保留会话行");
+    assert_eq!(repeated.metadata, committed.metadata);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn pending_fence_failure_leaves_sql_and_old_access_active() {
+    let (db, _) = fixture().await;
+    let first = credential();
+    seed(&db, &first).await;
+    let auth = SessionAuth::new(
+        db.clone(),
+        AuthKeys::new("fixture-session-secret"),
+        PendingFailure,
+    );
+    let issued = auth
+        .refresh(first.raw().expose_secret(), None, NOW + 1)
+        .await
+        .expect("签发旧 access");
+    let repository = SessionRepository::new(db.clone());
+    let before = repository
+        .authoritative(first.sid())
+        .await
+        .expect("读取撤销前状态")
+        .expect("会话存在");
+    assert_eq!(before.metadata.status, "active");
+    assert_eq!(before.metadata.revoked_at, 0);
+    assert_eq!(auth.terminal_fence_failures(), 0);
+    assert_eq!(
+        auth.identify(issued.access_token.expose_secret(), NOW + 2)
+            .await
+            .expect("撤销前 access 有效"),
+        issued.access_identity,
+    );
+
+    assert_eq!(
+        auth.revoke_session(&issued.access_identity, NOW + 3)
+            .await
+            .err(),
+        Some(SessionAuthError::Storage(
+            newapi_identity::sessions::SessionError::Fence,
+        )),
+    );
+    assert_eq!(auth.terminal_fence_failures(), 0);
+    let after = repository
+        .authoritative(first.sid())
+        .await
+        .expect("读取 pending 失败后的 SQL 状态")
+        .expect("保留会话行");
+    assert_eq!(after.metadata, before.metadata);
+    let current = RefreshCredential::parse(issued.refresh_token.expose_secret())
+        .expect("解析当前 refresh");
+    assert!(after.current_hash_matches(&digest(
+        &AuthKeys::new("fixture-session-secret"),
+        current.secret(),
+    )));
+    assert_eq!(
+        auth.identify(issued.access_token.expose_secret(), NOW + 4)
+            .await
+            .expect("pending fence 失败后旧 access 仍有效"),
+        issued.access_identity,
+    );
+    assert_eq!(auth.terminal_fence_failures(), 0);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn identify_with_closed_sql_pool_preserves_storage_error() {
+    let (db, auth) = fixture().await;
+    let first = credential();
+    seed(&db, &first).await;
+    let issued = auth
+        .refresh(first.raw().expose_secret(), None, NOW + 1)
+        .await
+        .expect("签发有效 access");
+    assert_eq!(
+        auth.identify(issued.access_token.expose_secret(), NOW + 2)
+            .await
+            .expect("关闭连接池前 access 有效"),
+        issued.access_identity,
+    );
+    db.close().await;
+    assert_eq!(
+        auth.parse_access(issued.access_token.expose_secret(), NOW + 3)
+            .expect("关闭 SQL 池不影响 access 验签"),
+        issued.access_identity,
+    );
+    assert_eq!(
+        auth.identify(issued.access_token.expose_secret(), NOW + 3)
+            .await
+            .err(),
+        Some(SessionAuthError::Storage(
+            newapi_identity::sessions::SessionError::Storage,
+        )),
+    );
+    assert_eq!(auth.terminal_fence_failures(), 0);
 }
 
 #[tokio::test]
