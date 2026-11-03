@@ -1,6 +1,16 @@
 use std::collections::BTreeMap;
 
-use newapi_identity::self_user::{Permissions, SelfUserInput, SidebarModulePermission, assemble};
+use newapi_identity::self_user::{
+    Permissions, QuotaDisplayKind, QuotaDisplaySettings, SelfUserInput, SidebarModulePermission,
+    assemble,
+};
+
+fn usd() -> QuotaDisplaySettings {
+    QuotaDisplaySettings {
+        quota_per_unit: 500_000.0,
+        kind: QuotaDisplayKind::Usd,
+    }
+}
 use newapi_identity::users::UserProfile;
 use serde_json::json;
 
@@ -57,6 +67,8 @@ fn all_profile_fields_and_permissions_are_preserved() {
     let user = assemble(SelfUserInput {
         profile: profile(setting),
         permissions: supplied_permissions,
+        display: usd(),
+        sidebar_modules: "{\"personal\":true}".into(),
     });
     assert_eq!(user.permissions, expected_permissions);
     let serialized_profile = serde_json::to_value(&user.profile).expect("serialize profile");
@@ -74,16 +86,21 @@ fn all_profile_fields_and_permissions_are_preserved() {
         "telegram_id": "telegram-fixture",
         "group": " 非默认组 ",
         "quota": i64::MAX,
+        "quota_display": 9_223_372_036_854_775_808.0_f64 / 500_000.0,
         "used_quota": 2_147_483_648_i64,
+        "used_quota_display": 2_147_483_648.0_f64 / 500_000.0,
         "request_count": 456,
         "aff_code": "aff-fixture",
         "aff_count": 7,
         "aff_quota": -91,
+        "aff_quota_display": -91.0_f64 / 500_000.0,
         "aff_history_quota": 123_456_789,
+        "aff_history_quota_display": 123_456_789.0_f64 / 500_000.0,
         "inviter_id": 9,
         "linux_do_id": "linux-do-fixture",
         "setting": setting,
         "stripe_customer": "stripe-fixture",
+        "sidebar_modules": "{\"personal\":true}",
     });
     assert_eq!(serialized_profile, expected_profile);
 
@@ -94,7 +111,7 @@ fn all_profile_fields_and_permissions_are_preserved() {
         "sidebar_modules": {"personal": true, "admin": {"setting": false}},
         "admin_permissions": {"fixture_resource": {"read": false, "write": false}},
     });
-    // 完整白名单比较也排除派生额度、侧栏、管理员备注与嵌套 profile。
+    // 完整白名单比较也排除密码、令牌、内部版本与管理员备注。
     assert_eq!(serialized, expected);
     let object = serialized.as_object().expect("self user object");
     for forbidden in [
@@ -114,11 +131,39 @@ fn setting_is_never_parsed_or_normalized() {
         let user = assemble(SelfUserInput {
             profile: profile(setting),
             permissions: permissions(false, false),
+            display: usd(),
+            sidebar_modules: setting.into(),
         });
         assert_eq!(user.profile.setting, setting);
         let serialized = serde_json::to_value(user).expect("serialize raw setting");
         assert_eq!(serialized["setting"], json!(setting));
-        assert!(serialized.get("sidebar_modules").is_none());
+        // 侧栏数据由调用方提供，组装层不解析 setting。
+        assert_eq!(serialized["sidebar_modules"], json!(setting));
+    }
+}
+
+#[test]
+fn quota_display_follows_go_billing_branches() {
+    let quota = 1_000_000_i64;
+    let cases = [
+        (QuotaDisplayKind::Usd, 2.0),
+        (
+            QuotaDisplayKind::Cny {
+                usd_exchange_rate: 7.3,
+            },
+            14.6,
+        ),
+        (QuotaDisplayKind::Custom { rate: 2.5 }, 5.0),
+        (QuotaDisplayKind::Custom { rate: 0.0 }, 2.0),
+        (QuotaDisplayKind::Custom { rate: -1.0 }, 2.0),
+        (QuotaDisplayKind::Tokens, 1_000_000.0),
+    ];
+    for (kind, expected) in cases {
+        let settings = QuotaDisplaySettings {
+            quota_per_unit: 500_000.0,
+            kind,
+        };
+        assert!((settings.to_display(quota) - expected).abs() < 1e-9);
     }
 }
 
@@ -132,6 +177,8 @@ fn construction_requires_explicit_permissions_and_preserves_them() {
         let input = SelfUserInput {
             profile: profile("raw"),
             permissions: supplied,
+            display: usd(),
+            sidebar_modules: String::new(),
         };
         assert_eq!(input.permissions, expected);
         let user = assemble(input);
