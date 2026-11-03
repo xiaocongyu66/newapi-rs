@@ -320,6 +320,22 @@ fn parse_origin(value: &str, referer: bool) -> Result<Origin, Denial> {
     })
 }
 
+/// 规范化可信来源，仅接受纯 `scheme://host[:port]`（不含路径、查询或用户信息）。
+/// 供配置校验使用；与运行期 Origin 校验共用同一套严格解析。
+pub fn normalize_origin(raw: &str) -> Result<String, Denial> {
+    let origin = parse_origin(raw, false)?;
+    let host = if origin.host.contains(':') {
+        format!("[{}]", origin.host)
+    } else {
+        origin.host
+    };
+    Ok(if origin.port.is_empty() {
+        format!("{}://{host}", origin.scheme)
+    } else {
+        format!("{}://{host}:{}", origin.scheme, origin.port)
+    })
+}
+
 pub fn check_session_origin(request: &OriginRequest<'_>) -> Result<(), Denial> {
     if !request.secure_cookie {
         return Ok(());

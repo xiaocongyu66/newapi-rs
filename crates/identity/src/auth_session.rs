@@ -1,8 +1,11 @@
 //! 浏览器会话的刷新与注销编排；不伪造用户资料，不记录原始凭证。
 //! 时间由调用方注入，撤销必须经过显式 fence，失败不得降级为无缓存。
+use std::future::Future;
+
 use newapi_storage::Database;
 
 use crate::crypto::{AuthKeys, RefreshCredential};
+use crate::session_cache::RedisSessionCache;
 use crate::sessions::{
     NoCache, RefreshHash, RefreshOutcome, RevocationFence, SessionError, SessionRecord,
     SessionRepository,
@@ -51,11 +54,54 @@ impl From<SessionError> for SessionAuthError {
     }
 }
 
+/// 运行期可选的撤销栅栏；Redis 不可用时不会静默退化为无缓存。
+pub enum AuthFence {
+    Disabled(NoCache),
+    /// 装箱避免与空变体产生巨大的枚举尺寸差异。
+    Redis(Box<RedisSessionCache>),
+}
+
+impl RevocationFence for AuthFence {
+    fn revoking(
+        &self,
+        session: &crate::sessions::SessionMetadata,
+        now: i64,
+        reason: &str,
+    ) -> impl Future<Output = Result<(), SessionError>> + Send {
+        async move {
+            match self {
+                Self::Disabled(fence) => fence.revoking(session, now, reason).await,
+                Self::Redis(fence) => fence.revoking(session, now, reason).await,
+            }
+        }
+    }
+
+    fn revoked(
+        &self,
+        session: &crate::sessions::SessionMetadata,
+        now: i64,
+    ) -> impl Future<Output = Result<(), SessionError>> + Send {
+        async move {
+            match self {
+                Self::Disabled(fence) => fence.revoked(session, now).await,
+                Self::Redis(fence) => fence.revoked(session, now).await,
+            }
+        }
+    }
+}
+
 /// 无缓存部署的默认组合；接入共享缓存时必须传入真实 fence。
 pub struct SessionAuth<F: RevocationFence> {
     repository: SessionRepository,
     keys: AuthKeys,
     fence: F,
+}
+
+impl SessionAuth<AuthFence> {
+    /// 生产入口：fence 由启动配置决定，Redis 连接失败时不得回退为无缓存。
+    pub fn with_fence(db: Database, keys: AuthKeys, fence: AuthFence) -> Self {
+        Self::new(db, keys, fence)
+    }
 }
 
 impl SessionAuth<NoCache> {
@@ -141,7 +187,12 @@ impl<F: RevocationFence> SessionAuth<F> {
                 return Err(SessionAuthError::SessionMismatch);
             }
         }
-        if self.repository.authoritative(credential.sid()).await?.is_none() {
+        if self
+            .repository
+            .authoritative(credential.sid())
+            .await?
+            .is_none()
+        {
             return Ok(());
         }
         let presented = hash(&self.keys, credential.secret());
@@ -154,6 +205,33 @@ impl<F: RevocationFence> SessionAuth<F> {
             Err(SessionError::Invalid | SessionError::NotFound | SessionError::Inactive) => Ok(()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// 解析访问令牌并核对当前数据库会话；失败一律视为不可认证。
+    pub async fn identify(
+        &self,
+        raw_access: &str,
+        now: i64,
+    ) -> Result<AuthIdentity, SessionAuthError> {
+        let identity = self
+            .keys
+            .parse_access(raw_access, now)
+            .map_err(|_| SessionAuthError::SessionRevoked)?;
+        self.validate(&identity, now).await?;
+        Ok(identity)
+    }
+
+    /// 按访问令牌绑定的 SID 注销；调用方须已通过 identify 验证。
+    pub async fn revoke_session(
+        &self,
+        identity: &AuthIdentity,
+        now: i64,
+    ) -> Result<(), SessionAuthError> {
+        self.repository
+            .revoke(&self.fence, identity.user_id, &identity.sid, "logout", now)
+            .await
+            .map(|_| ())
+            .map_err(SessionAuthError::from)
     }
 
     /// 会话列表；current 由传入的当前 SID 决定，不硬编码为 true。

@@ -1,6 +1,10 @@
-use std::{net::Ipv4Addr, process::ExitCode};
+use std::{net::Ipv4Addr, process::ExitCode, sync::Arc};
 
 use newapi_config::Config;
+use newapi_identity::auth_session::{AuthFence, SessionAuth};
+use newapi_identity::crypto::{AuthKeys, generate_session_secret};
+use newapi_identity::session_cache::RedisSessionCache;
+use newapi_identity::sessions::NoCache;
 use newapi_server::{AppState, database_error_class, install_safe_panic_hook, reload_loop, router};
 use newapi_storage::Database;
 use tokio::{net::TcpListener, sync::watch};
@@ -31,7 +35,7 @@ async fn run() -> Result<(), ()> {
             "database connection failed"
         );
     })?;
-    let state = match AppState::initialize(&db).await {
+    let initial = match AppState::initialize(&db).await {
         Ok(state) => state,
         Err(error) => {
             tracing::error!(
@@ -42,6 +46,46 @@ async fn run() -> Result<(), ()> {
             return Err(());
         }
     };
+    // 未配置密钥时仅当前进程有效；重启或多实例将无法互认，必须显式告警。
+    let secret = match config.session_secret() {
+        Some(secret) => secret.to_owned(),
+        None => match generate_session_secret() {
+            Ok(secret) => {
+                tracing::warn!(
+                    event = "ephemeral_session_secret",
+                    "SESSION_SECRET is not set; sessions will not survive restarts"
+                );
+                secret
+            }
+            Err(_) => {
+                tracing::error!("session secret generation failed");
+                db.close().await;
+                return Err(());
+            }
+        },
+    };
+    let fence = match config.redis_url() {
+        Some(url) => match RedisSessionCache::connect(
+            url,
+            secret.as_bytes(),
+            config.sync_frequency.as_secs() as i64,
+        )
+        .await
+        {
+            Ok(cache) => AuthFence::Redis(Box::new(cache)),
+            Err(_) => {
+                tracing::error!(
+                    event = "session_cache_unavailable",
+                    "redis connection failed"
+                );
+                db.close().await;
+                return Err(());
+            }
+        },
+        None => AuthFence::Disabled(NoCache::explicitly_disabled()),
+    };
+    let auth = SessionAuth::with_fence(db.clone(), AuthKeys::new(&secret), fence);
+    let state = initial.bind_auth(Arc::new(auth), config.session_cookie.clone());
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {
         Ok(listener) => listener,
         Err(_) => {

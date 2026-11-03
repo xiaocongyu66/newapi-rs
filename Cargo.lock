@@ -1000,6 +1000,9 @@ dependencies = [
 [[package]]
 name = "newapi-config"
 version = "0.1.0"
+dependencies = [
+ "newapi-security",
+]
 
 [[package]]
 name = "newapi-identity"
@@ -1036,6 +1039,8 @@ dependencies = [
  "axum",
  "newapi-catalog",
  "newapi-config",
+ "newapi-identity",
+ "newapi-security",
  "newapi-storage",
  "serde",
  "sqlx",

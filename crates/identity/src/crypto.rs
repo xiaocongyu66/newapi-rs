@@ -88,6 +88,11 @@ pub fn verify_password(password: &[u8], stored: &str) -> Result<bool, AuthError>
     Ok(equal(&generated.as_bytes()[29..], &bytes[start + 25..]))
 }
 
+/// 未配置 SESSION_SECRET 时的进程级随机密钥；重启或多实例将无法互认。
+pub fn generate_session_secret() -> Result<String, AuthError> {
+    random_uuid()
+}
+
 pub(crate) fn random_uuid() -> Result<String, AuthError> {
     let mut bytes = [0; 16];
     OsRng

@@ -5,6 +5,8 @@ use std::sync::{
 use std::time::Duration;
 
 use newapi_catalog::PublicConfig;
+use newapi_config::SessionCookieSettings;
+use newapi_identity::auth_session::{AuthFence, SessionAuth};
 use newapi_storage::Database;
 use tokio::sync::watch;
 
@@ -12,6 +14,8 @@ use tokio::sync::watch;
 pub struct AppState {
     snapshot: Arc<RwLock<PublicConfig>>,
     ready: Arc<AtomicBool>,
+    auth: Option<Arc<SessionAuth<AuthFence>>>,
+    session_cookie: Arc<SessionCookieSettings>,
 }
 
 impl Default for AppState {
@@ -19,6 +23,11 @@ impl Default for AppState {
         Self {
             snapshot: Arc::new(RwLock::new(PublicConfig::default())),
             ready: Arc::new(AtomicBool::new(false)),
+            auth: None,
+            session_cookie: Arc::new(SessionCookieSettings {
+                secure: false,
+                trusted_origins: Vec::new(),
+            }),
         }
     }
 }
@@ -36,6 +45,25 @@ impl AppState {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// 在开放监听前注入认证编排；未注入时会话端点统一返回不可用。
+    pub fn bind_auth(
+        mut self,
+        auth: Arc<SessionAuth<AuthFence>>,
+        cookie: SessionCookieSettings,
+    ) -> Self {
+        self.auth = Some(auth);
+        self.session_cookie = Arc::new(cookie);
+        self
+    }
+
+    pub fn auth(&self) -> Option<&SessionAuth<AuthFence>> {
+        self.auth.as_deref()
+    }
+
+    pub fn session_cookie(&self) -> &SessionCookieSettings {
+        &self.session_cookie
     }
 
     pub fn is_ready(&self) -> bool {

@@ -36,10 +36,7 @@ async fn fixture() -> (Database, SessionAuth<newapi_identity::sessions::NoCache>
         "INSERT INTO users VALUES (1,1,3,NULL)",
         "CREATE TABLE user_sessions (sid VARCHAR(64) PRIMARY KEY,user_id INTEGER NOT NULL,version BIGINT NOT NULL DEFAULT 1,user_auth_version BIGINT NOT NULL,status VARCHAR(16) NOT NULL,refresh_hash CHAR(64) NOT NULL,previous_refresh_hash VARCHAR(64),previous_valid_until BIGINT NOT NULL DEFAULT 0,login_method VARCHAR(32) NOT NULL,ip VARCHAR(64),user_agent TEXT,created_at BIGINT,last_active_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,revoked_at BIGINT NOT NULL DEFAULT 0,revoked_reason VARCHAR(64))",
     ] {
-        sqlx::query(ddl)
-            .execute(&pool)
-            .await
-            .expect("fixture DDL");
+        sqlx::query(ddl).execute(&pool).await.expect("fixture DDL");
     }
     let db = Database::Sqlite(pool);
     let auth = SessionAuth::without_cache(db.clone(), AuthKeys::new("fixture-session-secret"));
@@ -85,14 +82,16 @@ async fn refresh_rotates_and_validates() {
         .refresh(first.raw().expose_secret(), Some(first.sid()), NOW + 1)
         .await
         .expect("refresh");
-    assert_eq!(result.session.current, true);
+    assert!(result.session.current);
     assert_eq!(result.access_expires_at, NOW + 1 + 900);
     let keys = AuthKeys::new("fixture-session-secret");
     let parsed = keys
         .parse_access(result.access_token.expose_secret(), NOW + 2)
         .expect("access parses");
     assert_eq!(parsed, result.access_identity);
-    auth.validate(&parsed, NOW + 2).await.expect("session active");
+    auth.validate(&parsed, NOW + 2)
+        .await
+        .expect("session active");
     db.close().await;
 }
 
@@ -132,13 +131,16 @@ async fn replay_after_grace_revokes_family() {
         Some(SessionAuthError::SessionRevoked)
     );
     assert!(matches!(
-        auth.validate(&newapi_identity::AuthIdentity {
-            user_id: 1,
-            sid: first.sid().into(),
-            user_auth_version: 3,
-            session_version: 1,
-        }, NOW + 101)
-            .await,
+        auth.validate(
+            &newapi_identity::AuthIdentity {
+                user_id: 1,
+                sid: first.sid().into(),
+                user_auth_version: 3,
+                session_version: 1,
+            },
+            NOW + 101
+        )
+        .await,
         Err(SessionAuthError::SessionRevoked)
     ));
     db.close().await;
@@ -175,9 +177,13 @@ async fn sid_mismatch_is_rejected() {
     let first = credential();
     seed(&db, &first).await;
     assert_eq!(
-        auth.refresh(first.raw().expose_secret(), Some("ffffffff-ffff-4fff-8fff-ffffffffffff"), NOW + 1)
-            .await
-            .err(),
+        auth.refresh(
+            first.raw().expose_secret(),
+            Some("ffffffff-ffff-4fff-8fff-ffffffffffff"),
+            NOW + 1
+        )
+        .await
+        .err(),
         Some(SessionAuthError::SessionMismatch)
     );
     db.close().await;
