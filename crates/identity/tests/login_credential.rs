@@ -106,6 +106,47 @@ async fn scenarios(db: &Database) {
         execute(db, USERS).await;
         seed(db, 18, "caseuser").await;
     }
+    nullable_legacy_scenarios(db).await;
+}
+
+async fn nullable_legacy_scenarios(db: &Database) {
+    execute(db, "DROP TABLE users").await;
+    execute(
+        db,
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password TEXT, status INTEGER, auth_version BIGINT, deleted_at TIMESTAMP)",
+    )
+    .await;
+    let repo = LoginCredentialRepository::new(db.clone());
+    for (id, username, password, status, auth_version) in [
+        (1_i64, Some("null-password"), None, Some(2_i64), Some(3_i64)),
+        (2, Some("null-status"), Some(FIXTURE_HASH), None, Some(3)),
+        (3, Some("null-version"), Some(FIXTURE_HASH), Some(2), None),
+        (4, None, Some(FIXTURE_HASH), Some(2), Some(3)),
+    ] {
+        backend!(db, pool, {
+            checked(
+                sqlx::query(INSERT)
+                    .bind(id)
+                    .bind(username)
+                    .bind(password)
+                    .bind(status)
+                    .bind(auth_version)
+                    .execute(pool)
+                    .await,
+                "seed nullable legacy credential",
+            );
+        });
+    }
+    for username in ["null-password", "null-status", "null-version"] {
+        assert!(
+            repo.by_username(username).await.is_err(),
+            "matched NULL credential must fail closed"
+        );
+    }
+    for username in ["ordinary-user", "", "NULL", "null"] {
+        assert!(checked(repo.by_username(username).await, "read NULL username").is_none());
+    }
+    execute(db, "DROP TABLE users").await;
 }
 
 async fn assert_closed(db: &Database) {
