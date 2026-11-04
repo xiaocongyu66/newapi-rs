@@ -31,7 +31,15 @@ fn malformed_option_values_are_rejected_without_values_in_error() {
     let error = parse_string_map_option("not json").expect_err("malformed map");
     assert!(!error.to_string().contains("not json"));
     assert!(parse_string_map_option("").is_err());
-    assert!(parse_string_map_option("null").is_err());
+    // Go's json.Unmarshal accepts null as a nil map, i.e. "configured empty".
+    assert_eq!(
+        parse_string_map_option("null").expect("null map"),
+        BTreeMap::new()
+    );
+    assert_eq!(
+        parse_string_map_option(" null ").expect("null map"),
+        BTreeMap::new()
+    );
 }
 
 #[test]

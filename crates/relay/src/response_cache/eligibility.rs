@@ -1,6 +1,6 @@
 /// Inputs that decide whether a relay request may be served from, or stored
 /// into, the response cache. Ported gate-for-gate from the upstream relay.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Eligibility {
     pub chat_completions_mode: bool,
     pub openai_relay_format: bool,
@@ -18,24 +18,6 @@ pub struct Eligibility {
     pub temperature_nonzero: bool,
     /// Tools, functions, tool choice, function call, or web search.
     pub tooling_present: bool,
-}
-
-impl Default for Eligibility {
-    fn default() -> Self {
-        Self {
-            chat_completions_mode: false,
-            openai_relay_format: false,
-            pass_through_body_enabled: false,
-            pass_through_request_enabled: false,
-            channel_system_prompt_present: false,
-            param_override_present: false,
-            channel_other_settings_present: false,
-            cache_enabled: false,
-            stream: false,
-            temperature_nonzero: false,
-            tooling_present: false,
-        }
-    }
 }
 
 /// Conservative eligibility: every exclusion below must be false.

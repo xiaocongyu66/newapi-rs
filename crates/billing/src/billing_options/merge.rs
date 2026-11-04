@@ -11,6 +11,11 @@ pub const BILLING_EXPR_TARGET_KEY: &str = "billing_setting.billing_expr";
 /// Parse the stored JSON object as a string map. A malformed value is an error
 /// the caller must classify as "skip, keep the row".
 pub fn parse_string_map_option(value: &str) -> Result<BTreeMap<String, String>, serde_json::Error> {
+    // Go's json.Unmarshal into map[string]string accepts JSON null as a nil
+    // map; the migration then treats it as empty rather than malformed.
+    if value.trim() == "null" {
+        return Ok(BTreeMap::new());
+    }
     serde_json::from_str(value)
 }
 

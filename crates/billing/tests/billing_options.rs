@@ -228,6 +228,22 @@ async fn contract(db: &Database) {
         Some(r#"{"new":"value"}"#)
     );
 
+    // A JSON null target is an empty map in Go, so legacy data fills it.
+    put_option(
+        db,
+        LEGACY_BILLING_MODE_OPTION_KEY,
+        r#"{"from-null":"value"}"#,
+    )
+    .await;
+    put_option(db, MODE_TARGET, "null").await;
+    migrate_legacy_billing_options(db)
+        .await
+        .expect("null target merges");
+    assert_eq!(
+        option(db, MODE_TARGET).await.as_deref(),
+        Some(r#"{"from-null":"value"}"#)
+    );
+
     // A target write failure rolls the whole key back.
     put_option(db, LEGACY_BILLING_MODE_OPTION_KEY, r#"{"another":"value"}"#).await;
     put_option(db, MODE_TARGET, r#"{"current":"value"}"#).await;

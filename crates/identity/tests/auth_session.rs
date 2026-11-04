@@ -437,8 +437,16 @@ async fn identify_rejects_expired_or_malformed_access_as_unauthorized() {
         .refresh(first.raw().expose_secret(), None, NOW + 1)
         .await
         .expect("签发有效 access");
+    // Go validates access tokens with WithLeeway(5s): valid while
+    // now < exp + 5, expired from exp + 5 onward.
+    assert!(
+        auth.identify(issued.access_token.expose_secret(), NOW + 905)
+            .await
+            .is_ok(),
+        "exp+4 must still be inside the upstream leeway"
+    );
     assert_eq!(
-        auth.identify(issued.access_token.expose_secret(), NOW + 901)
+        auth.identify(issued.access_token.expose_secret(), NOW + 906)
             .await
             .err(),
         Some(SessionAuthError::Unauthorized),
