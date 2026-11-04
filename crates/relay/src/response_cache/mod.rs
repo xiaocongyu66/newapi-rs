@@ -5,6 +5,7 @@
 mod config;
 mod eligibility;
 mod key;
+mod options;
 mod store;
 
 pub use config::{
@@ -12,6 +13,10 @@ pub use config::{
 };
 pub use eligibility::{Eligibility, eligible};
 pub use key::key;
+pub use options::{
+    ENABLED_OPTION, MAX_BODY_SIZE_OPTION, MAX_ENTRIES_OPTION, OptionError, TTL_SECONDS_OPTION,
+    apply_option, validate_option,
+};
 pub use store::{
     Payload, Stats, clear, config, get, put, record_hit, record_miss, set_config, stats,
 };
