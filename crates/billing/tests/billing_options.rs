@@ -39,7 +39,7 @@ impl Drop for Directory {
 const MODE_TARGET: &str = "billing_setting.billing_mode";
 const EXPR_TARGET: &str = "billing_setting.billing_expr";
 
-async fn execute(db: &Database, sql: &str) {
+async fn execute(db: &Database, sql: &'static str) {
     match db {
         Database::Sqlite(pool) => {
             sqlx::query(sql).execute(pool).await.unwrap();
@@ -176,15 +176,24 @@ async fn contract(db: &Database) {
     migrate_legacy_billing_options(db)
         .await
         .expect("idempotent second run");
-    assert_eq!(option(db, MODE_TARGET).await.as_deref(), Some(&mode));
-    assert_eq!(option(db, EXPR_TARGET).await.as_deref(), Some(&expr));
+    assert_eq!(
+        option(db, MODE_TARGET).await.as_deref(),
+        Some(mode.as_str())
+    );
+    assert_eq!(
+        option(db, EXPR_TARGET).await.as_deref(),
+        Some(expr.as_str())
+    );
 
     // Malformed legacy data is logged and skipped, never fatal.
     put_option(db, LEGACY_BILLING_MODE_OPTION_KEY, "not json").await;
     migrate_legacy_billing_options(db)
         .await
         .expect("malformed legacy is skipped");
-    assert_eq!(option(db, MODE_TARGET).await.as_deref(), Some(&mode));
+    assert_eq!(
+        option(db, MODE_TARGET).await.as_deref(),
+        Some(mode.as_str())
+    );
     assert_eq!(
         option(db, LEGACY_BILLING_MODE_OPTION_KEY).await.as_deref(),
         Some("not json"),
