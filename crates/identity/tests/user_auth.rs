@@ -26,7 +26,7 @@ fn checked<T>(result: Result<T, sqlx::Error>, action: &'static str) -> T {
     result.unwrap_or_else(|_| panic!("user_auth fixture failed: {action}"))
 }
 
-async fn execute(db: &Database, statement: &str) {
+async fn execute(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         checked(
             sqlx::query(statement).execute(pool).await,
@@ -113,10 +113,17 @@ async fn scenarios(db: &Database) {
     assert!(checked(repo.by_token(raw).await, "soft deleted user").is_none());
     execute(db, "DELETE FROM users").await;
 
-    for column in ["id", "username", "role", "status", "auth_version", "group"] {
+    // 固定白名单的静态语句：不拼接列名，也不解释用户输入。
+    for (column, statement) in [
+        ("id", "UPDATE users SET \"id\"=NULL"),
+        ("username", "UPDATE users SET \"username\"=NULL"),
+        ("role", "UPDATE users SET \"role\"=NULL"),
+        ("status", "UPDATE users SET \"status\"=NULL"),
+        ("auth_version", "UPDATE users SET \"auth_version\"=NULL"),
+        ("group", "UPDATE users SET \"group\"=NULL"),
+    ] {
         seed(db, Some(raw)).await;
-        // 仅从固定白名单构造列名，不插值用户输入。
-        execute(db, &format!("UPDATE users SET \"{column}\"=NULL")).await;
+        execute(db, statement).await;
         match repo.by_token(raw).await {
             Err(sqlx::Error::ColumnDecode { index, source }) => {
                 assert_eq!(index, column);
@@ -270,7 +277,7 @@ async fn postgres_user_auth_contract() {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
     );
     checked(
-        sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA \"{schema}\"")))
             .execute(&admin)
             .await,
         "create isolated schema",
@@ -302,9 +309,11 @@ async fn postgres_user_auth_contract() {
         .expect_err("closed pool must remain a storage error");
     assert_eq!(UserAuthError::from(closed_pool), UserAuthError::Storage);
     checked(
-        sqlx::query(&format!("DROP SCHEMA \"{schema}\" CASCADE"))
-            .execute(&admin)
-            .await,
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA \"{schema}\" CASCADE"
+        )))
+        .execute(&admin)
+        .await,
         "drop isolated schema",
     );
     admin.close().await;

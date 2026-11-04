@@ -195,9 +195,9 @@ fn evict_one(state: &mut State) {
         .iter()
         .min_by_key(|(_, entry)| entry.expires_at)
         .map(|(key, _)| key.clone());
-    if let Some(key) = oldest {
-        if let Some(entry) = state.store.remove(&key) {
-            state.current_size = state.current_size.saturating_sub(entry.body.len());
-        }
+    if let Some(key) = oldest
+        && let Some(entry) = state.store.remove(&key)
+    {
+        state.current_size = state.current_size.saturating_sub(entry.body.len());
     }
 }

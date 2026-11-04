@@ -28,17 +28,17 @@ impl ChannelSettings {
     /// unknown/empty preset both fall through, matching the upstream `!= ""`
     /// checks.
     pub fn resolve_system_prompt(&self, model_name: &str) -> &str {
-        if let Some(prompt) = self.system_prompt_models.get(model_name) {
+        if let Some(prompt) = self.system_prompt_models.get(model_name)
+            && !prompt.is_empty()
+        {
+            return prompt;
+        }
+        if let Some(name) = self.system_prompt_preset.as_deref()
+            && !name.is_empty()
+        {
+            let prompt = presets::get_preset(name);
             if !prompt.is_empty() {
                 return prompt;
-            }
-        }
-        if let Some(name) = self.system_prompt_preset.as_deref() {
-            if !name.is_empty() {
-                let prompt = presets::get_preset(name);
-                if !prompt.is_empty() {
-                    return prompt;
-                }
             }
         }
         self.system_prompt.as_deref().unwrap_or("")
