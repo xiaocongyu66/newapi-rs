@@ -1,6 +1,9 @@
 use std::sync::Mutex;
 
-use super::{Config, Payload, clear, get, key, put, record_hit, record_miss, set_config, stats};
+use super::{
+    Config, Eligibility, Payload, clear, eligible, get, key, put, record_hit, record_miss,
+    set_config, stats,
+};
 
 // The store is process-global, matching the upstream package state. Serialise
 // tests so one case cannot observe another's entries.
@@ -204,6 +207,104 @@ fn stats_counters() {
     assert_eq!(stats.hits, 2);
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.entries, 0);
+}
+
+fn eligible_request() -> Eligibility {
+    Eligibility {
+        chat_completions_mode: true,
+        openai_relay_format: true,
+        cache_enabled: true,
+        ..Eligibility::default()
+    }
+}
+
+#[test]
+fn eligibility_accepts_only_the_deterministic_openai_path() {
+    assert!(eligible(eligible_request()));
+}
+
+#[test]
+fn eligibility_rejects_each_upstream_exclusion() {
+    let cases: [(&str, Eligibility); 10] = [
+        (
+            "non-chat-completions",
+            Eligibility {
+                chat_completions_mode: false,
+                ..eligible_request()
+            },
+        ),
+        (
+            "non-openai-format",
+            Eligibility {
+                openai_relay_format: false,
+                ..eligible_request()
+            },
+        ),
+        (
+            "pass-through-body",
+            Eligibility {
+                pass_through_body_enabled: true,
+                ..eligible_request()
+            },
+        ),
+        (
+            "pass-through-request",
+            Eligibility {
+                pass_through_request_enabled: true,
+                ..eligible_request()
+            },
+        ),
+        (
+            "channel-system-prompt",
+            Eligibility {
+                channel_system_prompt_present: true,
+                ..eligible_request()
+            },
+        ),
+        (
+            "param-override",
+            Eligibility {
+                param_override_present: true,
+                ..eligible_request()
+            },
+        ),
+        (
+            "channel-other-settings",
+            Eligibility {
+                channel_other_settings_present: true,
+                ..eligible_request()
+            },
+        ),
+        (
+            "cache-disabled",
+            Eligibility {
+                cache_enabled: false,
+                ..eligible_request()
+            },
+        ),
+        (
+            "streaming",
+            Eligibility {
+                stream: true,
+                ..eligible_request()
+            },
+        ),
+        (
+            "non-zero-temperature",
+            Eligibility {
+                temperature_nonzero: true,
+                ..eligible_request()
+            },
+        ),
+    ];
+    for (name, input) in cases {
+        assert!(!eligible(input), "{name} must be ineligible");
+    }
+    let tooling = Eligibility {
+        tooling_present: true,
+        ..eligible_request()
+    };
+    assert!(!eligible(tooling), "tooling requests must be ineligible");
 }
 
 #[test]
