@@ -167,7 +167,18 @@ ClickHouse适配可能需要SQLx以外客户端；这里只标记待选型，不
 
 进程退出必须编排停止接收请求/领取任务、限时drain在途流、持久化待恢复账务状态、取消或释放租约、关闭日志/数据库；不能只依赖Drop进行异步退款。进入切流前冻结Go/Rust会话、缓存、在途结算与任务单执行权；应用回滚与数据库恢复不得混为恢复旧备份。
 
-## 9. 尚待决策/阻塞
+## 9. 明确不实现范围
+
+以下能力经用户确认不属于 Rust 重写范围，不建立对应端口、配置项或路由：
+
+- **Worker 代理**（Go `internal/egress`）：`WorkerUrl`、`WorkerValidKey`、`WorkerAllowHttpImageRequestEnabled` 三项 options，以及 `fetch_url.go`、`fetch_file.go`、`ops/dispatch_webhook.go`、`ops/notify_user.go` 中经 Worker 转发的分支。前端 `system-settings/integrations/worker-settings-section.tsx` 对应设置页不迁移。无 Worker 时的直连出站 HTTP 仍需保留，并由 integrations/egress 以直连实现。
+- Rust 不提供 Worker 配置的热加载、密钥保存或 HTTP 图片放行开关；遇到旧库中残留的这些 options 行只按普通未知配置忽略，不据此改变出站行为。
+
+### 9.1 延后实现（不取消）
+
+- **sing-box 出站代理**：Go `internal/egress` 的代理能力需要重新实现，归属 `integrations/egress`，通过 `relay.OutboundPort` 提供，不保留 Go sidecar。排期放在最后阶段（P7 末端），在 Relay 协议、计费、catalog、usage 等主链之后实施；在此之前出站默认直连，并显式标记代理能力未启用，不伪装已支持。
+
+## 10. 尚待决策/阻塞
 
 - 表级归属与跨域同事务端口需要data/ops负责人补全，特别是user/token额度、订阅、usage独立库、任务与outbox。
 - 本文提出catalog承接非账务options、jobs承接异步task持久化；需主集成者与数据台账核对后冻结，不是对旧schema重构的授权。
