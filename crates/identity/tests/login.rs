@@ -1,6 +1,23 @@
 use newapi_identity::AuthError;
 use newapi_identity::crypto::hash_password_with_salt;
-use newapi_identity::login::{LoginError, verify_password};
+use newapi_identity::login::{
+    AuthenticatedLogin, LoginCredentialError, LoginError, check_credential, verify_password,
+};
+use newapi_identity::users::LoginCredential;
+
+fn credential(password: &str, status: i64) -> LoginCredential {
+    let password_hash = hash_password_with_salt(password.as_bytes(), [7; 16])
+        .unwrap()
+        .expose_secret()
+        .to_owned();
+    LoginCredential {
+        user_id: 17,
+        password_hash,
+        status,
+        auth_version: 4_294_967_299,
+        username: "CaseUser".to_owned(),
+    }
+}
 
 #[test]
 fn verifies_correct_and_rejects_wrong_password() {
@@ -46,6 +63,56 @@ fn enforces_bcrypt_byte_limit_and_unicode_boundary() {
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains(&too_long));
     assert!(!rendered.contains(&stored));
+}
+
+#[test]
+fn credential_check_returns_the_minimal_identity() {
+    let stored = credential("correct horse", 1);
+    assert_eq!(
+        check_credential(&stored, "correct horse"),
+        Ok(AuthenticatedLogin {
+            user_id: 17,
+            username: "CaseUser".to_owned(),
+            auth_version: 4_294_967_299,
+        })
+    );
+    assert_eq!(
+        check_credential(&stored, "wrong horse"),
+        Err(LoginCredentialError::InvalidCredentials)
+    );
+}
+
+#[test]
+fn credential_check_rejects_disabled_accounts_and_missing_hashes() {
+    let disabled = credential("correct horse", 2);
+    assert_eq!(
+        check_credential(&disabled, "correct horse"),
+        Err(LoginCredentialError::InvalidCredentials)
+    );
+
+    let mut unset = credential("correct horse", 1);
+    unset.password_hash = String::new();
+    assert_eq!(
+        check_credential(&unset, "correct horse"),
+        Err(LoginCredentialError::InvalidCredentials)
+    );
+}
+
+#[test]
+fn malformed_hash_and_overlong_password_are_credential_mismatches() {
+    let mut malformed = credential("correct horse", 1);
+    malformed.password_hash = "$2b$10$malformed".to_owned();
+    assert_eq!(
+        check_credential(&malformed, "correct horse"),
+        Err(LoginCredentialError::InvalidCredentials)
+    );
+
+    let stored = credential("correct horse", 1);
+    let too_long = "密".repeat(25); // 75 UTF-8 bytes.
+    assert_eq!(
+        check_credential(&stored, &too_long),
+        Err(LoginCredentialError::InvalidCredentials)
+    );
 }
 
 #[test]

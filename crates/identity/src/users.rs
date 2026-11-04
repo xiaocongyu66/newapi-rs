@@ -187,7 +187,8 @@ pub struct LoginCredential {
     pub username: String,
 }
 
-const LOGIN_CREDENTIAL_BY_USERNAME: &str = "SELECT CAST(id AS BIGINT),username,password,CAST(status AS BIGINT),CAST(auth_version AS BIGINT) FROM users WHERE username=$1 AND deleted_at IS NULL";
+// 与 Go ValidateAndFill 一致：用户名或邮箱均可登录，GORM First 的主键顺序作为并列时的稳定选择。
+const LOGIN_CREDENTIAL_BY_LOGIN: &str = "SELECT CAST(id AS BIGINT),username,password,CAST(status AS BIGINT),CAST(auth_version AS BIGINT) FROM users WHERE (username=$1 OR email=$1) AND deleted_at IS NULL ORDER BY id LIMIT 1";
 
 #[derive(Clone)]
 pub struct LoginCredentialRepository {
@@ -199,9 +200,9 @@ impl LoginCredentialRepository {
         Self { db }
     }
 
-    /// 保留数据库原有等值比较语义，不修剪用户名或覆盖 collation。
+    /// 按用户名或邮箱读取原始凭据；保留数据库等值比较语义，不修剪输入。
     /// SQLx 错误原样传播；调用方不得直接记录可能敏感的错误文本。
-    pub async fn by_username(
+    pub async fn by_username_or_email(
         &self,
         username: &str,
     ) -> Result<Option<LoginCredential>, sqlx::Error> {
@@ -216,7 +217,7 @@ impl LoginCredentialRepository {
                         Option<i64>,
                         Option<i64>,
                     ),
-                >(LOGIN_CREDENTIAL_BY_USERNAME)
+                >(LOGIN_CREDENTIAL_BY_LOGIN)
                 .bind(username)
                 .fetch_optional(pool)
                 .await?
@@ -231,7 +232,7 @@ impl LoginCredentialRepository {
                         Option<i64>,
                         Option<i64>,
                     ),
-                >(LOGIN_CREDENTIAL_BY_USERNAME)
+                >(LOGIN_CREDENTIAL_BY_LOGIN)
                 .bind(username)
                 .fetch_optional(pool)
                 .await?

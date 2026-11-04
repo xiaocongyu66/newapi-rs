@@ -1,4 +1,6 @@
 //! 真实数据库契约测试；合成 DDL 不代表生产 schema 或生产 collation。
+use newapi_identity::crypto::hash_password_with_salt;
+use newapi_identity::login::{AuthenticatedLogin, LoginCredentialError, validate_and_fill};
 use newapi_identity::users::LoginCredentialRepository;
 use newapi_storage::Database;
 use sqlx::{
@@ -10,9 +12,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const FIXTURE_HASH: &str = "synthetic-prehashed-login-fixture";
-const USERS: &str = "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, password TEXT NOT NULL, status INTEGER NOT NULL, auth_version BIGINT NOT NULL, deleted_at TIMESTAMP)";
+const USERS: &str = "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, email TEXT, password TEXT NOT NULL, status INTEGER NOT NULL, auth_version BIGINT NOT NULL, deleted_at TIMESTAMP)";
 const INSERT: &str =
-    "INSERT INTO users (id,username,password,status,auth_version) VALUES ($1,$2,$3,$4,$5)";
+    "INSERT INTO users (id,username,email,password,status,auth_version) VALUES ($1,$2,$3,$4,$5,$6)";
 
 // 只输出固定操作标签，禁止输出凭据、DSN 或 SQLx 原始错误。
 fn checked<T>(result: Result<T, sqlx::Error>, action: &'static str) -> T {
@@ -37,12 +39,13 @@ async fn execute(db: &Database, statement: &'static str) {
     });
 }
 
-async fn seed(db: &Database, id: i64, username: &str) {
+async fn seed(db: &Database, id: i64, username: &str, email: Option<&str>) {
     backend!(db, pool, {
         checked(
             sqlx::query(INSERT)
                 .bind(id)
                 .bind(username)
+                .bind(email)
                 .bind(FIXTURE_HASH)
                 .bind(2_i64)
                 .bind(4_294_967_299_i64)
@@ -56,10 +59,20 @@ async fn seed(db: &Database, id: i64, username: &str) {
 async fn scenarios(db: &Database) {
     let repo = LoginCredentialRepository::new(db.clone());
     execute(db, USERS).await;
-    seed(db, 17, "CaseUser").await;
-    seed(db, 18, "caseuser").await;
-    seed(db, 19, "用户' OR 1=1 --").await;
-    seed(db, 20, " CaseUser ").await;
+    seed(db, 17, "CaseUser", None).await;
+    seed(db, 18, "caseuser", None).await;
+    seed(db, 19, "用户' OR 1=1 --", None).await;
+    seed(db, 20, " CaseUser ", None).await;
+    seed(db, 21, "EmailUser", Some("mail@example.test")).await;
+
+    // 与 Go ValidateAndFill 的 `username = ? OR email = ?` 一致。
+    let by_email = checked(
+        repo.by_username_or_email("mail@example.test").await,
+        "read by email",
+    )
+    .expect("fixture email credential must exist");
+    assert_eq!(by_email.user_id, 21);
+    assert_eq!(by_email.username, "EmailUser");
 
     // 仅声明默认 TEXT fixture 的大小写行为，不覆盖或推断生产库 collation。
     for (username, id) in [
@@ -68,7 +81,7 @@ async fn scenarios(db: &Database) {
         ("用户' OR 1=1 --", 19),
         (" CaseUser ", 20),
     ] {
-        let credential = checked(repo.by_username(username).await, "read credential")
+        let credential = checked(repo.by_username_or_email(username).await, "read credential")
             .expect("fixture credential must exist");
         assert_eq!(credential.user_id, id);
         assert_eq!(credential.username, username);
@@ -78,7 +91,13 @@ async fn scenarios(db: &Database) {
         assert!(credential.password_hash == FIXTURE_HASH, "hash mismatch");
     }
     for username in ["CASEUSER", "absent", "", "' OR 1=1 --", "CaseUser "] {
-        assert!(checked(repo.by_username(username).await, "read absent username").is_none());
+        assert!(
+            checked(
+                repo.by_username_or_email(username).await,
+                "read absent username"
+            )
+            .is_none()
+        );
     }
 
     execute(
@@ -86,34 +105,117 @@ async fn scenarios(db: &Database) {
         "UPDATE users SET deleted_at='2026-01-01 00:00:00' WHERE id=17",
     )
     .await;
-    assert!(checked(repo.by_username("CaseUser").await, "read deleted user").is_none());
-    assert!(checked(repo.by_username("caseuser").await, "read remaining user").is_some());
+    assert!(
+        checked(
+            repo.by_username_or_email("CaseUser").await,
+            "read deleted user"
+        )
+        .is_none()
+    );
+    assert!(
+        checked(
+            repo.by_username_or_email("caseuser").await,
+            "read remaining user"
+        )
+        .is_some()
+    );
 
     // 每个投影列及软删除条件列缺失都必须传播错误，不能伪装成 None。
     // 仅固定 SQL；每轮重新建表，不依赖恢复旧 prepared statement 的行为。
     for statement in [
         "ALTER TABLE users RENAME COLUMN id TO missing_id",
         "ALTER TABLE users RENAME COLUMN username TO missing_username",
+        "ALTER TABLE users RENAME COLUMN email TO missing_email",
         "ALTER TABLE users RENAME COLUMN password TO missing_password",
         "ALTER TABLE users RENAME COLUMN status TO missing_status",
         "ALTER TABLE users RENAME COLUMN auth_version TO missing_auth_version",
         "ALTER TABLE users RENAME COLUMN deleted_at TO missing_deleted_at",
     ] {
         execute(db, statement).await;
-        assert!(repo.by_username("caseuser").await.is_err());
-        assert!(repo.by_username("absent").await.is_err());
+        assert!(repo.by_username_or_email("caseuser").await.is_err());
+        assert!(repo.by_username_or_email("absent").await.is_err());
         execute(db, "DROP TABLE users").await;
         execute(db, USERS).await;
-        seed(db, 18, "caseuser").await;
+        seed(db, 18, "caseuser", None).await;
     }
+    validate_and_fill_scenarios(db).await;
     nullable_legacy_scenarios(db).await;
+}
+
+async fn validate_and_fill_scenarios(db: &Database) {
+    let repo = LoginCredentialRepository::new(db.clone());
+    let hash = hash_password_with_salt(b"secret", [3; 16])
+        .unwrap()
+        .expose_secret()
+        .to_owned();
+    backend!(db, pool, {
+        checked(
+            sqlx::query(INSERT)
+                .bind(30_i64)
+                .bind("LoginUser")
+                .bind(Some("login@example.test"))
+                .bind(&hash)
+                .bind(1_i64)
+                .bind(7_i64)
+                .execute(pool)
+                .await,
+            "seed enabled login",
+        );
+        checked(
+            sqlx::query(INSERT)
+                .bind(31_i64)
+                .bind("DisabledUser")
+                .bind(None::<&str>)
+                .bind(&hash)
+                .bind(2_i64)
+                .bind(7_i64)
+                .execute(pool)
+                .await,
+            "seed disabled login",
+        );
+    });
+
+    let expected = AuthenticatedLogin {
+        user_id: 30,
+        username: "LoginUser".to_owned(),
+        auth_version: 7,
+    };
+    // Go trims the login name before the username/email lookup.
+    assert_eq!(
+        validate_and_fill(&repo, "  LoginUser  ", "secret").await,
+        Ok(expected.clone())
+    );
+    assert_eq!(
+        validate_and_fill(&repo, "login@example.test", "secret").await,
+        Ok(expected)
+    );
+    assert_eq!(
+        validate_and_fill(&repo, "LoginUser", "wrong").await,
+        Err(LoginCredentialError::InvalidCredentials)
+    );
+    assert_eq!(
+        validate_and_fill(&repo, "", "secret").await,
+        Err(LoginCredentialError::EmptyCredentials)
+    );
+    assert_eq!(
+        validate_and_fill(&repo, "LoginUser", "").await,
+        Err(LoginCredentialError::EmptyCredentials)
+    );
+    assert_eq!(
+        validate_and_fill(&repo, "absent", "secret").await,
+        Err(LoginCredentialError::InvalidCredentials)
+    );
+    assert_eq!(
+        validate_and_fill(&repo, "DisabledUser", "secret").await,
+        Err(LoginCredentialError::InvalidCredentials)
+    );
 }
 
 async fn nullable_legacy_scenarios(db: &Database) {
     execute(db, "DROP TABLE users").await;
     execute(
         db,
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password TEXT, status INTEGER, auth_version BIGINT, deleted_at TIMESTAMP)",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, password TEXT, status INTEGER, auth_version BIGINT, deleted_at TIMESTAMP)",
     )
     .await;
     let repo = LoginCredentialRepository::new(db.clone());
@@ -128,6 +230,7 @@ async fn nullable_legacy_scenarios(db: &Database) {
                 sqlx::query(INSERT)
                     .bind(id)
                     .bind(username)
+                    .bind(None::<&str>)
                     .bind(password)
                     .bind(status)
                     .bind(auth_version)
@@ -144,7 +247,7 @@ async fn nullable_legacy_scenarios(db: &Database) {
     ] {
         assert!(
             matches!(
-                repo.by_username(username).await,
+                repo.by_username_or_email(username).await,
                 Err(sqlx::Error::ColumnDecode { index, source })
                     if index == column && source.is::<sqlx::error::UnexpectedNullError>()
             ),
@@ -152,7 +255,13 @@ async fn nullable_legacy_scenarios(db: &Database) {
         );
     }
     for username in ["ordinary-user", "", "NULL", "null"] {
-        assert!(checked(repo.by_username(username).await, "read NULL username").is_none());
+        assert!(
+            checked(
+                repo.by_username_or_email(username).await,
+                "read NULL username"
+            )
+            .is_none()
+        );
     }
     execute(db, "DROP TABLE users").await;
 }
@@ -162,10 +271,14 @@ async fn assert_closed(db: &Database) {
     let repo = LoginCredentialRepository::new(db.clone());
     for username in ["caseuser", "absent"] {
         assert!(matches!(
-            repo.by_username(username).await,
+            repo.by_username_or_email(username).await,
             Err(sqlx::Error::PoolClosed)
         ));
     }
+    assert_eq!(
+        validate_and_fill(&repo, "caseuser", "secret").await,
+        Err(LoginCredentialError::Storage)
+    );
 }
 
 #[tokio::test]
