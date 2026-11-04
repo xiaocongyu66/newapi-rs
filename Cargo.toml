@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/config", "crates/storage", "crates/catalog", "crates/identity", "crates/security", "apps/server"]
+members = ["crates/config", "crates/storage", "crates/catalog", "crates/identity", "crates/security", "crates/relay", "crates/billing", "apps/server"]
 exclude = ["tools/dependency-probe"]
 resolver = "3"
 

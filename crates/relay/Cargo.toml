@@ -1,0 +1,14 @@
+[package]
+name = "newapi-relay"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+publish = false
+
+[dependencies]
+hex = "=0.4.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+sha2 = "=0.10.9"
+
+[dev-dependencies]
+serde_json = "=1.0.154"
