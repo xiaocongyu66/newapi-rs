@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 /// One row from the legacy ModelBillingMode/ModelBillingExpr options.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct LegacyBillingRecord {
     pub model: String,
     pub mode: Option<String>,
@@ -17,7 +17,7 @@ pub struct LegacyBillingRecord {
 }
 
 /// The already-present value in the target billing_setting option.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct BillingSettingRecord {
     pub model: String,
     pub mode: Option<String>,
@@ -25,7 +25,7 @@ pub struct BillingSettingRecord {
 }
 
 /// A fixed, value-free classification of invalid input or an unusable plan.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum MergeError {
     EmptyModel,
     EmptyLegacyValue,
@@ -36,7 +36,7 @@ pub enum MergeError {
 
 /// One planned decision. Values are retained in the plan for the eventual
 /// executor, but this type intentionally does not implement `Debug`.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum PlanStep {
     KeepTarget(BillingSettingRecord),
     KeepLegacy(LegacyBillingRecord),
@@ -44,7 +44,7 @@ pub enum PlanStep {
 }
 
 /// Complete result of planning. No step has been applied to a database.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MergePlan {
     pub steps: Vec<PlanStep>,
 }
