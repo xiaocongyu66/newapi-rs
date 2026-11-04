@@ -266,10 +266,12 @@ async fn install_failure_trigger(db: &Database) {
             .execute(pool)
             .await
             .unwrap();
+            // PostgreSQL 9.6 predates EXECUTE FUNCTION; PROCEDURE is accepted
+            // across the supported 9.6-17 range.
             sqlx::query(
                 "CREATE TRIGGER billing_options_fail BEFORE UPDATE ON options \
                  FOR EACH ROW WHEN (NEW.\"key\" = 'billing_setting.billing_mode') \
-                 EXECUTE FUNCTION pg_temp.billing_options_fail()",
+                 EXECUTE PROCEDURE pg_temp.billing_options_fail()",
             )
             .execute(pool)
             .await
@@ -279,7 +281,21 @@ async fn install_failure_trigger(db: &Database) {
 }
 
 async fn drop_failure_trigger(db: &Database) {
-    execute(db, "DROP TRIGGER billing_options_fail ON options").await;
+    match db {
+        // SQLite drops a trigger by name only; `ON table` is PostgreSQL syntax.
+        Database::Sqlite(pool) => {
+            sqlx::query("DROP TRIGGER billing_options_fail")
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query("DROP TRIGGER billing_options_fail ON options")
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
 }
 
 #[tokio::test]
