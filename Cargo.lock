@@ -988,6 +988,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "newapi-billing"
+version = "0.1.0"
+dependencies = [
+ "newapi-storage",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "newapi-catalog"
 version = "0.1.0"
 dependencies = [
@@ -1022,6 +1034,16 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "newapi-relay"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
