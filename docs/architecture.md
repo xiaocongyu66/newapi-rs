@@ -163,6 +163,38 @@ integrations → foundation
 |后台任务、master租约、失锁取消|main.go:116–185；internal/ops/schedule_tasks.go|jobs拥有租约与状态机，域JobHandler执行；billing保持资金终态幂等|多实例竞争、续期失败/失锁立即取消、重启恢复、影子无副作用；未开始|
 |internal共24模块及modules/relaykit|完整目录映射由P0各所有者合并|不强求一包一crate，但每项能力必须有owner；relaykit归relay协议转换边界|当前本文不是24模块全量映射表；各模块/表/任务缺口未补齐前P0受阻|
 
+### 8.1 Go 模块 → Rust 域映射（当前实现状态）
+
+状态含义：**已移植**＝行为有 Rust 实现与测试；**部分**＝仅覆盖已落地切片；**缺失**＝尚无 Rust 实现；**延后/不实现**见第 9 节。
+
+| Go 模块 | Rust owner | 当前状态 |
+|---|---|---|
+| authtoken | identity/tokens | 部分（JWT 签发/验签、用途隔离） |
+| billing | billing | 部分（legacy `billing_setting.*` 迁移） |
+| catalog | catalog | 部分（公共 options 快照） |
+| common | foundation（待建） | 缺失 |
+| constant | foundation/config | 缺失 |
+| dbinfra | storage（连接）+ 各域迁移规则 | 部分 |
+| dto | 各域公开 DTO | 缺失 |
+| egress | integrations | 延后（sing-box 最后实现；Worker 代理不实现） |
+| gateway | relay | 缺失（dispatch/relay info/SSE 扫描） |
+| geoip | integrations | 缺失 |
+| homestats | usage/catalog | 缺失 |
+| i18n | config/server | 缺失 |
+| identity | identity | 部分（登录/刷新/注销/会话/用户资料/初始化） |
+| logger | tracing + server | 部分 |
+| mailer | integrations | 缺失 |
+| ops | jobs/server | 缺失 |
+| relay | relay | 部分（响应缓存、资格判定、渠道提示词） |
+| responsecache | relay | 已移植（存储、资格、options 接线） |
+| security | security | 部分（Origin、角色门槛、API key、限流） |
+| sensitive | integrations/security | 缺失 |
+| settings | catalog（options）+ config | 部分（响应缓存四项已接线） |
+| task | jobs | 缺失 |
+| transport | apps/server | 部分（12 条生产路由） |
+| types | 各域公共类型 | 缺失 |
+| modules/relaykit | relay | 部分（渠道提示词；协议转换缺失） |
+
 ClickHouse适配可能需要SQLx以外客户端；这里只标记待选型，不声称SQLite/PostgreSQL 两库SQLx方案已经覆盖。涉及新增依赖、最低版本或支持范围变化，须按主计划记录影响并确认。现有特殊网络能力也不得以“标准HTTP可用”视为验收。
 
 进程退出必须编排停止接收请求/领取任务、限时drain在途流、持久化待恢复账务状态、取消或释放租约、关闭日志/数据库；不能只依赖Drop进行异步退款。进入切流前冻结Go/Rust会话、缓存、在途结算与任务单执行权；应用回滚与数据库恢复不得混为恢复旧备份。
