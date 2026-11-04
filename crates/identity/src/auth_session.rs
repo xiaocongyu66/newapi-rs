@@ -7,8 +7,8 @@ use newapi_storage::Database;
 use crate::crypto::{AuthKeys, RefreshCredential};
 use crate::session_cache::RedisSessionCache;
 use crate::sessions::{
-    NoCache, RefreshHash, RefreshOutcome, RevocationFence, SessionError, SessionRecord,
-    SessionRepository,
+    CreateSession, NoCache, RefreshHash, RefreshOutcome, RevocationFence, SessionError,
+    SessionLimits, SessionRecord, SessionRepository,
 };
 use crate::{AuthIdentity, SecretString};
 
@@ -32,6 +32,16 @@ pub struct RefreshResult {
     pub access_identity: AuthIdentity,
     pub session: SessionView,
     pub refresh_token: SecretString,
+}
+
+/// Inputs for a fresh login session. Metadata is truncated by the repository
+/// exactly like the upstream login path.
+pub struct LoginInput<'a> {
+    pub user_id: i64,
+    pub expected_auth_version: Option<i64>,
+    pub login_method: &'a str,
+    pub ip: &'a str,
+    pub user_agent: &'a str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,6 +213,51 @@ impl<F: RevocationFence> SessionAuth<F> {
                 Err(SessionAuthError::Unauthorized)
             }
             Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Port of Go `createLoginSession`: create the session row first, then
+    /// issue the access/refresh bundle. A bundle failure revokes the new
+    /// session with the upstream reason instead of leaving it active.
+    pub async fn login(
+        &self,
+        input: LoginInput<'_>,
+        now: i64,
+    ) -> Result<RefreshResult, SessionAuthError> {
+        let credential = RefreshCredential::generate()
+            .map_err(|_| SessionAuthError::Storage(SessionError::Storage))?;
+        let refresh_hash = hash(&self.keys, credential.secret());
+        let record = self
+            .repository
+            .create(
+                CreateSession {
+                    sid: credential.sid().to_owned(),
+                    user_id: input.user_id,
+                    expected_auth_version: input.expected_auth_version,
+                    refresh_hash,
+                    login_method: input.login_method.to_owned(),
+                    ip: input.ip.to_owned(),
+                    user_agent: input.user_agent.to_owned(),
+                },
+                SessionLimits::default(),
+                now,
+            )
+            .await?;
+        match self.issue(record, &credential, now) {
+            Ok(bundle) => Ok(bundle),
+            Err(error) => {
+                let _ = self
+                    .repository
+                    .revoke(
+                        &self.fence,
+                        input.user_id,
+                        credential.sid(),
+                        "token_issue_failed",
+                        now,
+                    )
+                    .await;
+                Err(error)
+            }
         }
     }
 

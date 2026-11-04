@@ -2,7 +2,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use newapi_identity::{
-    auth_session::{SessionAuth, SessionAuthError},
+    auth_session::{LoginInput, SessionAuth, SessionAuthError},
     crypto::{AuthKeys, RefreshCredential},
     sessions::{CreateSession, RefreshHash, SessionLimits, SessionRepository},
 };
@@ -41,6 +41,99 @@ async fn fixture() -> (Database, SessionAuth<newapi_identity::sessions::NoCache>
     let db = Database::Sqlite(pool);
     let auth = SessionAuth::without_cache(db.clone(), AuthKeys::new("fixture-session-secret"));
     (db, auth)
+}
+
+#[tokio::test]
+async fn login_creates_session_and_issues_bundle() {
+    let (db, auth) = fixture().await;
+    let bundle = auth
+        .login(
+            LoginInput {
+                user_id: 1,
+                expected_auth_version: Some(3),
+                login_method: " password ",
+                ip: " 1.2.3.4 ",
+                user_agent: "ua",
+            },
+            NOW + 5,
+        )
+        .await
+        .expect("login");
+    assert_eq!(bundle.session.login_method, "password");
+    assert!(bundle.session.current);
+    assert_eq!(bundle.session.ip, "1.2.3.4");
+    assert_eq!(bundle.access_expires_at, NOW + 5 + 900);
+
+    let identity = auth
+        .parse_access(bundle.access_token.expose_secret(), NOW + 6)
+        .expect("issued access token");
+    assert_eq!(identity.user_id, 1);
+    assert_eq!(identity.sid, bundle.session.sid);
+    assert_eq!(identity.user_auth_version, 3);
+    assert_eq!(identity.session_version, 1);
+
+    let refreshed = auth
+        .refresh(
+            bundle.refresh_token.expose_secret(),
+            Some(&bundle.session.sid),
+            NOW + 10,
+        )
+        .await
+        .expect("issued refresh token");
+    assert_eq!(refreshed.session.sid, bundle.session.sid);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn login_fails_closed_for_stale_version_or_disabled_user() {
+    let (db, auth) = fixture().await;
+    let stale = auth
+        .login(
+            LoginInput {
+                user_id: 1,
+                expected_auth_version: Some(2),
+                login_method: "password",
+                ip: "",
+                user_agent: "",
+            },
+            NOW + 5,
+        )
+        .await;
+    assert!(matches!(
+        stale,
+        Err(SessionAuthError::Storage(SessionError::UserSecurityChanged))
+    ));
+
+    let Database::Sqlite(pool) = &db else {
+        panic!("fixture must use SQLite");
+    };
+    sqlx::query("UPDATE users SET status=0 WHERE id=1")
+        .execute(pool)
+        .await
+        .expect("disable user");
+    let disabled = auth
+        .login(
+            LoginInput {
+                user_id: 1,
+                expected_auth_version: None,
+                login_method: "password",
+                ip: "",
+                user_agent: "",
+            },
+            NOW + 6,
+        )
+        .await;
+    assert!(matches!(
+        disabled,
+        Err(SessionAuthError::Storage(SessionError::UserSecurityChanged))
+    ));
+
+    let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_sessions")
+        .fetch_one(pool)
+        .await
+        .expect("count sessions");
+    assert_eq!(sessions, 0, "failed logins must not leave a session row");
+    db.close().await;
 }
 
 struct TerminalFailure;
