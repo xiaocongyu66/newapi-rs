@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use newapi_identity::{
     auth_session::{LoginInput, SessionAuth, SessionAuthError},
     crypto::{AuthKeys, RefreshCredential},
-    sessions::{CreateSession, RefreshHash, SessionLimits, SessionRepository},
+    sessions::{CreateSession, RefreshHash, SessionError, SessionLimits, SessionRepository},
 };
 use newapi_storage::Database;
 use sqlx::{
