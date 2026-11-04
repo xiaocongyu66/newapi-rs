@@ -240,8 +240,8 @@ impl Sha256 {
                 a[6],
             ];
         }
-        for i in 0..8 {
-            self.state[i] = self.state[i].wrapping_add(a[i]);
+        for (state, word) in self.state.iter_mut().zip(a) {
+            *state = state.wrapping_add(word);
         }
     }
 }

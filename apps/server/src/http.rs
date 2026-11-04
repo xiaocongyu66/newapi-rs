@@ -361,6 +361,13 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response 
                 SessionAuthError::SessionIdRequired => {
                     auth_failure(StatusCode::BAD_REQUEST, "AUTH_SESSION_ID_REQUIRED")
                 }
+                SessionAuthError::Unauthorized => {
+                    auth_failure(StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED")
+                }
+                SessionAuthError::Fence => {
+                    tracing::error!(event = "auth_fence_error", "session fence failed");
+                    auth_failure(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
+                }
                 SessionAuthError::Storage(_) | SessionAuthError::BatchFailed { .. } => {
                     tracing::error!(event = "auth_storage_error", "session refresh failed");
                     auth_failure(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
@@ -538,16 +545,15 @@ async fn session_identity(
     auth.identify(token, now)
         .await
         .map_err(|error| match error {
-            SessionAuthError::Storage(_) | SessionAuthError::BatchFailed { .. } => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
-            }
+            SessionAuthError::Storage(_)
+            | SessionAuthError::BatchFailed { .. }
+            | SessionAuthError::Fence => (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR"),
             SessionAuthError::RefreshInvalid
             | SessionAuthError::SessionRevoked
             | SessionAuthError::SessionMismatch
             | SessionAuthError::Race
-            | SessionAuthError::SessionIdRequired => {
-                (StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED")
-            }
+            | SessionAuthError::SessionIdRequired
+            | SessionAuthError::Unauthorized => (StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED"),
         })
 }
 
