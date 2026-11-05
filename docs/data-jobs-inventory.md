@@ -102,7 +102,7 @@
 | ClickHouse日志 | open_db.go:242–329 | MergeTree、按月分区、created_at/request_id排序；LOG_SQL_CLICKHOUSE_TTL_DAYS控制TTL，包括移除TTL；P7/P8待范围确认 |
 | 历史SQL | db/archive/migration_v0.2-v0.3.sql、migration_v0.3-v0.4.sql | 归档，不是上述embed迁移集合；P8旧版本路径审阅，不自动执行 |
 
-最低版本声明来自 `README.md:264`、`apps/api/README.md:20`：MySQL ≥5.7.8、PostgreSQL ≥9.6；SQLite未声明最低版本。部署示例 `deploy/docker-compose.yml` 使用PG18、注释MySQL8.2/ClickHouse24.8；dev使用PG18/Redis7；`docs/k8s/data-layer.md`提及Timescale2.29.2-pg18。**部署示例不是最低版本验收结果。** SQLx版本尚未锁定，PG9.6兼容性未证实；MySQL5.7.8仅历史声明、不迁移也不要求验证；Redis/ClickHouse/Timescale最低版本尚未确认。
+最低版本声明来自 `README.md:264`、`apps/api/README.md:20`：MySQL ≥5.7.8、PostgreSQL ≥9.6；SQLite未声明最低版本。部署示例 `deploy/docker-compose.yml` 使用PG18、注释MySQL8.2/ClickHouse24.8；dev使用PG18/Redis7；`docs/k8s/data-layer.md`提及Timescale2.29.2-pg18。**部署示例不是最低版本验收结果。** 用户已将最低支持版本修订为 PostgreSQL 14（2026-11-05），pg9.6不再作为验收目标；SQLx版本尚未锁定；MySQL5.7.8仅历史声明、不迁移也不要求验证；Redis/ClickHouse/Timescale最低版本尚未确认。
 
 ## 4. 后台任务逐项台账
 
@@ -273,7 +273,7 @@
 
 1. **已有Go基线证据**：ci-baseline.md首轮记录run 41425478831 attempt 1/2，SHA 6e599ec59837d645b4740ebe363790beda6b40f1均success；attempt 1 public-config 19/0、focused 295/2、full-api 2745/7、relaykit 280/0（pass/skip），四组退出码0。独立验证对CI基础交付PASS，不等于P0整体通过。以下2–6项为分阶段验证方案：P0只验集合、字段、归属与方案；P1验SQLxSQLite/PostgreSQL两目标库；P4验账务；P7验任务恢复；P8验完整升级。不得要求后阶段运行通过才验收P0清单。
 2. 列/索引/约束/JSON/密文/软删除尚未逐表展开。远程固定基线分别创建空库，导出SQLite/PostgreSQL两目标库 schema（含主/独立日志库），与GORM字段标签对账；另外从脱敏历史schema升级并重复运行迁移。输出DDL、版本、fixture校验和，不含秘密。
-3. SQLx目标验收仅SQLite与PostgreSQL；PG9.6历史最低版本兼容及现代部署版本需真实连接/CRUD/事务证据，SQLite记录实际引擎版本。MySQL5.7.8仅历史事实，不迁移、不安排CI。ClickHouse24.8与Timescale样例另矩阵，不因两目标主库通过就认定扩展通过。
+3. SQLx目标验收仅SQLite与PostgreSQL；PostgreSQL 14（当前最低）与现代部署版本17都需真实连接/CRUD/事务证据，SQLite记录实际引擎版本。MySQL5.7.8仅历史事实，不迁移、不安排CI。ClickHouse24.8与Timescale样例另矩阵，不因两目标主库通过就认定扩展通过。
 4. 注册模型集合之外，须静态扫描所有原生CREATE/ALTER/Table/AutoMigrate、init及goroutine/time.Sleep，建立未归属条目清零证据；全适配器/所有options/env/通知渠道交叉对账尚未完成。
 5. 账务事务、锁顺序、缓存key和TTL、outbox交付、支付幂等、任务租约尚未逐调用冻结；Actions模拟双实例、崩溃接管、重复webhook、订阅跨日/周/月/时区、退款守恒、断连结算；禁止真实支付/邮件/付费上游。
 6. 文件存储、安全日志、GeoIP下载和可能对象存储尚未证明全集；需要路径/权限/清理/保留期台账，影子实例所有副作用默认禁用。

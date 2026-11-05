@@ -300,7 +300,15 @@ async fn used_backup_code_count(database: &Database, user_id: i64) -> i64 {
 
 async fn totp_window(database: &Database) {
     let repo = TwoFaRepository::new(database.clone());
-    seed_two_fa(database, 101, &RFC_SECRET.to_ascii_lowercase(), true, 0, None).await;
+    seed_two_fa(
+        database,
+        101,
+        &RFC_SECRET.to_ascii_lowercase(),
+        true,
+        0,
+        None,
+    )
+    .await;
 
     // t=59 → counter 1。RFC 4226 counter 1 = 287082（当前步）。
     assert_eq!(repo.validate_login_code(101, "287082", 59).await, Ok(()));

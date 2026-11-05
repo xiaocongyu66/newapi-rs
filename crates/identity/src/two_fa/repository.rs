@@ -65,7 +65,8 @@ impl TwoFaError {
     /// zh-TW/en 为本地化增益。`lang` 由调用方经
     /// [`newapi_i18n::resolve_language`] 解析。
     pub fn client_message(&self, lang: &str) -> String {
-        let plain = |key: &str| newapi_i18n::translate(lang, key, std::iter::empty::<(&str, &str)>());
+        let plain =
+            |key: &str| newapi_i18n::translate(lang, key, std::iter::empty::<(&str, &str)>());
         match self {
             Self::Invalid => plain("twofa.code_invalid"),
             Self::Incorrect => plain("twofa.code_incorrect"),
@@ -280,8 +281,7 @@ impl TwoFaRepository {
         now: i64,
     ) -> Result<(), TwoFaError> {
         for _ in 0..MAX_UPDATE_RETRIES {
-            let Some((current_failed, current_locked)) =
-                self.read_attempt_state(two_fa.id).await?
+            let Some((current_failed, current_locked)) = self.read_attempt_state(two_fa.id).await?
             else {
                 return Err(TwoFaError::Unavailable);
             };
@@ -331,10 +331,7 @@ impl TwoFaRepository {
         Err(TwoFaError::AttemptsConflict)
     }
 
-    async fn read_attempt_state(
-        &self,
-        id: i64,
-    ) -> Result<Option<(i64, Option<i64>)>, TwoFaError> {
+    async fn read_attempt_state(&self, id: i64) -> Result<Option<(i64, Option<i64>)>, TwoFaError> {
         match &self.database {
             Database::Sqlite(pool) => {
                 let row = sqlx::query(SQLITE_SELECT_ATTEMPTS)
@@ -402,9 +399,7 @@ fn decode_sqlite_two_fa(row: sqlx::sqlite::SqliteRow) -> Result<TwoFa, TwoFaErro
         user_id: row
             .try_get("user_id")
             .map_err(|_| TwoFaError::Unavailable)?,
-        secret: row
-            .try_get("secret")
-            .map_err(|_| TwoFaError::Unavailable)?,
+        secret: row.try_get("secret").map_err(|_| TwoFaError::Unavailable)?,
         is_enabled: row
             .try_get("is_enabled")
             .map_err(|_| TwoFaError::Unavailable)?,
@@ -426,9 +421,7 @@ fn decode_postgres_two_fa(row: sqlx::postgres::PgRow) -> Result<TwoFa, TwoFaErro
         user_id: row
             .try_get("user_id")
             .map_err(|_| TwoFaError::Unavailable)?,
-        secret: row
-            .try_get("secret")
-            .map_err(|_| TwoFaError::Unavailable)?,
+        secret: row.try_get("secret").map_err(|_| TwoFaError::Unavailable)?,
         is_enabled: row
             .try_get("is_enabled")
             .map_err(|_| TwoFaError::Unavailable)?,

@@ -199,8 +199,10 @@ impl AuthFlowRepository {
         })
     }
 
-    /// 对应 Go `ConsumeAuthFlow`：PG 行锁 + 条件更新。
-    /// SQLite 无 FOR UPDATE，按 Go `dbx.LockForUpdate` 行为跳过。
+    /// 对应 Go `ConsumeAuthFlow`：单条条件 UPDATE 的原子写保证唯一赢家，
+    /// 未命中后重读按 Go 顺序分类（已消费优先于过期）。SQLite 的
+    /// BEGIN DEFERRED 快照会让并发读者同时通过预检查，因此不能用
+    /// 读后写；PG 的 UPDATE 行锁语义与此一致。
     pub async fn consume(
         &self,
         token: &str,
@@ -212,7 +214,36 @@ impl AuthFlowRepository {
         }
         let hash = token_hash(&self.key, token);
         backend!(&self.db, pool, dialect, {
-            let mut tx = pool.begin().await?;
+            let mut update = QueryBuilder::new("UPDATE auth_flows SET consumed_at=");
+            push_timestamp!(update, dialect, now);
+            update
+                .push(" WHERE token_hash=")
+                .push_bind(hash.as_str())
+                .push(" AND purpose=")
+                .push_bind(matching.purpose);
+            if matching.user_id != 0 {
+                update.push(" AND user_id=").push_bind(matching.user_id);
+            }
+            if !matching.session_id.is_empty() {
+                update
+                    .push(" AND session_id=")
+                    .push_bind(matching.session_id);
+            }
+            update.push(" AND consumed_at IS NULL AND expires_at>");
+            push_timestamp!(update, dialect, now);
+            let affected = update.build().execute(pool).await?.rows_affected();
+            if affected == 1 {
+                let mut query = QueryBuilder::new("SELECT ");
+                query
+                    .push(dialect.columns())
+                    .push(" FROM auth_flows WHERE token_hash=")
+                    .push_bind(hash.as_str());
+                let row = query.build().fetch_optional(pool).await?;
+                let mut flow = row.map(record!).transpose()?.ok_or(AuthFlowError::Storage)?;
+                flow.consumed_at = Some(now);
+                return Ok(flow);
+            }
+            // 未命中：重读区分无效、已消费与过期，保持 Go 判定顺序。
             let mut query = QueryBuilder::new("SELECT ");
             query
                 .push(dialect.columns())
@@ -228,36 +259,18 @@ impl AuthFlowRepository {
                     .push(" AND session_id=")
                     .push_bind(matching.session_id);
             }
-            if dialect == Dialect::Postgres {
-                query.push(" FOR UPDATE");
-            }
-            let row = query.build().fetch_optional(&mut *tx).await?;
+            let row = query.build().fetch_optional(pool).await?;
             let Some(row) = row else {
                 return Err(AuthFlowError::Invalid);
             };
-            let mut flow = record!(row);
-            // Go 顺序：已消费优先于过期。
+            let flow = record!(row);
             if flow.consumed_at.is_some() {
                 return Err(AuthFlowError::Consumed);
             }
             if flow.expires_at <= now {
                 return Err(AuthFlowError::Expired);
             }
-            let mut update = QueryBuilder::new("UPDATE auth_flows SET consumed_at=");
-            push_timestamp!(update, dialect, now);
-            update
-                .push(" WHERE id=")
-                .push_bind(flow.id)
-                .push(" AND consumed_at IS NULL AND expires_at>");
-            push_timestamp!(update, dialect, now);
-            let affected = update.build().execute(&mut *tx).await?.rows_affected();
-            // 条件更新未命中表示并发消费或检查后状态已变化。
-            if affected != 1 {
-                return Err(AuthFlowError::Consumed);
-            }
-            tx.commit().await?;
-            flow.consumed_at = Some(now);
-            Ok(flow)
+            Err(AuthFlowError::Consumed)
         })
     }
 

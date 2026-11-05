@@ -10,7 +10,7 @@
 
 P1 使用每 job 独立 SQLite 临时文件和 PostgreSQL service 容器；测试用户名、密码及库名仅为一次性 fixture，不复用任何生产账户。服务端口只用于该 runner/job，连接信息不接受仓库 secrets 或开发机环境继承。并行矩阵不共享数据库，测试间按独立数据库/schema/临时文件隔离，finally 清理；job 结束由 hosted runner 销毁。
 
-用户已明确不支持 MySQL，不设置其实现或验收矩阵。版本矩阵记录上游声明的 PostgreSQL 9.6 及现代版本；不将现代版本通过当作最低版本证明。精确镜像版本与摘要应在引入 service 时核实并冻结，历史镜像不可获取则记录受阻，不静默换版本。SQLite 在报告中输出实际 engine 版本。ClickHouse 只作独立日志库、TimescaleDB 只作 PostgreSQL 日志扩展，在对应后续阶段单独建矩阵，不作为第四/第五种主库。
+用户已明确不支持 MySQL，不设置其实现或验收矩阵。PostgreSQL 最低支持版本已由用户修订为 14（2026-11-05），矩阵为 PostgreSQL 14 与现代版本 17；不将 17 通过当作 14 已证明，两档都必须实测。精确镜像版本与摘要应在引入 service 时核实并冻结，历史镜像不可获取则记录受阻，不静默换版本。SQLite 在报告中输出实际 engine 版本。ClickHouse 只作独立日志库、TimescaleDB 只作 PostgreSQL 日志扩展，在对应后续阶段单独建矩阵，不作为第四/第五种主库。
 
 不自动连接或修改现有数据库。历史升级 fixture 从已审阅的源码/schema构造，不上传生产备份；需要真实脱敏样本时单独取得授权。P8 才进行完整升级与回滚演练；P0 冻结集合与方案，P1 验证连接及公共配置行为。
 

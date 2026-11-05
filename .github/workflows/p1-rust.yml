@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     outputs:
-      pg96: ${{ steps.images.outputs.pg96 }}
+      pg14: ${{ steps.images.outputs.pg14 }}
       pg17: ${{ steps.images.outputs.pg17 }}
       redis: ${{ steps.images.outputs.redis }}
     steps:
@@ -138,9 +138,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - database: pg96
-            image: ${{ needs.prepare.outputs.pg96 }}
-            major: '9.6'
+          - database: pg14
+            image: ${{ needs.prepare.outputs.pg14 }}
+            major: '14'
           - database: pg17
             image: ${{ needs.prepare.outputs.pg17 }}
             major: '17'

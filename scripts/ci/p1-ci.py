@@ -181,7 +181,7 @@ def request_json(url, headers=None):
 def images():
     # Read-only anonymous Docker Official Images registry authentication.
     result = {}
-    for key, repository, tag in (("pg96", "postgres", "9.6"), ("pg17", "postgres", "17"),
+    for key, repository, tag in (("pg14", "postgres", "14"), ("pg17", "postgres", "17"),
                                  ("redis", "redis", "7.2.17-bookworm")):
         token = request_json("https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/"
                              + repository + ":pull")["token"]

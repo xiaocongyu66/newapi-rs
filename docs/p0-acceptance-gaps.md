@@ -32,7 +32,7 @@
 | G02 路由/前端完整性 | contracts台账逐项注册及阶段已建立，但请求/响应/默认值等统一待核查；源码快照默认388项（API302、dashboard4、relay71、video11） | 对照精确注册快照与台账差集为零；dev、HEAD/OPTIONS、静态/fallback、pprof独立listener另列；逐项字段/中间件/前端消费者/错误/流语义冻结。快照engine中间件no-op不能证明鉴权 | contracts；阻塞 |
 | G03 表与数据 | data台账已有模型/读写owner和迁移线索，非完整字段schema证明 | 全字段/索引/约束/默认值/JSON/加密/软删除、原生SQL及非模型表清单闭环；每业务表唯一写入责任、跨域事务和缓存失效边界 | data/各域；阻塞 |
 | G04 后台任务/集成 | main启动及任务注册已有归属，尚未证明全部goroutine/ticker/init注册无遗漏 | 静态全集与台账差集；每项P阶段、owner、副作用、master/租约、取消/重启行为与模拟策略；全适配器、通知、支付及配置键交叉对账 | jobs/integrations；阻塞 |
-| G05 数据库版本/测试方法 | 目标主库SQLite/PostgreSQL，MySQL已获批不迁移；ClickHouse仅日志；Timescale是PG日志扩展；旧README最低版本未实测 | 用户确认补充范围/最低版本和测试办法；SQLx兼容证据设计、旧版镜像不可用处置；SQLite实际engine版本不可用Go模块号代替 | storage；两主库范围已批准；PG9.6及现代版本、SQLite实际引擎的远程测试方案见test-isolation.md；具体版本不可获取或驱动不兼容时才提交实际证据请求决策。功能通过属P1及后续阶段 |
+| G05 数据库版本/测试方法 | 目标主库SQLite/PostgreSQL，MySQL已获批不迁移；ClickHouse仅日志；Timescale是PG日志扩展；旧README最低版本未实测 | 用户确认补充范围/最低版本和测试办法；SQLx兼容证据设计、旧版镜像不可用处置；SQLite实际engine版本不可用Go模块号代替 | storage；两主库范围已批准；PostgreSQL 14（最低）与17、SQLite实际引擎的远程测试方案见test-isolation.md；具体版本不可获取或驱动不兼容时才提交实际证据请求决策。功能通过属P1及后续阶段 |
 | G06 Go基线/fixture | 两次run成功，公共配置fixture通过；MySQL/PG、支付签名原生skip | 归档命令、环境、退出码、skip名称/原因、证据SHA；确认P0“相关基线”充分性，未覆盖项明确阶段；需豁免只能由用户批准替代证据 | CI/verification；已执行部分不再阻塞，但不能用跳过项证明SQLite/PostgreSQL 两库通过 |
 | G07 隔离方案 | 当前CI临时源码副本、无生产凭证、无真实服务；设计已有基础 | 冻结测试数据库、临时账号/数据、端口及生命周期；模拟上游域名/出站限制；禁邮件/支付/通知副作用；脱敏fixture可复现并不依赖本机目录 | CI/security；方案已交付并经独立审阅，见test-isolation.md；实现按阶段远程验证，不再作为缺方案阻塞 |
 | G08 架构/工具依赖 | architecture为待复核设计；runner Rust版本查询通过；尚无Cargo.lock | 固定workspace DAG/公共契约，核查Axum/Tokio/SQLx等版本兼容及远程锁文件回收流程。用户已于2026-11-02明确批准P0建立最小依赖解析清单及必要target，由Actions生成验证并回收Cargo.lock；P1再建立真实业务workspace。不以探针目标冒充业务实现 | 架构/集成者；P0冻结要求未满足阻塞 |
@@ -48,7 +48,7 @@
 
 ## 3. 历史决策问题与后续阶段门禁
 
-1. **D-SCOPE（范围已明确，版本证据待验证）**：用户取消MySQL，主库仅SQLite/PostgreSQL；保留现有ClickHouse日志与Timescale扩展的迁移台账，按P7/P8验收，不视为额外主库。SQLx不能满足PG9.6时不可默认升级门槛，须提交具体证据再确认，不提前假设不兼容。
+1. **D-SCOPE（范围已明确，版本证据待验证）**：用户取消MySQL，主库仅SQLite/PostgreSQL；保留现有ClickHouse日志与Timescale扩展的迁移台账，按P7/P8验收，不视为额外主库。PG最低版本已由用户修订为14（2026-11-05）；若SQLx不能满足14，须提交具体证据再确认，不静默改变门槛。
 2. **L-EPAY（待确认）**：固定v0.0.4未发现独立许可证；用户/维护者提供授权证据或批准合法来源的实现方案。未决不等于无授权，公共仓库也不等于授权。至少先冻结不复制不明素材的边界、责任人和解决阶段；无法满足P0许可处理要求时保持受阻。
 3. **L-EGRESS（待确认）**：sing-box实际进程内库，Rust完整协议保留路径和合规方案需确认；换外部进程/删能力/保留Go运行时均不能悄悄执行。GPL与AGPL并非自动不兼容。
 4. **D-EVIDENCE（条件性待确认）**：历史数据库不可获取、相关基线无法运行或独立复核不可用时，是否接受具体替代证据/豁免，只能用户决定。一般未完成台账由开发者补齐，无须把普通工作误包装成用户审批。

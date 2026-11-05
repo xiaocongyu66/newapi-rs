@@ -282,8 +282,8 @@ async fn install_failure_trigger(db: &Database) {
             .execute(pool)
             .await
             .unwrap();
-            // PostgreSQL 9.6 predates EXECUTE FUNCTION; PROCEDURE is accepted
-            // across the supported 9.6-17 range.
+            // EXECUTE PROCEDURE stays a valid trigger alias across the
+            // supported 14-17 range.
             sqlx::query(
                 "CREATE TRIGGER billing_options_fail BEFORE UPDATE ON options \
                  FOR EACH ROW WHEN (NEW.\"key\" = 'billing_setting.billing_mode') \

@@ -49,7 +49,10 @@ impl fmt::Debug for AuthSettings {
         f.debug_struct("AuthSettings")
             .field("password_login_enabled", &self.password_login_enabled)
             .field("password_register_enabled", &self.password_register_enabled)
-            .field("email_verification_enabled", &self.email_verification_enabled)
+            .field(
+                "email_verification_enabled",
+                &self.email_verification_enabled,
+            )
             .field("turnstile_check_enabled", &self.turnstile_check_enabled)
             .field("register_enabled", &self.register_enabled)
             .field("turnstile_site_key", &self.turnstile_site_key)

@@ -5,7 +5,7 @@
 本次只修改 p1-rust.yml、p1-ci.py、p1-ci-test.py、本文；未本地执行任何测试、服务或容器，未提交推送。crypto oracle 包同步为 **internal/identity**，覆盖下文旧 common 约定，避免回归主集成修复。
 
 - 2026-11-02 经 `gh api repos/docker-library/official-images/contents/library/redis` 只读核实官方 `7.2.17-bookworm`，amd64 支持，来源 `redis/docker-library-redis` commit `41bd5f7bdf101142b029865bf727a97810ca8e02` / tag `v7.2.17`。本机 registry auth 请求超时，**没有虚构已取得 digest**。prepare 扩展现有 registry 校验：固定此完整版本 tag，远程获取官方 library/redis manifest、校验 SHA256 和 linux/amd64，输出不可变 digest。验证失败即阻断；verify service 只用 `redis@sha256:...`，原始 manifest/tag/digest 存 prepare artifact。
-- PG9.6/17 两个 job 各自拥有独立临时 Redis service，随机映射端口，无生产凭证、无外部 Redis、无共享持久卷。healthcheck 为 redis-cli ping。只在 verify 步骤注入 `TEST_REDIS_URL=redis://127.0.0.1:<job临时端口>/0`；TIME、Lua、CLIENT ID/KILL 使用测试专用实例的默认权限，不接生产服务。
+- PG14/17 两个 job 各自拥有独立临时 Redis service，随机映射端口，无生产凭证、无外部 Redis、无共享持久卷。healthcheck 为 redis-cli ping。只在 verify 步骤注入 `TEST_REDIS_URL=redis://127.0.0.1:<job临时端口>/0`；TIME、Lua、CLIENT ID/KILL 使用测试专用实例的默认权限，不接生产服务。
 - driver 缺 TEST_REDIS_URL 直接失败，输出日志前 add-mask；artifact 日志额外遮蔽完整环境 URL 及 redis/rediss URL。用容器内 redis-cli INFO server 验证实际版本必须恰为 7.2.17，记录真实退出码、版本判断、镜像 digest。INFO 不等于 Rust adapter 验证，后者见下一项。
 - 已读取 `/root/newapi-rs-p2-auth/crates/identity/tests/session_cache.rs`，其四项测试名并不统一以 redis_ 开头，因此采用实际 binary：`cargo +1.99.1 test --locked -p newapi-identity --test session_cache -- --test-threads=1`，不加名称筛选。要求正执行数、failed=0、ignored=0；不存在 binary 或零测试直接失败。该 binary 也会随 workspace test 执行。
 - 当前四项实际测试覆盖独立连接撤销拒绝迟到回填、Redis 自然 TTL 到期、版本/schema/白名单/截止时间、真实 WRONGTYPE 与 CLIENT ID/KILL 断连错误。临时 key 为随机 SID，清理仅限自身 key；不使用 FLUSHALL、不杀其他测试连接。运行时真实退出码、passed/failed/ignored/filtered 和版本证据入同 SHA/run/attempt artifact。
@@ -14,7 +14,7 @@
 
 ## P2 共享 Go oracle 增量
 
-新增 `prepare → oracle → verify(pg96, pg17)` 依赖链；原 P1 process job 保持。oracle job 仅构建一次两个 Go 包，固定上游 SHA `17970da4571e81308f176a0e61a38276e5771606`，注入模板到 RUNNER_TEMP 副本，不修改上游 checkout 或生产 crate。仍使用 P0 固定 checkout/setup-go/upload/download SHA、contents:read。
+新增 `prepare → oracle → verify(pg14, pg17)` 依赖链；原 P1 process job 保持。oracle job 仅构建一次两个 Go 包，固定上游 SHA `17970da4571e81308f176a0e61a38276e5771606`，注入模板到 RUNNER_TEMP 副本，不修改上游 checkout 或生产 crate。仍使用 P0 固定 checkout/setup-go/upload/download SHA、contents:read。
 
 实际已读取 Origin 作者模板：包 `internal/security`、测试 `TestP2OriginOracle`，通过 `t.Logf("P2_ORIGIN_ORACLE %s", ...)` 输出真实调用结果。CI 从 `go test -json` Output 事件抽取前缀后的对象，每行一个 JSON，**不转成数组、不使用模板的手写 Allowed 值替代实际结果**。Rust `P2_ORIGIN_ORACLE_PATH` 指向该 JSONL。每个 verify job 在 workspace test 外另执行 `cargo test --locked -p newapi-security --test origin_oracle origin_matches_go_oracle -- --exact` 并要求正测试数；至少40条、唯一名称及关键case由该 Rust 测试检查。
 
@@ -57,9 +57,9 @@ gh workflow run p1-rust.yml --ref migration/p2 -f refresh_lock=true
 
 - Rust 固定 `1.99.1`，安装 rustfmt/clippy；依赖版本从 `tools/dependency-probe/Cargo.toml` 精确比较，不以 semver 范围替代。根 workspace 成员必须恰为 config/storage/catalog/server 四个路径，并显式排除探针。禁止直接 Moka/sqlx-mysql、SQLx default features/MySQL；完整解析特性另存 artifact，仍需独立审阅传递依赖及特性闭包。
 - checkout/cache/upload-artifact 的 SHA 原样沿用 P0 probe 工作流。新增 download-artifact v4.3.0 经 `gh api repos/actions/download-artifact/git/ref/tags/v4.3.0` 只读核实，SHA 为 `d3f86a106a0bac45b974a628896c90dbdf5c8093`。
-- 2026-11-02 经 GitHub 官方 `docker-library/official-images` 的 `library/postgres` 核实 `17` tag 及 amd64 定义；经 `docker-library/postgres` 的 commit `36abfddd6f7235770d00f8546b199936b0ca77aa` 核实 9.6 官方历史与 EOL 删除记录。**这只能证明官方来源，不能证明旧镜像当前可拉取。**
-- 本机只读请求 Docker Hub / auth.docker.io 失败，未宣称取得 manifest/digest。工作流 prepare 必须先向官方 registry 只读取得 `library/postgres:9.6` 与 `:17` 的 manifest，校验内容 SHA256、linux/amd64 存在，并输出不可变 digest；服务 job 仅使用这些 digest。任一标签不存在、限流或网络失败立即红灯，不回退到更高版本、不跳过 9.6。
-- 实际服务启动后由容器内 `psql SHOW server_version` 核验 9.6/17 主版本并保存结果。镜像可用不等于 SQLx 0.9.0 已兼容 PostgreSQL 9.6；后者必须由 Rust 测试实证。
+- 2026-11-02 经 GitHub 官方 `docker-library/official-images` 的 `library/postgres` 核实 `17` tag 及 amd64 定义；9.6 官方历史与 EOL 删除记录见 `docker-library/postgres` commit `36abfddd6f7235770d00f8546b199936b0ca77aa`。2026-11-05 用户将最低版本门槛修订为 14，矩阵改用 `14` tag。**这只能证明官方来源，不能证明镜像当前可拉取。**
+- 本机只读请求 Docker Hub / auth.docker.io 失败，未宣称取得 manifest/digest。工作流 prepare 必须先向官方 registry 只读取得 `library/postgres:14` 与 `:17` 的 manifest，校验内容 SHA256、linux/amd64 存在，并输出不可变 digest；服务 job 仅使用这些 digest。任一标签不存在、限流或网络失败立即红灯，不回退到更高版本、不跳过 14。
+- 实际服务启动后由容器内 `psql SHOW server_version` 核验 14/17 主版本并保存结果。镜像可用不等于 SQLx 0.9.0 已兼容 PostgreSQL 14；后者必须由 Rust 测试实证。
 
 官方只读来源：
 
@@ -72,7 +72,7 @@ gh workflow run p1-rust.yml --ref migration/p2 -f refresh_lock=true
 1. 检出精确事件 SHA（PR 为事件的 merge SHA，不混称 head SHA），保存 SHA、run ID、attempt、runner image、toolchain、工作流和清单。
 2. 根 `Cargo.lock` 存在则保留，缺失时才远程 `cargo +1.99.1 generate-lockfile`。生成失败不伪造 lock。保存根 lock、完整 locked metadata、依赖树、features、清单、校验和。
 3. 下游下载**同 SHA/run/attempt** 的 prepare artifact，核对 identity、lock SHA256；若仓库已有 lock，再比对字节一致性，不覆盖不同的已提交 lock。
-4. PostgreSQL 9.6 与 17 两个 job 均运行：
+4. PostgreSQL 14 与 17 两个 job 均运行：
    - `cargo +1.99.1 check --locked --workspace`
    - `cargo +1.99.1 fmt --all --check`
    - `cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings`

@@ -83,7 +83,10 @@ async fn stored_hashes(db: &Database) -> Vec<String> {
     }
     .expect("read token hashes");
     // PG char(64) 可能带 bpchar 补位；本仓储读路径也只暴露 trim 后的摘要。
-    hashes.into_iter().map(|hash| hash.trim().to_owned()).collect()
+    hashes
+        .into_iter()
+        .map(|hash| hash.trim().to_owned())
+        .collect()
 }
 
 async fn consumed_at(db: &Database, token_hash: &str) -> Option<i64> {
@@ -344,9 +347,7 @@ async fn sqlite_closed_pool_returns_storage() {
         .expect("create before close");
     db.close().await;
     assert_eq!(
-        repo.get(token.expose_secret(), matching(), NOW)
-            .await
-            .err(),
+        repo.get(token.expose_secret(), matching(), NOW).await.err(),
         Some(AuthFlowError::Storage)
     );
     assert_eq!(
@@ -423,9 +424,7 @@ async fn postgres_auth_flow_contract() {
         pool.close().await;
     }
     assert_eq!(
-        repo.get(token.expose_secret(), matching(), NOW)
-            .await
-            .err(),
+        repo.get(token.expose_secret(), matching(), NOW).await.err(),
         Some(AuthFlowError::Storage)
     );
 

@@ -66,7 +66,11 @@ fn secret_is_base32_case_insensitive_without_padding() {
     let lower = RFC_SECRET.to_ascii_lowercase();
     assert!(validate_totp_code(&lower, "287082", 59));
     // pquerna 在解码前 TrimSpace。
-    assert!(validate_totp_code(&format!("  {RFC_SECRET}\n"), "287082", 59));
+    assert!(validate_totp_code(
+        &format!("  {RFC_SECRET}\n"),
+        "287082",
+        59
+    ));
     assert!(!validate_totp_code(&format!("{RFC_SECRET}="), "287082", 59));
     // 0、1、8、9 不在 RFC 4648 base32 字母表中。
     assert!(!validate_totp_code(
@@ -78,7 +82,10 @@ fn secret_is_base32_case_insensitive_without_padding() {
 
 #[test]
 fn numeric_code_requires_exactly_six_ascii_digits() {
-    assert_eq!(normalize_numeric_code(" 287 082 "), Some("287082".to_owned()));
+    assert_eq!(
+        normalize_numeric_code(" 287 082 "),
+        Some("287082".to_owned())
+    );
     assert_eq!(normalize_numeric_code("287082"), Some("287082".to_owned()));
     assert_eq!(normalize_numeric_code("28708"), None);
     assert_eq!(normalize_numeric_code("2870821"), None);
@@ -108,5 +115,8 @@ fn backup_code_normalization_matches_go() {
     assert_eq!(normalize_backup_code("ABCD-EFG"), None);
     assert_eq!(normalize_backup_code("ABCD-EFGHI"), None);
     assert_eq!(normalize_backup_code("ABCD-EFG!"), None);
-    assert_eq!(normalize_backup_code("ABCD-EFG0"), Some("ABCD-EFG0".to_owned()));
+    assert_eq!(
+        normalize_backup_code("ABCD-EFG0"),
+        Some("ABCD-EFG0".to_owned())
+    );
 }
