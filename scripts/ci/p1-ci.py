@@ -96,7 +96,8 @@ def manifest_policy():
     baseline = tomllib.loads((ROOT / "tools/dependency-probe/Cargo.toml").read_text())["dependencies"]
     root = tomllib.loads((ROOT / "Cargo.toml").read_text())
     expected = {"crates/config", "crates/storage", "crates/catalog", "apps/server",
-                "crates/identity", "crates/security", "crates/relay", "crates/billing"}
+                "crates/identity", "crates/security", "crates/relay", "crates/billing",
+                "crates/i18n"}
     if set(root["workspace"]["members"]) != expected:
         raise RuntimeError("unexpected P1 workspace membership")
     if "tools/dependency-probe" not in root["workspace"].get("exclude", []):
