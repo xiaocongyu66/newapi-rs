@@ -202,6 +202,23 @@ twofa.user_id_empty: "User ID cannot be empty"
 twofa.already_exists: "User already has 2FA configured"
 twofa.record_id_empty: "2FA record ID cannot be empty"
 twofa.code_invalid: "Verification code or backup code is incorrect"
+twofa.code_incorrect: "Verification code or backup code is incorrect, please try again"
+twofa.locked_until: "Account is locked, please try again after {{.Until}}"
+twofa.attempts_conflict: "Failed to update 2FA failure count, please retry"
+
+# Setup wizard messages
+setup.already_initialized: "The system has already been initialized"
+setup.schema_not_ready: "Database schema is not ready"
+setup.unavailable: "Database is unavailable"
+setup.invalid_input: "Invalid initialization input"
+setup.root_creation_failed: "Failed to create the administrator account"
+setup.mode_save_failed: "Failed to save self-use mode settings"
+setup.save_failed: "Failed to save initialization status"
+setup.success: "System initialization succeeded"
+setup.invalid_request: "Invalid request parameters"
+setup.username_too_long: "Username cannot exceed 12 characters"
+setup.password_mismatch: "The two passwords do not match"
+setup.password_too_short: "Password must be at least 8 characters"
 
 # Rate limit messages
 rate_limit.reached: "You have reached the request limit: maximum {{.Max}} requests in {{.Minutes}} minutes"

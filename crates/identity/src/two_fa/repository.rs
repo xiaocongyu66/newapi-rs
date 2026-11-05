@@ -57,23 +57,28 @@ impl fmt::Display for TwoFaError {
 }
 
 impl TwoFaError {
-    /// Go `Verify2FALogin` 直接返回给客户端的固定文案。
+    /// 客户端文案：统一从 `newapi-i18n` 目录解析，本模块不内联任何用户文本。
     ///
-    /// 这些字符串在 Go 源码中是硬编码中文，**不经过 i18n**
-    ///（`manage_twofa.go:438,447,454,476,506`、`store_twofa.go:240,341`），
-    /// 因此必须逐字保留；集中在这里而不是散落到每个 handler。
-    pub fn client_message(&self) -> String {
+    /// Go 在这些分支上直接返回硬编码中文（`manage_twofa.go`、
+    /// `store_twofa.go`），不查 i18n。Rust 实现把所有文案收进
+    /// `crates/i18n/locales/`：zh-CN 条目与 Go 逐字一致以保持兼容，
+    /// zh-TW/en 为本地化增益。`lang` 由调用方经
+    /// [`newapi_i18n::resolve_language`] 解析。
+    pub fn client_message(&self, lang: &str) -> String {
+        let plain = |key: &str| newapi_i18n::translate(lang, key, std::iter::empty::<(&str, &str)>());
         match self {
-            Self::Invalid => "验证码或备用码不正确".to_owned(),
-            Self::Incorrect => "验证码或备用码错误，请重试".to_owned(),
-            Self::Locked { until } => {
-                format!("账户已被锁定，请在{}后重试", format_go_time(*until))
-            }
-            Self::NotEnabled => "用户未启用2FA".to_owned(),
-            Self::InvalidUser => "用户ID不能为空".to_owned(),
-            Self::AttemptsConflict => "更新2FA失败次数冲突，请重试".to_owned(),
+            Self::Invalid => plain("twofa.code_invalid"),
+            Self::Incorrect => plain("twofa.code_incorrect"),
+            Self::Locked { until } => newapi_i18n::translate(
+                lang,
+                "twofa.locked_until",
+                [("Until", format_go_time(*until))],
+            ),
+            Self::NotEnabled => plain("twofa.not_enabled"),
+            Self::InvalidUser => plain("twofa.user_id_empty"),
+            Self::AttemptsConflict => plain("twofa.attempts_conflict"),
             // Go handler 对存储错误直接返回 err.Error()；Rust 不转述 SQL 文本。
-            Self::Unavailable => "Database error, please contact the administrator".to_owned(),
+            Self::Unavailable => plain("common.database_error"),
         }
     }
 }

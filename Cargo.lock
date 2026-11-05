@@ -1031,6 +1031,7 @@ dependencies = [
  "base64",
  "bcrypt",
  "hmac 0.12.1",
+ "newapi-i18n",
  "newapi-storage",
  "rand 0.8.8",
  "redis",

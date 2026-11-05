@@ -21,15 +21,32 @@ pub enum SetupError {
 
 impl std::fmt::Display for SetupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 诊断文本不面向客户端；用户文案统一由 client_message 查 i18n 目录。
         f.write_str(match self {
-            Self::SchemaNotReady => "数据库结构未就绪",
-            Self::Unavailable => "数据库不可用",
-            Self::AlreadyInitialized => "系统已经初始化完成",
-            Self::InvalidInput => "初始化输入无效",
-            Self::RootCreationFailed => "创建管理员失败",
-            Self::ModeSaveFailed => "保存模式失败",
-            Self::SetupSaveFailed => "保存初始化状态失败",
+            Self::SchemaNotReady => "setup database schema is not ready",
+            Self::Unavailable => "setup database is unavailable",
+            Self::AlreadyInitialized => "setup is already initialized",
+            Self::InvalidInput => "setup input is invalid",
+            Self::RootCreationFailed => "setup root creation failed",
+            Self::ModeSaveFailed => "setup mode save failed",
+            Self::SetupSaveFailed => "setup state save failed",
         })
+    }
+}
+
+impl SetupError {
+    /// 客户端文案：统一从 `newapi-i18n` 目录解析，本模块不内联任何用户文本。
+    pub fn client_message(&self, lang: &str) -> String {
+        let key = match self {
+            Self::SchemaNotReady => "setup.schema_not_ready",
+            Self::Unavailable => "setup.unavailable",
+            Self::AlreadyInitialized => "setup.already_initialized",
+            Self::InvalidInput => "setup.invalid_input",
+            Self::RootCreationFailed => "setup.root_creation_failed",
+            Self::ModeSaveFailed => "setup.mode_save_failed",
+            Self::SetupSaveFailed => "setup.save_failed",
+        };
+        newapi_i18n::translate(lang, key, std::iter::empty::<(&str, &str)>())
     }
 }
 

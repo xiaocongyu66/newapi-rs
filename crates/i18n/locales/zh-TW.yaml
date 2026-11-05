@@ -204,6 +204,23 @@ twofa.user_id_empty: "使用者ID不能為空"
 twofa.already_exists: "使用者已存在2FA設定"
 twofa.record_id_empty: "2FA記錄ID不能為空"
 twofa.code_invalid: "驗證碼或備用碼不正確"
+twofa.code_incorrect: "驗證碼或備用碼錯誤，請重試"
+twofa.locked_until: "帳戶已被鎖定，請在{{.Until}}後重試"
+twofa.attempts_conflict: "更新2FA失敗次數衝突，請重試"
+
+# Setup wizard messages
+setup.already_initialized: "系統已經初始化完成"
+setup.schema_not_ready: "資料庫結構未就緒"
+setup.unavailable: "資料庫不可用"
+setup.invalid_input: "初始化輸入無效"
+setup.root_creation_failed: "建立管理員失敗"
+setup.mode_save_failed: "儲存模式失敗"
+setup.save_failed: "儲存初始化狀態失敗"
+setup.success: "系統初始化成功"
+setup.invalid_request: "請求參數有誤"
+setup.username_too_long: "使用者名稱長度不能超過12個字元"
+setup.password_mismatch: "兩次輸入的密碼不一致"
+setup.password_too_short: "密碼長度至少為8個字元"
 
 # Rate limit messages
 rate_limit.reached: "您已達到請求數限制：{{.Minutes}}分鐘內最多請求{{.Max}}次"
