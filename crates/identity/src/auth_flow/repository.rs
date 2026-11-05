@@ -238,8 +238,10 @@ impl AuthFlowRepository {
                     .push(dialect.columns())
                     .push(" FROM auth_flows WHERE token_hash=")
                     .push_bind(hash.as_str());
-                let row = query.build().fetch_optional(pool).await?;
-                let mut flow = row.map(record!).transpose()?.ok_or(AuthFlowError::Storage)?;
+                let Some(row) = query.build().fetch_optional(pool).await? else {
+                    return Err(AuthFlowError::Storage);
+                };
+                let mut flow = record!(row);
                 flow.consumed_at = Some(now);
                 return Ok(flow);
             }
