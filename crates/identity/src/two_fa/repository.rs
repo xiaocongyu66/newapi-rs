@@ -10,7 +10,9 @@ use newapi_storage::Database;
 use sqlx::Row;
 
 use crate::crypto;
-use crate::two_fa::totp::{normalize_backup_code, normalize_numeric_code, validate_totp_code};
+use crate::two_fa::totp::{
+    format_go_time, normalize_backup_code, normalize_numeric_code, validate_totp_code,
+};
 
 /// Go `common.MaxFailAttempts`。
 pub const MAX_FAIL_ATTEMPTS: i64 = 5;
@@ -26,8 +28,8 @@ pub enum TwoFaError {
     Invalid,
     /// Go “验证码或备用码错误，请重试”：格式正确但验证失败。
     Incorrect,
-    /// Go 锁定文案；Go 原文包含解锁时间，这里使用固定文本。
-    Locked,
+    /// Go 锁定文案；`until` 为解锁时间（Unix 秒）。
+    Locked { until: i64 },
     /// Go “用户未启用2FA”。
     NotEnabled,
     /// Go `GetTwoFAByUserId` 对 0 用户 ID 的错误。
@@ -40,15 +42,39 @@ pub enum TwoFaError {
 
 impl fmt::Display for TwoFaError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 诊断文本不面向客户端；客户端文案统一由 [`TwoFaError::client_message`]
+        // 生成，避免 UI 文案散落在仓储层。
         formatter.write_str(match self {
-            Self::Invalid => "验证码或备用码不正确",
-            Self::Incorrect => "验证码或备用码错误，请重试",
-            Self::Locked => "账户已被锁定，请稍后重试",
-            Self::NotEnabled => "用户未启用2FA",
-            Self::InvalidUser => "用户ID不能为空",
-            Self::AttemptsConflict => "更新2FA失败次数冲突，请重试",
-            Self::Unavailable => "2FA 存储不可用",
+            Self::Invalid => "2FA code format is invalid",
+            Self::Incorrect => "2FA code is incorrect",
+            Self::Locked { .. } => "2FA is temporarily locked",
+            Self::NotEnabled => "2FA is not enabled",
+            Self::InvalidUser => "user id must not be empty",
+            Self::AttemptsConflict => "2FA failed-attempt update conflict",
+            Self::Unavailable => "2FA storage is unavailable",
         })
+    }
+}
+
+impl TwoFaError {
+    /// Go `Verify2FALogin` 直接返回给客户端的固定文案。
+    ///
+    /// 这些字符串在 Go 源码中是硬编码中文，**不经过 i18n**
+    ///（`manage_twofa.go:438,447,454,476,506`、`store_twofa.go:240,341`），
+    /// 因此必须逐字保留；集中在这里而不是散落到每个 handler。
+    pub fn client_message(&self) -> String {
+        match self {
+            Self::Invalid => "验证码或备用码不正确".to_owned(),
+            Self::Incorrect => "验证码或备用码错误，请重试".to_owned(),
+            Self::Locked { until } => {
+                format!("账户已被锁定，请在{}后重试", format_go_time(*until))
+            }
+            Self::NotEnabled => "用户未启用2FA".to_owned(),
+            Self::InvalidUser => "用户ID不能为空".to_owned(),
+            Self::AttemptsConflict => "更新2FA失败次数冲突，请重试".to_owned(),
+            // Go handler 对存储错误直接返回 err.Error()；Rust 不转述 SQL 文本。
+            Self::Unavailable => "Database error, please contact the administrator".to_owned(),
+        }
     }
 }
 
@@ -211,8 +237,8 @@ impl TwoFaRepository {
             _ => return Err(TwoFaError::NotEnabled),
         };
 
-        if two_fa.is_locked(now) {
-            return Err(TwoFaError::Locked);
+        if let Some(until) = two_fa.locked_until.filter(|until| now < *until) {
+            return Err(TwoFaError::Locked { until });
         }
 
         let mut verified = false;
@@ -227,12 +253,10 @@ impl TwoFaRepository {
         if !verified {
             // Go 的备用码分支在读取备用码前再次检查锁定；第 5 次 TOTP 失败
             // 刚触发锁定时，响应是锁定文案而不是格式文案。
-            if two_fa.is_locked(now) {
-                return Err(TwoFaError::Locked);
+            if let Some(until) = two_fa.locked_until.filter(|until| now < *until) {
+                return Err(TwoFaError::Locked { until });
             }
-            if self.validate_backup_code(user_id, code, now).await? {
-                verified = true;
-            } else {
+            if !self.validate_backup_code(user_id, code, now).await? {
                 self.increment_failed_attempts(&mut two_fa, now).await?;
                 return Err(TwoFaError::Incorrect);
             }

@@ -86,6 +86,39 @@ fn totp_code(key: &[u8], counter: u64) -> String {
     format!("{:06}", binary % CODE_MODULUS)
 }
 
+/// Go `time.Time.Format("2006-01-02 15:04:05")` 的 UTC 形式。
+/// 仅用于锁定提示文案中的解锁时间，不参与比较。
+pub fn format_go_time(epoch: i64) -> String {
+    let days = epoch.div_euclid(86_400);
+    let seconds = epoch.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}",
+        seconds / 3_600,
+        (seconds % 3_600) / 60,
+        seconds % 60
+    )
+}
+
+// Howard Hinnant 的 days-from-civil 逆变换；只处理 UTC。
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    };
+    (year + i64::from(month <= 2), month, day)
+}
+
 /// RFC 4648 base32 解码，无 padding，大小写不敏感。
 /// pquerna 在解码前执行 `strings.TrimSpace`；Go `encoding/base32` 忽略
 /// `\r`、`\n`，并拒绝长度余数为 1、3、6 的输入；末尾不足一个字节的剩余

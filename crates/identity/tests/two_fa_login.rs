@@ -427,20 +427,20 @@ async fn failure_counts_and_lockout(database: &Database) {
     }
 
     // 第 5 次失败触发 300 秒锁定；Go 的备用码分支随后复检锁定，因此文案是锁定。
-    assert_eq!(
+    assert!(matches!(
         repo.validate_login_code(401, "000000", now).await,
-        Err(TwoFaError::Locked)
-    );
+        Err(TwoFaError::Locked { until }) if until == now + LOCKOUT_SECONDS
+    ));
     let (failed_attempts, locked_until, _) = read_attempts(database, 401).await;
     assert_eq!(failed_attempts, MAX_FAIL_ATTEMPTS);
     assert_eq!(locked_until, Some(now + LOCKOUT_SECONDS));
 
     // 锁定期间正确 TOTP 也失败，且不增加失败次数。
     // t=1000 → counter 33 = 841346。
-    assert_eq!(
+    assert!(matches!(
         repo.validate_login_code(401, "841346", now + 1).await,
-        Err(TwoFaError::Locked)
-    );
+        Err(TwoFaError::Locked { until }) if until == now + LOCKOUT_SECONDS
+    ));
     assert_eq!(
         read_attempts(database, 401).await.0,
         MAX_FAIL_ATTEMPTS,
@@ -462,17 +462,17 @@ async fn lock_expiry(database: &Database) {
 
     // 锁定到期前，即使正确码也失败。
     // t=1299 → counter 43 = 303194。
-    assert_eq!(
+    assert!(matches!(
         repo.validate_login_code(402, "303194", 1_299).await,
-        Err(TwoFaError::Locked)
-    );
+        Err(TwoFaError::Locked { until }) if until == 1_300
+    ));
     assert_eq!(read_attempts(database, 402).await.0, MAX_FAIL_ATTEMPTS);
 
     // 到期后 failed_attempts 不归零：下一次失败立即再次锁定（6 次失败）。
-    assert_eq!(
+    assert!(matches!(
         repo.validate_login_code(402, "000000", 1_300).await,
-        Err(TwoFaError::Locked)
-    );
+        Err(TwoFaError::Locked { until }) if until == 1_300 + LOCKOUT_SECONDS
+    ));
     let (failed_attempts, locked_until, _) = read_attempts(database, 402).await;
     assert_eq!(failed_attempts, MAX_FAIL_ATTEMPTS + 1);
     assert_eq!(locked_until, Some(1_300 + LOCKOUT_SECONDS));

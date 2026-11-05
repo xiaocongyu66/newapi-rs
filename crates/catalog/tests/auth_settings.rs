@@ -5,7 +5,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
-async fn execute(db: &Database, sql: &str) {
+async fn execute(db: &Database, sql: &'static str) {
     match db {
         Database::Sqlite(pool) => {
             sqlx::query(sql).execute(pool).await.unwrap();
