@@ -18,6 +18,8 @@ pub enum SessionError {
     NotFound,
     Inactive,
     UserSecurityChanged,
+    /// 用户不存在、已删除、禁用或 auth_version 非法；对齐 Go ErrLoginSessionInvalid。
+    LoginSessionInvalid,
     ActiveLimit,
     IssuanceLimit,
     /// 输入截断或数据库元数据包含非法 UTF-8；禁止丢弃、替换字节或直接映射 HTTP 400。
@@ -34,6 +36,7 @@ impl std::fmt::Display for SessionError {
             Self::NotFound => "session not found",
             Self::Inactive => "session inactive",
             Self::UserSecurityChanged => "user security changed",
+            Self::LoginSessionInvalid => "login session is invalid",
             Self::ActiveLimit => "active session limit",
             Self::IssuanceLimit => "session issuance limit",
             Self::MetadataEncodingUnsupported => "session metadata byte encoding is not supported",
@@ -296,7 +299,7 @@ impl SessionRepository {
         backend!(&self.db, pool, {
             sqlx::query_scalar::<_, i64>("SELECT auth_version FROM users WHERE id=$1 AND status=1 AND deleted_at IS NULL AND auth_version>0")
                 .bind(user_id).fetch_optional(pool).await?
-                .ok_or(SessionError::UserSecurityChanged)
+                .ok_or(SessionError::LoginSessionInvalid)
         })
     }
 
@@ -322,6 +325,7 @@ impl SessionRepository {
         let since = now
             .checked_sub(limits.issuance_window)
             .ok_or(SessionError::Invalid)?;
+        // 对齐 Go：先确认用户可用于登录，再比对调用方期望的版本。
         let uv = self.user_version(input.user_id).await?;
         if input.expected_auth_version.is_some_and(|v| v != uv) {
             return Err(SessionError::UserSecurityChanged);
@@ -377,8 +381,13 @@ impl SessionRepository {
         if m.user_id != user_id || !m.active(now) || m.version != sv || m.user_auth_version != uv {
             return Err(SessionError::Inactive);
         }
-        if self.user_version(user_id).await? != uv {
-            return Err(SessionError::UserSecurityChanged);
+        match self.user_version(user_id).await {
+            Ok(current) if current == uv => {}
+            // Go ValidateLoginSession 将用户不可用与版本不匹配都归为 ErrLoginSessionRevoked。
+            Ok(_) | Err(SessionError::LoginSessionInvalid) => {
+                return Err(SessionError::UserSecurityChanged);
+            }
+            Err(error) => return Err(error),
         }
         Ok(row)
     }
@@ -415,7 +424,7 @@ impl SessionRepository {
             }
             match self.user_version(user_id).await {
                 Ok(uv) if uv == row.metadata.user_auth_version => {}
-                Ok(_) | Err(SessionError::UserSecurityChanged) => {
+                Ok(_) | Err(SessionError::LoginSessionInvalid) => {
                     let report = self
                         .revoke(fence, user_id, sid, "user_security_changed", now)
                         .await?;

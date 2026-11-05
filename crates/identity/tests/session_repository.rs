@@ -484,7 +484,7 @@ async fn remaining_scenarios(db: &Database, second: &Database) {
     assert!(matches!(
         repo.create(draft("disabled"), SessionLimits::default(), NOW)
             .await,
-        Err(SessionError::UserSecurityChanged)
+        Err(SessionError::LoginSessionInvalid)
     ));
     let security_spy = SpyFence::new();
     assert!(matches!(

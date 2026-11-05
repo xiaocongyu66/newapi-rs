@@ -99,10 +99,7 @@ async fn login_fails_closed_for_stale_version_or_disabled_user() {
             NOW + 5,
         )
         .await;
-    assert!(matches!(
-        stale,
-        Err(SessionAuthError::Storage(SessionError::UserSecurityChanged))
-    ));
+    assert!(matches!(stale, Err(SessionAuthError::Unauthorized)));
 
     let Database::Sqlite(pool) = &db else {
         panic!("fixture must use SQLite");
@@ -125,7 +122,7 @@ async fn login_fails_closed_for_stale_version_or_disabled_user() {
         .await;
     assert!(matches!(
         disabled,
-        Err(SessionAuthError::Storage(SessionError::UserSecurityChanged))
+        Err(SessionAuthError::Storage(SessionError::LoginSessionInvalid))
     ));
 
     let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_sessions")

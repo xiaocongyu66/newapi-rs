@@ -79,6 +79,7 @@ impl From<SessionError> for SessionAuthError {
             | SessionError::IssuanceLimit
             | SessionError::MetadataEncodingUnsupported
             | SessionError::DatabaseBusy
+            | SessionError::LoginSessionInvalid
             | SessionError::Storage => Self::Storage(error),
         }
     }
