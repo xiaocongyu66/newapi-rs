@@ -22,14 +22,34 @@ fn translates_common_and_login_keys_in_every_language() {
     let zh_tw = "無權進行此操作，未登入且未提供 access token";
     assert_translation("zh-TW", "auth.not_logged_in", zh_tw);
 
-    assert_translation("en", "user.username_or_password_empty", "Username or password is empty");
-    assert_translation("zh-CN", "user.username_or_password_empty", "用户名或密码为空");
-    assert_translation("zh-TW", "user.username_or_password_empty", "使用者名或密碼為空");
+    assert_translation(
+        "en",
+        "user.username_or_password_empty",
+        "Username or password is empty",
+    );
+    assert_translation(
+        "zh-CN",
+        "user.username_or_password_empty",
+        "用户名或密码为空",
+    );
+    assert_translation(
+        "zh-TW",
+        "user.username_or_password_empty",
+        "使用者名或密碼為空",
+    );
 
     let disabled = "Password login has been disabled by administrator";
     assert_translation("en", "user.password_login_disabled", disabled);
-    assert_translation("zh-CN", "user.password_login_disabled", "管理员关闭了密码登录");
-    assert_translation("zh-TW", "user.password_login_disabled", "管理員關閉了密碼登錄");
+    assert_translation(
+        "zh-CN",
+        "user.password_login_disabled",
+        "管理员关闭了密码登录",
+    );
+    assert_translation(
+        "zh-TW",
+        "user.password_login_disabled",
+        "管理員關閉了密碼登錄",
+    );
 
     let two_factor = "Please enter two-factor authentication code";
     assert_translation("en", "user.require_2fa", two_factor);
@@ -52,7 +72,11 @@ fn catalogs_have_no_cross_language_fallback() {
     assert_translation("zh-CN", "user.admin_cannot_promote", zh_cn);
     let zh_tw = "普通管理員使用者無法提升其他使用者為管理員";
     assert_translation("zh-TW", "user.admin_cannot_promote", zh_tw);
-    assert_translation("en", "user.admin_cannot_promote", "user.admin_cannot_promote");
+    assert_translation(
+        "en",
+        "user.admin_cannot_promote",
+        "user.admin_cannot_promote",
+    );
 }
 
 #[test]
@@ -84,7 +108,10 @@ fn normalize_lang_matches_upstream_prefix_rules() {
 #[test]
 fn is_supported_normalizes_before_checking() {
     for lang in ["zh-CN", "zh-TW", "en", "zh-Hant", "en-US", "fr", ""] {
-        assert!(is_supported(lang), "expected normalized support for {lang:?}");
+        assert!(
+            is_supported(lang),
+            "expected normalized support for {lang:?}"
+        );
     }
 }
 
@@ -186,11 +213,19 @@ fn translate_substitutes_catalog_placeholders() {
     let expected = "您已達到請求數限制：5分鐘內最多請求10次";
     assert_eq!(translated, expected);
 
-    let translated = translate("en", "token.exhausted", [("Prefix", "abc"), ("Suffix", "xyz")]);
+    let translated = translate(
+        "en",
+        "token.exhausted",
+        [("Prefix", "abc"), ("Suffix", "xyz")],
+    );
     let expected = "This token quota is exhausted TokenStatusExhausted[sk-abc***xyz]";
     assert_eq!(translated, expected);
 
-    let translated = translate("zh-CN", "token.exhausted", [("Prefix", "abc"), ("Suffix", "xyz")]);
+    let translated = translate(
+        "zh-CN",
+        "token.exhausted",
+        [("Prefix", "abc"), ("Suffix", "xyz")],
+    );
     let expected = "该令牌额度已用尽 TokenStatusExhausted[sk-abc***xyz]";
     assert_eq!(translated, expected);
 
