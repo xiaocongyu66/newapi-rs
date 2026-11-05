@@ -12,6 +12,10 @@ pub struct Config {
     pub session_cookie: SessionCookieSettings,
     /// 可选 Redis；设置后连接失败必须终止启动，不得静默关闭跨实例撤销。
     redis_url: Option<String>,
+    /// 登录等关键路径限流；对应 Go `CriticalRateLimit` 的三个环境变量。
+    pub critical_rate_limit_enabled: bool,
+    pub critical_rate_limit_requests: i64,
+    pub critical_rate_limit_duration_seconds: i64,
 }
 
 /// `secure` 对应原 `SESSION_COOKIE_SECURE`；启用时来源列表非空。
@@ -113,6 +117,22 @@ impl Config {
             }
             None => None,
         };
+        // Go 的 GetEnvOrDefault*：enable 解析失败保留默认；数值沿用本仓库
+        // positive_integer 的严格校验（比 Go 的 Atoi 更严，非法值直接拒绝启动）。
+        let critical_rate_limit_enabled =
+            bool_with_default(lookup("CRITICAL_RATE_LIMIT_ENABLE")?, true);
+        let critical_rate_limit_requests = positive_integer(
+            lookup("CRITICAL_RATE_LIMIT")?,
+            "CRITICAL_RATE_LIMIT",
+            20,
+            i64::MAX as u64,
+        )? as i64;
+        let critical_rate_limit_duration_seconds = positive_integer(
+            lookup("CRITICAL_RATE_LIMIT_DURATION")?,
+            "CRITICAL_RATE_LIMIT_DURATION",
+            1_200,
+            i64::MAX as u64,
+        )? as i64;
         Ok(Self {
             dsn,
             session_secret,
@@ -120,6 +140,9 @@ impl Config {
             sync_frequency: Duration::from_secs(seconds),
             session_cookie,
             redis_url,
+            critical_rate_limit_enabled,
+            critical_rate_limit_requests,
+            critical_rate_limit_duration_seconds,
         })
     }
 
@@ -190,6 +213,20 @@ fn session_cookie_settings(
         secure: true,
         trusted_origins,
     })
+}
+
+/// 对齐 Go `GetEnvOrDefaultBool`：空值视为未设置，非法值按 `strconv.ParseBool`
+/// 的失败语义保留默认（Go 打印错误后回退），不阻断启动。
+fn bool_with_default(value: Option<String>, default: bool) -> bool {
+    // Exact token set of Go's strconv.ParseBool (case-sensitive).
+    const TRUE_TOKENS: [&str; 6] = ["1", "t", "T", "TRUE", "true", "True"];
+    const FALSE_TOKENS: [&str; 6] = ["0", "f", "F", "FALSE", "false", "False"];
+    match value.as_deref() {
+        Some("") | None => default,
+        Some(raw) if TRUE_TOKENS.contains(&raw) => true,
+        Some(raw) if FALSE_TOKENS.contains(&raw) => false,
+        Some(_) => default,
+    }
 }
 
 fn positive_integer(
@@ -351,6 +388,82 @@ mod tests {
                 .session_secret(),
             Some("a-random-secret-value")
         );
+    }
+
+    #[test]
+    fn critical_rate_limit_defaults_match_go() {
+        let value = config(&[]).unwrap();
+        assert!(value.critical_rate_limit_enabled);
+        assert_eq!(value.critical_rate_limit_requests, 20);
+        assert_eq!(value.critical_rate_limit_duration_seconds, 1_200);
+    }
+
+    #[test]
+    fn critical_rate_limit_accepts_explicit_values() {
+        let value = config(&[
+            ("CRITICAL_RATE_LIMIT_ENABLE", "false"),
+            ("CRITICAL_RATE_LIMIT", "5"),
+            ("CRITICAL_RATE_LIMIT_DURATION", "60"),
+        ])
+        .unwrap();
+        assert!(!value.critical_rate_limit_enabled);
+        assert_eq!(value.critical_rate_limit_requests, 5);
+        assert_eq!(value.critical_rate_limit_duration_seconds, 60);
+        // Go's strconv.ParseBool accepts these exact tokens.
+        for (token, expected) in [
+            ("true", true),
+            ("TRUE", true),
+            ("True", true),
+            ("t", true),
+            ("T", true),
+            ("1", true),
+            ("false", false),
+            ("FALSE", false),
+            ("False", false),
+            ("f", false),
+            ("F", false),
+            ("0", false),
+        ] {
+            assert_eq!(
+                config(&[("CRITICAL_RATE_LIMIT_ENABLE", token)])
+                    .unwrap()
+                    .critical_rate_limit_enabled,
+                expected,
+                "token {token}"
+            );
+        }
+    }
+
+    #[test]
+    fn critical_rate_limit_falls_back_or_rejects_invalid_values() {
+        // Go's GetEnvOrDefaultBool keeps the default on unparseable values.
+        for token in ["yes", "True r", "2", "  true", "true "] {
+            assert!(
+                config(&[("CRITICAL_RATE_LIMIT_ENABLE", token)])
+                    .unwrap()
+                    .critical_rate_limit_enabled,
+                "token {token} should keep the true default"
+            );
+        }
+        // An empty enable value is unset, like os.Getenv() == "".
+        assert!(
+            config(&[("CRITICAL_RATE_LIMIT_ENABLE", "")])
+                .unwrap()
+                .critical_rate_limit_enabled
+        );
+        // Numbers use this repo's strict positive_integer, not Go's lenient
+        // Atoi: empty, zero, negatives and non-numerics all reject startup.
+        for (name, value) in [
+            ("CRITICAL_RATE_LIMIT", ""),
+            ("CRITICAL_RATE_LIMIT", "0"),
+            ("CRITICAL_RATE_LIMIT", "-1"),
+            ("CRITICAL_RATE_LIMIT", "1.5"),
+            ("CRITICAL_RATE_LIMIT_DURATION", "0"),
+            ("CRITICAL_RATE_LIMIT_DURATION", "abc"),
+        ] {
+            let error = config(&[(name, value)]).err().unwrap();
+            assert_eq!(error.to_string(), format!("invalid {name} configuration"));
+        }
     }
 
     #[test]

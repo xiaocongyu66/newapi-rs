@@ -1,6 +1,7 @@
 //! P1 composition and HTTP boundary; business SQL belongs to catalog.
 pub mod auth;
 mod http;
+pub mod limit;
 mod state;
 
 pub use http::{MAX_BODY_BYTES, router};
