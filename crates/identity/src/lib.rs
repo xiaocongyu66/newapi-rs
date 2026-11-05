@@ -10,6 +10,7 @@ pub mod session_cache;
 pub mod sessions;
 pub mod setup;
 pub mod tokens;
+pub mod two_fa;
 pub mod user_auth;
 pub mod users;
 
