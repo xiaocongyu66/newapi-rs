@@ -77,6 +77,8 @@ fn expected() -> UserProfile {
         // 不解析 JSON，不派生 sidebar_modules，也不调整额度。
         setting: " {\"sidebar_modules\":\"fixture\",\"unknown\":true} ".into(),
         stripe_customer: "stripe-fixture".into(),
+        // seed 写入 auth_version=777；验证列映射而不是默认值。
+        auth_version: 777,
     }
 }
 
@@ -193,6 +195,7 @@ async fn scenarios(db: &Database) {
         linux_do_id: String::new(),
         setting: String::new(),
         stripe_customer: String::new(),
+        auth_version: 0,
     };
     assert_eq!(
         checked(repo.by_id(18).await, "read NULL legacy row"),

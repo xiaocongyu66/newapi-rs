@@ -39,6 +39,7 @@ fn profile(setting: &str) -> UserProfile {
         linux_do_id: "linux-do-fixture".into(),
         setting: setting.into(),
         stripe_customer: "stripe-fixture".into(),
+        auth_version: 3,
     }
 }
 

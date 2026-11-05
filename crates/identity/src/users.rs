@@ -30,6 +30,8 @@ pub struct UserProfile {
     pub linux_do_id: String,
     pub setting: String,
     pub stripe_customer: String,
+    /// Go `User.AuthVersion`：登录签发会话前必须核对；NULL 旧行按 0。
+    pub auth_version: i64,
 }
 
 // 固定白名单，禁止 SELECT *。PG 的旧 INTEGER 列也显式提升为 i64。
@@ -41,7 +43,8 @@ SELECT CAST(id AS BIGINT) AS id, username, display_name,
     CAST(request_count AS BIGINT) AS request_count, aff_code,
     CAST(aff_count AS BIGINT) AS aff_count, CAST(aff_quota AS BIGINT) AS aff_quota,
     CAST(aff_history AS BIGINT) AS aff_history_quota,
-    CAST(inviter_id AS BIGINT) AS inviter_id, linux_do_id, setting, stripe_customer
+    CAST(inviter_id AS BIGINT) AS inviter_id, linux_do_id, setting, stripe_customer,
+    CAST(auth_version AS BIGINT) AS auth_version
 FROM users WHERE id = $1 AND deleted_at IS NULL
 "#;
 
@@ -111,6 +114,7 @@ macro_rules! profile {
             stripe_customer: row
                 .try_get::<Option<String>, _>("stripe_customer")?
                 .unwrap_or_default(),
+            auth_version: row.try_get::<Option<i64>, _>("auth_version")?.unwrap_or_default(),
         }
     }};
 }

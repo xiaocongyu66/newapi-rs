@@ -5,3 +5,4 @@
 #![forbid(unsafe_code)]
 
 pub mod billing_options;
+pub mod quota_display;

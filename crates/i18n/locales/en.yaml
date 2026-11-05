@@ -205,6 +205,11 @@ twofa.code_invalid: "Verification code or backup code is incorrect"
 twofa.code_incorrect: "Verification code or backup code is incorrect, please try again"
 twofa.locked_until: "Account is locked, please try again after {{.Until}}"
 twofa.attempts_conflict: "Failed to update 2FA failure count, please retry"
+# Login-path messages: Go Verify2FALogin hardcodes these Chinese strings; the
+# zh-CN entries match it verbatim and these are the localization entries.
+twofa.invalid_request: "Invalid parameters"
+twofa.flow_expired: "Session expired, please log in again"
+twofa.user_disabled: "User has been disabled"
 
 # Setup wizard messages
 setup.already_initialized: "The system has already been initialized"

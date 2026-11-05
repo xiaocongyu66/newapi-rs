@@ -1,4 +1,6 @@
 //! 登录密码验证边界；成功仅代表密码匹配，不授予访问权限。
+pub mod orchestrate;
+
 use crate::{
     AuthError,
     users::{LoginCredential, LoginCredentialRepository},

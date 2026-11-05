@@ -207,6 +207,9 @@ twofa.code_invalid: "驗證碼或備用碼不正確"
 twofa.code_incorrect: "驗證碼或備用碼錯誤，請重試"
 twofa.locked_until: "帳戶已被鎖定，請在{{.Until}}後重試"
 twofa.attempts_conflict: "更新2FA失敗次數衝突，請重試"
+twofa.invalid_request: "參數錯誤"
+twofa.flow_expired: "會話已過期，請重新登入"
+twofa.user_disabled: "使用者已被停用"
 
 # Setup wizard messages
 setup.already_initialized: "系統已經初始化完成"
