@@ -16,6 +16,7 @@ newapi-config.workspace = true
 newapi-storage.workspace = true
 newapi-catalog.workspace = true
 newapi-identity.workspace = true
+newapi-i18n.workspace = true
 newapi-security.workspace = true
 
 [dev-dependencies]
