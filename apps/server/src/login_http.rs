@@ -316,6 +316,7 @@ fn render(
             crate::http::set_cookie(
                 &mut response,
                 success.bundle.refresh_token.expose_secret(),
+                session_expires_at,
                 max_age,
                 state.session_cookie().secure,
             );
