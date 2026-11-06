@@ -21,6 +21,14 @@ pub const DEFAULT_USER_SETTING: &str = r#"{"gotify_priority":0}"#;
 const VERIFICATION_VALID_SECONDS: u64 = 600;
 const VERIFICATION_MAP_MAX_SIZE: usize = 10;
 
+/// Go `common.EmailVerificationPurpose`：注册邮箱验证码。
+pub const EMAIL_VERIFICATION_PURPOSE: &str = "v";
+
+/// 密码重置验证码的用途。Go 使用 `common.PasswordResetPurpose`（值为 `"r"`）；
+/// 本移植按既定接口约定使用独立的 `"p"`，与 `"v"` 互不影响。
+/// 阶段化端点（发送重置邮件）必须复用该常量。
+pub const PASSWORD_RESET_PURPOSE: &str = "p";
+
 struct VerificationEntry {
     code: String,
     stored_at: Instant,
@@ -31,14 +39,19 @@ fn verification_map() -> &'static Mutex<HashMap<String, VerificationEntry>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Go `RegisterVerificationCodeWithKey` 的邮箱用途（purpose `"v"`）等价实现。
-/// 邮箱发送端点尚未移植；注册流程与后续端点共享此进程内缓存。
-pub fn register_email_verification_code(email: &str, code: &str) {
+/// Go 把验证码存放在 `purpose + key` 下；同样拼接可避免不同用途互相覆盖。
+fn verification_key(purpose: &str, key: &str) -> String {
+    format!("{purpose}{key}")
+}
+
+/// Go `RegisterVerificationCodeWithKey`：写入任意用途的验证码，进程内保存
+/// 10 分钟；超过 10 项时清理已过期的条目。
+pub fn register_verification_code(purpose: &str, key: &str, code: &str) {
     let mut map = verification_map()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     map.insert(
-        email.to_owned(),
+        verification_key(purpose, key),
         VerificationEntry {
             code: code.to_owned(),
             stored_at: Instant::now(),
@@ -52,15 +65,36 @@ pub fn register_email_verification_code(email: &str, code: &str) {
     }
 }
 
-/// Go `VerifyCodeWithKey(email, code, EmailVerificationPurpose)`：只读校验，
-/// 过期或不存在均返回 false，验证成功后也不删除（与 Go 一致）。
-pub fn verify_email_verification_code(email: &str, code: &str) -> bool {
+/// Go `VerifyCodeWithKey`：只读校验任意用途的验证码，过期或不存在均返回
+/// false，验证成功后也不删除（删除是调用方的显式步骤）。
+pub fn verify_verification_code(purpose: &str, key: &str, code: &str) -> bool {
     let map = verification_map()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    map.get(email).is_some_and(|entry| {
-        entry.stored_at.elapsed().as_secs() < VERIFICATION_VALID_SECONDS && entry.code == code
-    })
+    map.get(&verification_key(purpose, key))
+        .is_some_and(|entry| {
+            entry.stored_at.elapsed().as_secs() < VERIFICATION_VALID_SECONDS && entry.code == code
+        })
+}
+
+/// Go `DeleteKey`：仅在成功后显式消费验证码。
+pub fn delete_verification_code(purpose: &str, key: &str) {
+    let mut map = verification_map()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.remove(&verification_key(purpose, key));
+}
+
+/// Go `RegisterVerificationCodeWithKey` 的邮箱用途（purpose `"v"`）等价实现。
+/// 邮箱发送端点尚未移植；注册流程与后续端点共享此进程内缓存。
+pub fn register_email_verification_code(email: &str, code: &str) {
+    register_verification_code(EMAIL_VERIFICATION_PURPOSE, email, code);
+}
+
+/// Go `VerifyCodeWithKey(email, code, EmailVerificationPurpose)`：只读校验，
+/// 过期或不存在均返回 false，验证成功后也不删除（与 Go 一致）。
+pub fn verify_email_verification_code(email: &str, code: &str) -> bool {
+    verify_verification_code(EMAIL_VERIFICATION_PURPOSE, email, code)
 }
 
 /// 已校验并散列的注册草稿；不实现 Debug 或序列化。
