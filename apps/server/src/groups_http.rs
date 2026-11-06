@@ -59,16 +59,14 @@ pub async fn user_groups(
 /// and the `abilities` lookup belong to a later slice; the response shape is
 /// final and the data is the empty list.
 pub async fn user_models(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Extension(_authenticated): Extension<AuthenticatedUser>,
 ) -> Response {
-    let _settings = match load_settings(&state).await {
-        Ok(settings) => settings,
-        Err(response) => return response,
-    };
-    // TODO(groups-models): port `userUsableGroups` selection, `userAutoGroup`
-    // expansion, and `SELECT DISTINCT model FROM abilities WHERE "group" = ?
-    // AND enabled = ?` once the catalog owns an abilities repository.
+    // TODO(groups-models): load `GroupSettings` here, port the
+    // `userUsableGroups`/`userAutoGroup` selection, and run
+    // `SELECT DISTINCT model FROM abilities WHERE "group" = ? AND enabled = ?`
+    // once the catalog owns an abilities repository. Go returns an empty list
+    // while its resolver hook is unregistered, which this matches.
     Json(success_body(user_models_body(Vec::new()))).into_response()
 }
 
