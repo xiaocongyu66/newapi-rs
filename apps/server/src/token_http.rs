@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, HashSet};
 use axum::{
     Json,
     body::Bytes,
-    extract::{Extension, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Extension, Path, State},
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use newapi_catalog::group_settings::GroupSettings;
