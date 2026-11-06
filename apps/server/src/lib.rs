@@ -1,4 +1,8 @@
 //! P1 composition and HTTP boundary; business SQL belongs to catalog.
+// `GET /api/status` builds one `json!` literal with 90+ fields, which exceeds
+// the default macro recursion limit (serde_json expands per element).
+#![recursion_limit = "256"]
+
 pub mod auth;
 pub mod boundary_mw;
 mod global_limit;
