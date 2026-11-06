@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth_settings;
+pub mod group_settings;
 pub mod public_config;
 
 pub use auth_settings::AuthSettings;
