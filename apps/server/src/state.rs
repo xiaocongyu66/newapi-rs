@@ -25,6 +25,10 @@ enum RateLimiterBackend {
     Redis(RedisRateLimiter),
 }
 
+/// Redis 限流后端故障；Go 对应 500 + Abort，不向客户端转述底层错误。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RateLimitUnavailable;
+
 /// 关键路径限流的完整状态（开关、阈值与后端），生产启动时由 `main` 构建。
 pub struct RateLimiter {
     settings: RateLimitSettings,
@@ -46,7 +50,12 @@ impl RateLimiter {
         }
     }
 
-    async fn check(&self, mark: &str, client_ip: &str, now: i64) -> Result<Option<i64>, ()> {
+    async fn check(
+        &self,
+        mark: &str,
+        client_ip: &str,
+        now: i64,
+    ) -> Result<Option<i64>, RateLimitUnavailable> {
         if !self.settings.enabled {
             return Ok(None);
         }
@@ -71,7 +80,7 @@ impl RateLimiter {
                         event = "rate_limit_redis_error",
                         "redis rate limit check failed"
                     );
-                    Err(())
+                    Err(RateLimitUnavailable)
                 }
             },
         }
@@ -179,13 +188,13 @@ impl AppState {
     }
 
     /// 关键路径限流：`Ok(Some(retry_after))` 拒绝，`Ok(None)` 放行；
-    /// `Err(())` 表示 Redis 后端故障（Go 回复 500）。
+    /// `Err(RateLimitUnavailable)` 表示 Redis 后端故障（Go 回复 500）。
     pub async fn check_rate_limit(
         &self,
         mark: &str,
         client_ip: &str,
         now: i64,
-    ) -> Result<Option<i64>, ()> {
+    ) -> Result<Option<i64>, RateLimitUnavailable> {
         match self.rate_limiter.as_ref() {
             Some(limiter) => limiter.check(mark, client_ip, now).await,
             None => Ok(None),

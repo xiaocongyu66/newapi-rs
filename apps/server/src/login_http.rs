@@ -150,7 +150,7 @@ pub async fn login_guard(
             return response;
         }
         // Go 的 Redis 故障分支：500 + Abort，且位于 DisableCache 之前。
-        Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
     request.extensions_mut().insert(ClientIp(ip));
     let mut response = match read_limited_body(state.anonymous_body_limit(), request).await {
