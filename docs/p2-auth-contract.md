@@ -149,11 +149,11 @@ impl AuthService {
 
 ## 8. 2026-11-06 登录垂直切片状态（未验收）
 
-**已实现并待远程 CI 验证**：`POST /api/user/login`、`POST /api/user/login/2fa` 编排（密码/2FA pending/2FA 校验/会话签发/最后登录/登录审计/SelfUser 装配）、额度展示快照、`UserProfile.auth_version`、关键路径滑动窗口限流（内存）、可信代理客户端 IP、匿名体上限与 DisableCache 三头、Accept-Language 语言解析、登录/2FA 文案 key。
+**已实现并待远程 CI 验证**：`POST /api/user/login`、`POST /api/user/login/2fa` 编排（密码/2FA pending/2FA 校验/会话签发/最后登录/登录审计/SelfUser 装配）、额度展示快照、`UserProfile.auth_version`、关键路径滑动窗口限流（内存）、可信代理客户端 IP、匿名体上限与 DisableCache 三头、Accept-Language 语言解析、Turnstile 决策层接线、登录/2FA 文案 key；`apps/server/tests/{login_http,login_success}.rs` 覆盖中间件顺序、成功登录、2FA pending/错误码/备用码。
 
 **明确未完成，不得视为本切片通过**：
-- Turnstile 目前只有纯决策层；工作区没有 HTTP client 依赖，**未实现向 Cloudflare 的 `siteverify` 请求**。开关启用时登录返回 503 `turnstile.unavailable`，不会静默放行；补齐传输层前不得宣称 Turnstile 可用。
-- 限流仅有进程内实现；配置 Redis 时 Go 走 Redis 固定窗口，Rust 尚未实现，多实例下限流不共享。
+- Turnstile 只有纯决策层；工作区没有 HTTP client 依赖，**未实现向 Cloudflare 的 `siteverify` 请求**。开关启用时密码登录返回 HTTP 200 `{success:false,message: Turnstile 校验暂不可用…}`（Go 的网络错误也是 200 + message），不会静默放行；补齐传输层前不得宣称 Turnstile 可用。
+- 限流仅有进程内实现；配置 Redis 时 Go 走 Redis 固定窗口，Rust 尚未实现，多实例下限流不共享。Go 默认启用的全局 Web/API 限流（`GLOBAL_WEB_RATE_LIMIT_*`、`GLOBAL_API_RATE_LIMIT_*`）同样未移植。
 - `/api/user/auth/refresh|logout`、`/api/user/sessions*` 仍不在生产 router 注册（既有切片遗留）。
 - 注册、验证码、密码重置、初始化、API Key、`/api/status` 等 P2 项未在本切片。
 
