@@ -481,11 +481,8 @@ pub(crate) fn format_http_date(epoch: i64) -> String {
     }
     remdays -= remyears * 365;
 
-    let mut year = 2000
-        + remyears
-        + 4 * quad_cycles
-        + 100 * century_cycles
-        + 400 * quad_century_cycles;
+    let mut year =
+        2000 + remyears + 4 * quad_cycles + 100 * century_cycles + 400 * quad_century_cycles;
 
     let mut month_index = 0usize;
     for month_len in MONTH_LENGTHS {

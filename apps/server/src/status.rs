@@ -293,7 +293,10 @@ mod tests {
     fn default_data_matches_go_runtime_defaults() {
         let data = default_data()["data"].clone();
         // 版本与主题：version 非空、与 crate 版本一致；theme 硬编码 default。
-        assert_eq!(data["version"], Value::String(env!("CARGO_PKG_VERSION").into()));
+        assert_eq!(
+            data["version"],
+            Value::String(env!("CARGO_PKG_VERSION").into())
+        );
         assert_eq!(data["theme"], "default");
         assert!(data["start_time"].as_i64().unwrap() > 0);
         // AuthSettings 默认（password 开、email 关、turnstile 关）。
@@ -324,7 +327,11 @@ mod tests {
             "default_collapse_sidebar",
             "mj_notify_enabled",
         ] {
-            assert_eq!(data[key], Value::Bool(false), "{key} must default to disabled");
+            assert_eq!(
+                data[key],
+                Value::Bool(false),
+                "{key} must default to disabled"
+            );
         }
         assert_eq!(data["oidc_display_name"], "OIDC");
         assert_eq!(data["passkey_user_verification"], "preferred");
@@ -340,7 +347,11 @@ mod tests {
             "announcements_enabled",
             "faq_enabled",
         ] {
-            assert_eq!(data[key], Value::Bool(true), "{key} defaults to enabled in Go");
+            assert_eq!(
+                data[key],
+                Value::Bool(true),
+                "{key} defaults to enabled in Go"
+            );
         }
         assert_eq!(data["api_info"], json!([]));
         assert_eq!(data["announcements"], json!([]));

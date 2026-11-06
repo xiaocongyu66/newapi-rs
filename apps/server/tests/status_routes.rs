@@ -22,7 +22,9 @@ fn default_state_status_body_keeps_the_go_envelope_contract() {
     assert_eq!(envelope.len(), 3);
     assert_eq!(envelope["success"], Value::Bool(true));
     assert_eq!(envelope["message"], Value::String(String::new()));
-    let data = envelope["data"].as_object().expect("data must be an object");
+    let data = envelope["data"]
+        .as_object()
+        .expect("data must be an object");
     assert_eq!(data["theme"], "default");
     assert!(!data["version"].as_str().unwrap().is_empty());
     assert!(data["start_time"].as_i64().unwrap() > 0);
