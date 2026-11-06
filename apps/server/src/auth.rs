@@ -1,8 +1,265 @@
-//! Inactive HTTP credential boundary: parsing is not authentication.
-//! No token inspection, JWT inference, storage access, or routing happens here.
+//! Dashboard authentication boundary: reusable `UserAuth` middleware.
+//!
+//! Go reference: `apps/api/internal/security/authenticate.go`
+//! (`classifyDashboardCredential` + `authHelper`). Credential classification
+//! tries a dashboard JWT first, then a personal access token. Failure status,
+//! fixed code and message key follow Go; token, SQL and database error text
+//! never reach the client or the logs.
 
-use axum::http::{HeaderMap, StatusCode, header::AUTHORIZATION};
-use newapi_identity::user_auth::{CredentialKind, UserAuthError};
+use axum::{
+    Json,
+    extract::{Request, State},
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use newapi_identity::{
+    CredentialKind as DashboardCredential,
+    auth_session::SessionAuthError,
+    tokens::classify_dashboard,
+    user_auth::{
+        CredentialKind, PersonalAccessTokenRepository, UserAuthError, UserAuthIdentity, authorize,
+    },
+    users::UserProfileRepository,
+};
+use serde_json::json;
+
+use crate::AppState;
+
+/// Go `common.RoleCommonUser`.
+pub const ROLE_COMMON_USER: i64 = 1;
+
+const MSG_ACCESS_TOKEN_INVALID: &str = "auth.access_token_invalid";
+const MSG_NOT_LOGGED_IN: &str = "auth.not_logged_in";
+const MSG_USER_BANNED: &str = "auth.user_banned";
+const MSG_USER_INFO_INVALID: &str = "auth.user_info_invalid";
+const MSG_INSUFFICIENT_PRIVILEGE: &str = "auth.insufficient_privilege";
+const MSG_DATABASE_ERROR: &str = "common.database_error";
+
+/// Authenticated dashboard identity available to handlers after [`user_auth`].
+#[derive(Clone, Debug)]
+pub struct AuthenticatedUser(pub UserAuthIdentity);
+
+/// One fixed authentication failure; the message is an i18n key resolved per
+/// request so no caller can smuggle database or credential text into a body.
+struct AuthFailure {
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+}
+
+impl AuthFailure {
+    fn new(status: StatusCode, code: &'static str, message: &'static str) -> Self {
+        Self {
+            status,
+            code,
+            message,
+        }
+    }
+}
+
+/// Reusable Go `UserAuth`: dashboard JWT first, then `users.access_token`.
+/// On success the request carries an [`AuthenticatedUser`] extension. This
+/// middleware must run before `DisableCache`; its failures carry no cache
+/// headers, matching the Go registration order.
+pub async fn user_auth(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let language = request_language(&request);
+    let credential = match parse_authorization(request.headers()) {
+        Ok(AuthCredential::Bearer(token) | AuthCredential::Raw(token)) => token,
+        // Missing or malformed input is Go `ErrAuthTokenInvalid`, not a
+        // separate "not logged in" branch.
+        Err(_) => return render_auth_failure(invalid_credential(), &language),
+    };
+    let now = crate::http::now_seconds();
+    match authenticate(&state, &credential, now).await {
+        Ok(user) => {
+            request.extensions_mut().insert(user);
+            next.run(request).await
+        }
+        Err(failure) => render_auth_failure(failure, &language),
+    }
+}
+
+/// Gate an already authenticated user on a minimum role value, returning the
+/// fixed status/code pair (`AUTH_INSUFFICIENT_PRIVILEGE` is 403). Go orders the
+/// checks status, role, then user info; [`authorize`] keeps that order.
+pub fn require_role(
+    user: &AuthenticatedUser,
+    min_role: i64,
+) -> Result<(), (StatusCode, &'static str)> {
+    authorize(&user.0, min_role).map_err(map_user_auth_error)
+}
+
+async fn authenticate(
+    state: &AppState,
+    credential: &str,
+    now: i64,
+) -> Result<AuthenticatedUser, AuthFailure> {
+    let Some(db) = state.db() else {
+        return Err(internal_failure());
+    };
+    match classify_dashboard(credential) {
+        DashboardCredential::InternalDashboard => {
+            authenticate_dashboard(state, &db, credential, now).await
+        }
+        DashboardCredential::Opaque => authenticate_pat(&db, credential).await,
+    }
+}
+
+async fn authenticate_dashboard(
+    state: &AppState,
+    db: &newapi_storage::Database,
+    credential: &str,
+    now: i64,
+) -> Result<AuthenticatedUser, AuthFailure> {
+    let Some(auth) = state.auth() else {
+        return Err(internal_failure());
+    };
+    // Split parse and session validation so a revoked session keeps Go's
+    // AUTH_SESSION_REVOKED classification. Both helper methods deliberately
+    // collapse the underlying detail; no credential text is ever formatted.
+    let identity = match auth.parse_access(credential, now) {
+        Ok(identity) => identity,
+        Err(_) => return Err(invalid_credential()),
+    };
+    match auth.validate(&identity, now).await {
+        Ok(_) => {}
+        Err(SessionAuthError::Storage(_))
+        | Err(SessionAuthError::BatchFailed { .. })
+        | Err(SessionAuthError::Fence) => {
+            tracing::warn!(
+                event = "dashboard_session_storage_error",
+                "dashboard session validation failed"
+            );
+            return Err(internal_failure());
+        }
+        Err(_) => return Err(session_revoked()),
+    }
+    let profile = match UserProfileRepository::new(db.clone())
+        .by_id(identity.user_id)
+        .await
+    {
+        Ok(Some(profile)) => profile,
+        // Go `ValidateLoginSession` maps a vanished user to session revoked.
+        Ok(None) => return Err(session_revoked()),
+        Err(error) => {
+            tracing::warn!(
+                event = "dashboard_user_lookup_failed",
+                category = crate::database_error_class(&error),
+                "dashboard user lookup failed"
+            );
+            return Err(internal_failure());
+        }
+    };
+    authorize_user(UserAuthIdentity {
+        user_id: profile.id,
+        username: profile.username,
+        role: profile.role,
+        status: profile.status,
+        auth_version: profile.auth_version,
+        group: profile.group,
+        credential: CredentialKind::DashboardSession,
+    })
+}
+
+async fn authenticate_pat(
+    db: &newapi_storage::Database,
+    credential: &str,
+) -> Result<AuthenticatedUser, AuthFailure> {
+    match PersonalAccessTokenRepository::new(db.clone())
+        .by_token(credential)
+        .await
+    {
+        Ok(Some(user)) => authorize_user(user),
+        // Go `ValidateAccessToken` returning no row (including soft-deleted
+        // users) falls through to `ErrAuthTokenInvalid`.
+        Ok(None) => Err(invalid_credential()),
+        Err(error) => {
+            tracing::warn!(
+                event = "dashboard_pat_lookup_failed",
+                category = crate::database_error_class(&error),
+                "dashboard PAT lookup failed"
+            );
+            Err(internal_failure())
+        }
+    }
+}
+
+fn authorize_user(user: UserAuthIdentity) -> Result<AuthenticatedUser, AuthFailure> {
+    match authorize(&user, ROLE_COMMON_USER) {
+        Ok(()) => Ok(AuthenticatedUser(user)),
+        Err(error) => Err(user_auth_failure(error)),
+    }
+}
+
+fn user_auth_failure(error: UserAuthError) -> AuthFailure {
+    match error {
+        UserAuthError::InvalidCredential => invalid_credential(),
+        UserAuthError::UserDisabled => AuthFailure::new(
+            StatusCode::UNAUTHORIZED,
+            "AUTH_USER_DISABLED",
+            MSG_USER_BANNED,
+        ),
+        UserAuthError::UserInvalid => AuthFailure::new(
+            StatusCode::UNAUTHORIZED,
+            "AUTH_USER_INVALID",
+            MSG_USER_INFO_INVALID,
+        ),
+        UserAuthError::InsufficientRole => AuthFailure::new(
+            StatusCode::FORBIDDEN,
+            "AUTH_INSUFFICIENT_PRIVILEGE",
+            MSG_INSUFFICIENT_PRIVILEGE,
+        ),
+        UserAuthError::Storage => internal_failure(),
+    }
+}
+
+fn invalid_credential() -> AuthFailure {
+    AuthFailure::new(
+        StatusCode::UNAUTHORIZED,
+        "AUTH_UNAUTHORIZED",
+        MSG_ACCESS_TOKEN_INVALID,
+    )
+}
+
+fn session_revoked() -> AuthFailure {
+    AuthFailure::new(
+        StatusCode::UNAUTHORIZED,
+        "AUTH_SESSION_REVOKED",
+        MSG_NOT_LOGGED_IN,
+    )
+}
+
+fn internal_failure() -> AuthFailure {
+    AuthFailure::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "AUTH_INTERNAL_ERROR",
+        MSG_DATABASE_ERROR,
+    )
+}
+
+fn request_language(request: &Request) -> String {
+    let accept_language = crate::request_lang::accept_language_header(request.headers());
+    crate::request_lang::request_language(accept_language.as_deref())
+}
+
+fn render_auth_failure(failure: AuthFailure, language: &str) -> Response {
+    let message =
+        newapi_i18n::translate(language, failure.message, std::iter::empty::<(&str, &str)>());
+    (
+        failure.status,
+        Json(json!({
+            "success": false,
+            "code": failure.code,
+            "message": message,
+        })),
+    )
+        .into_response()
+}
 
 /// Untrusted opaque input. Deliberately implements neither Debug nor Serialize.
 pub enum AuthCredential {
