@@ -421,10 +421,11 @@ pub(crate) fn set_cookie(
 }
 
 fn clear_cookie(response: &mut Response, secure: bool) {
-    // Go `ClearRefreshCookie`: `MaxAge=-1`、`Expires=time.Unix(1,0)`，写出
-    // `Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=-1`（与 set 相同属性序）。
+    // Go `ClearRefreshCookie` 设置 `MaxAge=-1`、`Expires=time.Unix(1,0)`；
+    // stdlib 对 `MaxAge < 0` 序列化为 `Max-Age=0`（net/http cookie.go），因此
+    // 线上字节是 `Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0`。
     let mut cookie = format!(
-        "{REFRESH_COOKIE}=; Path={REFRESH_COOKIE_PATH}; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=-1; HttpOnly; SameSite=Strict"
+        "{REFRESH_COOKIE}=; Path={REFRESH_COOKIE_PATH}; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; HttpOnly; SameSite=Strict"
     );
     if secure {
         cookie.push_str("; Secure");
@@ -1281,14 +1282,14 @@ mod tests {
         let value = cleared.headers()[header::SET_COOKIE].to_str().unwrap();
         for attribute in [
             "Expires=Thu, 01 Jan 1970 00:00:01 GMT",
-            "Max-Age=-1",
+            "Max-Age=0",
             "HttpOnly",
             "SameSite=Strict",
         ] {
             assert!(value.contains(attribute), "missing {attribute} in {value}");
         }
         assert!(
-            value.contains("Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=-1"),
+            value.contains("Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0"),
             "unexpected clear-cookie attribute order in {value}"
         );
         assert!(!value.contains("; Secure"));
