@@ -115,8 +115,16 @@ fn build_router(state: AppState) -> Router {
                 session_read_guard,
             )),
     );
+    // Go `apiRouter.Use(GlobalAPIRateLimit)`：GA 位于所有路由级中间件之前，
+    // 因此对全部 /api 路径（含未匹配的 /api 回退）先于 CT 执行。此层在
+    // boundary 之前添加，boundary 保持最外层；非 /api 路径由中间件内部直通。
+    let global_limit_state = state.clone();
     app.fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
+        .layer(middleware::from_fn_with_state(
+            global_limit_state,
+            crate::global_limit::global_api_rate_limit,
+        ))
         .with_state(state)
         .layer(middleware::from_fn(boundary))
 }
@@ -327,7 +335,11 @@ fn joined_header(headers: &HeaderMap, name: header::HeaderName) -> Option<String
 
 /// 可信代理链解析；`ConnectInfo` 缺失（测试直连）时 peer 为空，结果为空串，
 /// 与登录中间件的处理一致。
-fn request_ip(state: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+pub(crate) fn request_ip(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> String {
     let forwarded_for = joined_header(headers, header::HeaderName::from_static("x-forwarded-for"));
     let real_ip = joined_header(headers, header::HeaderName::from_static("x-real-ip"));
     state.client_ip(

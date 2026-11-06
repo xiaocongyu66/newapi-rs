@@ -102,6 +102,9 @@ pub struct AppState {
     proxy_policy: Option<Arc<ProxyPolicy>>,
     /// `CriticalRateLimit`；未注入时不做限流（测试路径）。
     rate_limiter: Option<Arc<RateLimiter>>,
+    /// `GlobalAPIRateLimit`（mark "GA"）；未注入时不做限流（测试路径），
+    /// 与 `rate_limiter` 的默认语义一致，未 bind 的 state 绝不产出 429。
+    global_rate_limiter: Option<Arc<RateLimiter>>,
     anonymous_body_limit: usize,
 }
 
@@ -121,6 +124,7 @@ impl Default for AppState {
             flow_key: None,
             proxy_policy: None,
             rate_limiter: None,
+            global_rate_limiter: None,
             anonymous_body_limit: anonymous_body_limit_bytes(512),
         }
     }
@@ -174,6 +178,13 @@ impl AppState {
         self
     }
 
+    /// 注入全局 API 限流（Go `GlobalAPIRateLimit`）；生产入口必须调用，
+    /// 未调用的测试路径保持直通，与 `bind_transport` 的限流默认一致。
+    pub fn bind_global_api_rate_limit(mut self, limiter: RateLimiter) -> Self {
+        self.global_rate_limiter = Some(Arc::new(limiter));
+        self
+    }
+
     /// 解析客户端 IP：peer 不可信时忽略转发头，与 Go `resolveTrustedClientIP` 一致。
     pub fn client_ip(
         &self,
@@ -197,6 +208,19 @@ impl AppState {
     ) -> Result<Option<i64>, RateLimitUnavailable> {
         match self.rate_limiter.as_ref() {
             Some(limiter) => limiter.check(mark, client_ip, now).await,
+            None => Ok(None),
+        }
+    }
+
+    /// 全局 API 限流：Go `GlobalAPIRateLimit` 固定使用 mark "GA"，键推导与
+    /// `check_rate_limit` 完全一致；未注入限流器时直通（不记录任何状态）。
+    pub async fn check_global_api_rate_limit(
+        &self,
+        client_ip: &str,
+        now: i64,
+    ) -> Result<Option<i64>, RateLimitUnavailable> {
+        match self.global_rate_limiter.as_ref() {
+            Some(limiter) => limiter.check("GA", client_ip, now).await,
             None => Ok(None),
         }
     }
