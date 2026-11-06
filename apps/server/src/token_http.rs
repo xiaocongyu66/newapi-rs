@@ -29,9 +29,9 @@ use newapi_catalog::group_settings::GroupSettings;
 use newapi_identity::{
     self_user::QuotaDisplaySettings,
     tokens::{
-        self, LikePatternError, NewToken, TokenRecord, TokenRepository, TokenRuntimeSettings,
-        TokenSearch, TokenUpdate, TOKEN_STATUS_ENABLED, TOKEN_STATUS_EXHAUSTED,
-        TOKEN_STATUS_EXPIRED,
+        self, LikePatternError, NewToken, TOKEN_STATUS_ENABLED, TOKEN_STATUS_EXHAUSTED,
+        TOKEN_STATUS_EXPIRED, TokenRecord, TokenRepository, TokenRuntimeSettings, TokenSearch,
+        TokenUpdate,
     },
 };
 use serde::Deserialize;
@@ -334,8 +334,7 @@ pub async fn token_auto_groups(
         .auto_groups
         .iter()
         .filter(|group| {
-            is_selectable_group(&usable, &settings, group.as_str())
-                && seen.insert(group.as_str())
+            is_selectable_group(&usable, &settings, group.as_str()) && seen.insert(group.as_str())
         })
         .collect();
     Json(json!({
@@ -364,10 +363,7 @@ pub async fn get_token(
         Err(_) => return api_error(&headers, MSG_INVALID_PARAMS),
     };
     let repository = TokenRepository::new(db);
-    match repository
-        .by_id_for_user(auth_user.0.user_id, id)
-        .await
-    {
+    match repository.by_id_for_user(auth_user.0.user_id, id).await {
         Ok(Some(token)) => success(Some(masked_token_json(&token, state.quota_display()))),
         Ok(None) => api_error(&headers, MSG_NOT_FOUND),
         Err(error) => database_error(&headers, error),
@@ -401,10 +397,7 @@ async fn get_token_key_inner(
         Err(_) => return api_error(headers, MSG_INVALID_PARAMS),
     };
     let repository = TokenRepository::new(db);
-    match repository
-        .by_id_for_user(auth_user.0.user_id, id)
-        .await
-    {
+    match repository.by_id_for_user(auth_user.0.user_id, id).await {
         // Only this endpoint returns the unmasked key.
         Ok(Some(token)) => success(Some(json!({ "key": token.key }))),
         Ok(None) => api_error(headers, MSG_NOT_FOUND),
@@ -451,11 +444,7 @@ pub async fn add_token(
         }
         let max = tokens::max_quota_value(display.quota_per_unit);
         if remain_quota > max {
-            return api_error_args(
-                &headers,
-                MSG_QUOTA_EXCEED_MAX,
-                &[("Max", max.to_string())],
-            );
+            return api_error_args(&headers, MSG_QUOTA_EXCEED_MAX, &[("Max", max.to_string())]);
         }
     }
     let count = match repository.count_for_user(auth_user.0.user_id).await {
@@ -556,11 +545,7 @@ pub async fn update_token(
         }
         let max = tokens::max_quota_value(display.quota_per_unit);
         if remain_quota > max {
-            return api_error_args(
-                &headers,
-                MSG_QUOTA_EXCEED_MAX,
-                &[("Max", max.to_string())],
-            );
+            return api_error_args(&headers, MSG_QUOTA_EXCEED_MAX, &[("Max", max.to_string())]);
         }
     }
     let repository = TokenRepository::new(db);
@@ -587,10 +572,7 @@ pub async fn update_token(
         }
     }
     if status_only {
-        match repository
-            .update_status_for_user(user_id, id, status)
-            .await
-        {
+        match repository.update_status_for_user(user_id, id, status).await {
             Ok(true) => {}
             Ok(false) => return api_error(&headers, MSG_NOT_FOUND),
             Err(error) => return database_error(&headers, error),
@@ -610,11 +592,10 @@ pub async fn update_token(
                             Ok(group) => group,
                             Err(response) => return response,
                         };
-                    let runtime =
-                        match TokenRuntimeSettings::load(repository.database()).await {
-                            Ok(runtime) => runtime,
-                            Err(error) => return database_error(&headers, error),
-                        };
+                    let runtime = match TokenRuntimeSettings::load(repository.database()).await {
+                        Ok(runtime) => runtime,
+                        Err(error) => return database_error(&headers, error),
+                    };
                     match validate_auto_groups(
                         &request.auto_groups.groups,
                         &settings,
@@ -794,9 +775,7 @@ fn validate_auto_groups(
 
 fn success(data: Option<Value>) -> Response {
     match data {
-        Some(data) => {
-            Json(json!({ "success": true, "message": "", "data": data })).into_response()
-        }
+        Some(data) => Json(json!({ "success": true, "message": "", "data": data })).into_response(),
         None => Json(json!({ "success": true, "message": "" })).into_response(),
     }
 }

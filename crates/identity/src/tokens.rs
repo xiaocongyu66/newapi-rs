@@ -499,7 +499,7 @@ pub fn generate_token_key() -> Option<String> {
     let mut key = String::with_capacity(TOKEN_KEY_LEN);
     for _ in 0..TOKEN_KEY_LEN {
         loop {
-            let value = rng.try_next_u32().ok()?;
+            let value = rng.next_u32();
             if value < zone {
                 key.push(KEY_CHARS[(value % alphabet_len) as usize] as char);
                 break;
@@ -635,15 +635,12 @@ const LIST_SQL: &str = token_select!(
      ORDER BY id DESC LIMIT $2 OFFSET $3"
 );
 
-const COUNT_SQL: &str =
-    "SELECT COUNT(*) FROM tokens WHERE user_id=$1 AND deleted_at IS NULL";
+const COUNT_SQL: &str = "SELECT COUNT(*) FROM tokens WHERE user_id=$1 AND deleted_at IS NULL";
 
-const BY_ID_SQL: &str = token_select!(
-    " FROM tokens WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL"
-);
+const BY_ID_SQL: &str =
+    token_select!(" FROM tokens WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL");
 
-const BY_KEY_SQL: &str =
-    token_select!(" FROM tokens WHERE \"key\"=$1 AND deleted_at IS NULL");
+const BY_KEY_SQL: &str = token_select!(" FROM tokens WHERE \"key\"=$1 AND deleted_at IS NULL");
 
 const INSERT_SQL: &str = concat!(
     "INSERT INTO tokens (user_id, \"key\", status, name, created_time, ",
@@ -683,8 +680,7 @@ const SEARCH_COUNT_SQL: &str = concat!(
     " LIMIT $4) AS matching"
 );
 
-const USER_GROUP_SQL: &str =
-    "SELECT \"group\" FROM users WHERE id=$1 AND deleted_at IS NULL";
+const USER_GROUP_SQL: &str = "SELECT \"group\" FROM users WHERE id=$1 AND deleted_at IS NULL";
 
 macro_rules! decode_token {
     ($row:expr) => {{
@@ -760,28 +756,34 @@ impl TokenRepository {
         offset: i64,
         limit: i64,
     ) -> Result<Vec<TokenRecord>, sqlx::Error> {
-        let rows = match &self.db {
+        let tokens = match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(LIST_SQL)
+                let mut tokens = Vec::new();
+                for row in sqlx::query(LIST_SQL)
                     .bind(user_id)
                     .bind(limit)
                     .bind(offset)
                     .fetch_all(pool)
                     .await?
+                {
+                    tokens.push(decode_token!(row));
+                }
+                tokens
             }
             Database::Postgres(pool) => {
-                sqlx::query(LIST_SQL)
+                let mut tokens = Vec::new();
+                for row in sqlx::query(LIST_SQL)
                     .bind(user_id)
                     .bind(limit)
                     .bind(offset)
                     .fetch_all(pool)
                     .await?
+                {
+                    tokens.push(decode_token!(row));
+                }
+                tokens
             }
         };
-        let mut tokens = Vec::with_capacity(rows.len());
-        for row in rows {
-            tokens.push(decode_token!(row));
-        }
         Ok(tokens)
     }
 
@@ -809,48 +811,56 @@ impl TokenRepository {
         user_id: i64,
         id: i64,
     ) -> Result<Option<TokenRecord>, sqlx::Error> {
-        let row = match &self.db {
+        match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(BY_ID_SQL)
+                match sqlx::query(BY_ID_SQL)
                     .bind(id)
                     .bind(user_id)
                     .fetch_optional(pool)
                     .await?
+                {
+                    Some(row) => Ok(Some(decode_token!(row))),
+                    None => Ok(None),
+                }
             }
             Database::Postgres(pool) => {
-                sqlx::query(BY_ID_SQL)
+                match sqlx::query(BY_ID_SQL)
                     .bind(id)
                     .bind(user_id)
                     .fetch_optional(pool)
                     .await?
+                {
+                    Some(row) => Ok(Some(decode_token!(row))),
+                    None => Ok(None),
+                }
             }
-        };
-        match row {
-            Some(row) => Ok(Some(decode_token!(row))),
-            None => Ok(None),
         }
     }
 
     /// Go `GetTokenByKey`; used by credential validation. Soft-deleted rows
     /// are invisible, exactly like GORM's default scope.
     pub async fn by_key(&self, key: &str) -> Result<Option<TokenRecord>, sqlx::Error> {
-        let row = match &self.db {
+        match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(BY_KEY_SQL)
+                match sqlx::query(BY_KEY_SQL)
                     .bind(key)
                     .fetch_optional(pool)
                     .await?
+                {
+                    Some(row) => Ok(Some(decode_token!(row))),
+                    None => Ok(None),
+                }
             }
             Database::Postgres(pool) => {
-                sqlx::query(BY_KEY_SQL)
+                match sqlx::query(BY_KEY_SQL)
                     .bind(key)
                     .fetch_optional(pool)
                     .await?
+                {
+                    Some(row) => Ok(Some(decode_token!(row))),
+                    None => Ok(None),
+                }
             }
-        };
-        match row {
-            Some(row) => Ok(Some(decode_token!(row))),
-            None => Ok(None),
         }
     }
 
@@ -906,42 +916,38 @@ impl TokenRepository {
         update: &TokenUpdate,
     ) -> Result<bool, sqlx::Error> {
         let affected = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(UPDATE_SQL)
-                    .bind(&update.name)
-                    .bind(update.expired_time)
-                    .bind(update.remain_quota)
-                    .bind(update.unlimited_quota)
-                    .bind(update.model_limits_enabled)
-                    .bind(&update.model_limits)
-                    .bind(update.allow_ips.as_deref())
-                    .bind(&update.group)
-                    .bind(update.cross_group_retry)
-                    .bind(&update.auto_groups)
-                    .bind(id)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(UPDATE_SQL)
-                    .bind(&update.name)
-                    .bind(update.expired_time)
-                    .bind(update.remain_quota)
-                    .bind(update.unlimited_quota)
-                    .bind(update.model_limits_enabled)
-                    .bind(&update.model_limits)
-                    .bind(update.allow_ips.as_deref())
-                    .bind(&update.group)
-                    .bind(update.cross_group_retry)
-                    .bind(&update.auto_groups)
-                    .bind(id)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
+            Database::Sqlite(pool) => sqlx::query(UPDATE_SQL)
+                .bind(&update.name)
+                .bind(update.expired_time)
+                .bind(update.remain_quota)
+                .bind(update.unlimited_quota)
+                .bind(update.model_limits_enabled)
+                .bind(&update.model_limits)
+                .bind(update.allow_ips.as_deref())
+                .bind(&update.group)
+                .bind(update.cross_group_retry)
+                .bind(&update.auto_groups)
+                .bind(id)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(UPDATE_SQL)
+                .bind(&update.name)
+                .bind(update.expired_time)
+                .bind(update.remain_quota)
+                .bind(update.unlimited_quota)
+                .bind(update.model_limits_enabled)
+                .bind(&update.model_limits)
+                .bind(update.allow_ips.as_deref())
+                .bind(&update.group)
+                .bind(update.cross_group_retry)
+                .bind(&update.auto_groups)
+                .bind(id)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
         };
         Ok(affected > 0)
     }
@@ -954,24 +960,20 @@ impl TokenRepository {
         status: i64,
     ) -> Result<bool, sqlx::Error> {
         let affected = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(UPDATE_STATUS_SQL)
-                    .bind(status)
-                    .bind(id)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(UPDATE_STATUS_SQL)
-                    .bind(status)
-                    .bind(id)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
+            Database::Sqlite(pool) => sqlx::query(UPDATE_STATUS_SQL)
+                .bind(status)
+                .bind(id)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(UPDATE_STATUS_SQL)
+                .bind(status)
+                .bind(id)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
         };
         Ok(affected > 0)
     }
@@ -979,22 +981,18 @@ impl TokenRepository {
     /// Go `DeleteTokenById`: soft delete, scoped to the owner.
     pub async fn delete_for_user(&self, user_id: i64, id: i64) -> Result<bool, sqlx::Error> {
         let affected = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(DELETE_SQL)
-                    .bind(id)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(DELETE_SQL)
-                    .bind(id)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
+            Database::Sqlite(pool) => sqlx::query(DELETE_SQL)
+                .bind(id)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(DELETE_SQL)
+                .bind(id)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
         };
         Ok(affected > 0)
     }
@@ -1006,9 +1004,10 @@ impl TokenRepository {
         user_id: i64,
         search: &TokenSearch<'_>,
     ) -> Result<(Vec<TokenRecord>, i64), sqlx::Error> {
-        let rows = match &self.db {
+        let tokens = match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(SEARCH_SQL)
+                let mut tokens = Vec::new();
+                for row in sqlx::query(SEARCH_SQL)
                     .bind(user_id)
                     .bind(search.keyword)
                     .bind(search.key)
@@ -1016,9 +1015,14 @@ impl TokenRepository {
                     .bind(search.offset)
                     .fetch_all(pool)
                     .await?
+                {
+                    tokens.push(decode_token!(row));
+                }
+                tokens
             }
             Database::Postgres(pool) => {
-                sqlx::query(SEARCH_SQL)
+                let mut tokens = Vec::new();
+                for row in sqlx::query(SEARCH_SQL)
                     .bind(user_id)
                     .bind(search.keyword)
                     .bind(search.key)
@@ -1026,6 +1030,10 @@ impl TokenRepository {
                     .bind(search.offset)
                     .fetch_all(pool)
                     .await?
+                {
+                    tokens.push(decode_token!(row));
+                }
+                tokens
             }
         };
         let total = match &self.db {
@@ -1048,10 +1056,6 @@ impl TokenRepository {
                     .await?
             }
         };
-        let mut tokens = Vec::with_capacity(rows.len());
-        for row in rows {
-            tokens.push(decode_token!(row));
-        }
         Ok((tokens, total))
     }
 
@@ -1141,10 +1145,7 @@ mod token_repository_tests {
         assert_eq!(mask_token_key("abcde"), "ab****de");
         assert_eq!(mask_token_key("abcdefgh"), "ab****gh");
         assert_eq!(mask_token_key("abcdefghi"), "abcd**********fghi");
-        assert_eq!(
-            mask_token_key("abcd1234efgh5678"),
-            "abcd**********5678"
-        );
+        assert_eq!(mask_token_key("abcd1234efgh5678"), "abcd**********5678");
     }
 
     #[test]

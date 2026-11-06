@@ -190,7 +190,10 @@ fn build_router(state: AppState) -> Router {
     let token_key_state = state.clone();
     let app = app.merge(
         Router::new()
-            .route("/api/token/{id}/key", post(crate::token_http::get_token_key))
+            .route(
+                "/api/token/{id}/key",
+                post(crate::token_http::get_token_key),
+            )
             .route_layer(middleware::from_fn_with_state(
                 token_key_state.clone(),
                 critical_guard,

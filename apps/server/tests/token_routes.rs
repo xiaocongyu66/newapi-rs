@@ -371,10 +371,9 @@ async fn run_contract(db: Database) {
     let auth_b = auth(pat_b);
 
     // Empty list.
-    let body = assert_success(
-        send_json(&app, Method::GET, "/api/token/", Some(&auth_a), None).await,
-    )
-    .await;
+    let body =
+        assert_success(send_json(&app, Method::GET, "/api/token/", Some(&auth_a), None).await)
+            .await;
     assert_eq!(body["data"]["page"], json!(1));
     assert_eq!(body["data"]["page_size"], json!(10));
     assert_eq!(body["data"]["total"], json!(0));
@@ -482,16 +481,7 @@ async fn run_contract(db: Database) {
     // List pagination: newest first, masked keys, aliases and caps.
     let third_key = key_for("third", 3);
     let third_id = seed_token(
-        &db,
-        USER_A,
-        &third_key,
-        "third",
-        1,
-        -1,
-        10,
-        true,
-        "default",
-        "",
+        &db, USER_A, &third_key, "third", 1, -1, 10, true, "default", "",
     )
     .await;
     let body = assert_success(
@@ -776,15 +766,16 @@ async fn run_contract(db: Database) {
         Some(translated("common.not_found")),
     )
     .await;
-    let body = assert_success(
-        send_json(&app, Method::GET, "/api/token/", Some(&auth_a), None).await,
-    )
-    .await;
-    assert!(!body["data"]["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["id"] == json!(third_id)));
+    let body =
+        assert_success(send_json(&app, Method::GET, "/api/token/", Some(&auth_a), None).await)
+            .await;
+    assert!(
+        !body["data"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == json!(third_id))
+    );
 
     // `/key` returns the full key and the three no-cache headers. Malformed
     // ids still carry the headers because the middleware/handler wrote them.
@@ -830,16 +821,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     seed_token(
-        &db,
-        USER_A,
-        &beta_key,
-        "beta",
-        1,
-        -1,
-        0,
-        true,
-        "default",
-        "",
+        &db, USER_A, &beta_key, "beta", 1, -1, 0, true, "default", "",
     )
     .await;
     seed_token(
