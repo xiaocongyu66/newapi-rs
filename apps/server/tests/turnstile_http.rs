@@ -71,7 +71,7 @@ struct FakeVerifier {
 }
 
 impl FakeVerifier {
-    fn new(result: Result<bool, VerifyError>) -> Arc<Self> {
+    fn arc(result: Result<bool, VerifyError>) -> Arc<Self> {
         Arc::new(Self {
             result,
             calls: AtomicUsize::new(0),
@@ -142,7 +142,7 @@ async fn body_text(response: Response) -> String {
 #[tokio::test]
 async fn empty_token_rejects_without_calling_the_verifier() {
     let (state, db) = options_state(true).await;
-    let fake = FakeVerifier::new(Ok(true));
+    let fake = FakeVerifier::arc(Ok(true));
 
     let response = send(&state, Some(fake.clone()), "/api/user/login", "zh-CN").await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -157,7 +157,7 @@ async fn empty_token_rejects_without_calling_the_verifier() {
 #[tokio::test]
 async fn successful_verification_forwards_the_request() {
     let (state, db) = options_state(true).await;
-    let fake = FakeVerifier::new(Ok(true));
+    let fake = FakeVerifier::arc(Ok(true));
 
     let response = send(
         &state,
@@ -181,7 +181,7 @@ async fn successful_verification_forwards_the_request() {
 #[tokio::test]
 async fn failed_verification_uses_the_fixed_rejection_message() {
     let (state, db) = options_state(true).await;
-    let fake = FakeVerifier::new(Ok(false));
+    let fake = FakeVerifier::arc(Ok(false));
 
     let response = send(
         &state,
@@ -206,7 +206,7 @@ async fn transport_error_is_rejected_like_go() {
     // Go's `http.PostForm` error branch writes 200 `{success:false,...}` then
     // aborts, so a transport failure never fails open.
     let (state, db) = options_state(true).await;
-    let fake = FakeVerifier::new(Err(VerifyError::Transport));
+    let fake = FakeVerifier::arc(Err(VerifyError::Transport));
 
     let response = send(
         &state,
@@ -229,7 +229,7 @@ async fn transport_error_is_rejected_like_go() {
 #[tokio::test]
 async fn disabled_check_never_calls_the_verifier() {
     let (state, db) = options_state(false).await;
-    let fake = FakeVerifier::new(Err(VerifyError::Transport));
+    let fake = FakeVerifier::arc(Err(VerifyError::Transport));
 
     for uri in [
         "/api/user/login",
