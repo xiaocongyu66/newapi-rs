@@ -88,6 +88,17 @@ fn build_router(state: AppState) -> Router {
                 crate::setup_http::setup_body_limit,
             )),
     );
+    // `POST /api/user/register`：Go 顺序 CriticalRateLimit → 匿名体上限 →
+    // TurnstileCheck → handler（该路由不挂 DisableCache）。
+    let register_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/register", post(crate::register_http::register))
+            .route_layer(middleware::from_fn_with_state(
+                register_state,
+                crate::register_http::register_guard,
+            )),
+    );
     // `/api/user/self`：Go `UserAuth` → handler（该路由不挂 DisableCache）。
     let self_state = state.clone();
     let app = app.merge(
