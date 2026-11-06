@@ -679,6 +679,7 @@ fn is_login_path(path: &str) -> bool {
 }
 
 // 测试可注入短超时，无需等待生产环境的三十秒期限。
+#[cfg(test)]
 async fn boundary_with_timeout(request: Request, next: Next, timeout: Duration) -> Response {
     boundary_inner(request, next, timeout, Some(MAX_BODY_BYTES)).await
 }

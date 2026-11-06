@@ -154,7 +154,7 @@ pub async fn login_guard(
     }
     request.extensions_mut().insert(ClientIp(ip));
     let mut response = match read_limited_body(state.anonymous_body_limit(), request).await {
-        Err(response) => response,
+        Err(status) => status.into_response(),
         Ok(request) => {
             // Go 的 TurnstileCheck 位于体限制之后、handler 之前。工作区尚无
             // siteverify 传输层：开启开关时决策层返回 Unavailable，不会静默放行。
@@ -176,7 +176,7 @@ pub async fn login_guard(
 /// 复刻 Go `AnonymousRequestBodyLimit`：先看声明的 Content-Length，再以
 /// `limit + 1` 预算读取实际体；超限返回裸 413（无 JSON 包）。`limit == 0`
 /// 在 Go 中是“未启用”，这里同样不设限。
-async fn read_limited_body(limit: usize, request: Request) -> Result<Request, Response> {
+async fn read_limited_body(limit: usize, request: Request) -> Result<Request, StatusCode> {
     if limit == 0 {
         return Ok(request);
     }
@@ -186,7 +186,7 @@ async fn read_limited_body(limit: usize, request: Request) -> Result<Request, Re
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
     if declared.is_some_and(|declared| declared > limit as u64) {
-        return Err(StatusCode::PAYLOAD_TOO_LARGE.into_response());
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     if declared.is_none_or(|declared| declared == 0) {
         return Ok(request);
@@ -194,7 +194,7 @@ async fn read_limited_body(limit: usize, request: Request) -> Result<Request, Re
     let (parts, body) = request.into_parts();
     match to_bytes(body, limit.saturating_add(1)).await {
         Ok(bytes) if bytes.len() <= limit => Ok(Request::from_parts(parts, Body::from(bytes))),
-        Ok(_) | Err(_) => Err(StatusCode::PAYLOAD_TOO_LARGE.into_response()),
+        Ok(_) | Err(_) => Err(StatusCode::PAYLOAD_TOO_LARGE),
     }
 }
 

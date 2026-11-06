@@ -217,11 +217,10 @@ impl AppState {
 
     /// SelfUser 组装用的额度展示设置（billing 快照 → identity 算术设置）。
     pub fn quota_display(&self) -> QuotaDisplaySettings {
-        let display = self
+        let display = *self
             .quota_display
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let kind = match display.display_type {
             newapi_billing::quota_display::QuotaDisplayType::Cny => QuotaDisplayKind::Cny {
                 usd_exchange_rate: display.usd_exchange_rate,
@@ -270,11 +269,10 @@ impl AppState {
                 return Err(error);
             }
         };
-        let quota_previous = self
+        let quota_previous = *self
             .quota_display
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let quota_next = match QuotaDisplay::load(db, &quota_previous).await {
             Ok(next) => next,
             Err(error) => {
