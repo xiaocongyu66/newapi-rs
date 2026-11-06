@@ -210,7 +210,7 @@ impl LoginService {
                 }
             };
             return Ok(LoginResponse::Pending2fa {
-                message: translate(MSG_REQUIRE_2FA, lang),
+                message: translate(lang, MSG_REQUIRE_2FA),
                 flow_token: token,
                 expires_at,
             });
