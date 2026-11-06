@@ -375,14 +375,23 @@ async fn run_contract(db: Database) {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(true));
+    // Go 管理员降级形状：可设置侧栏、system.settings 为 false，权限矩阵
+    // 保持完整但全部为 false。
+    let permissions = &body["data"]["permissions"];
+    assert_eq!(permissions["sidebar_settings"], json!(true));
     assert_eq!(
-        body["data"]["permissions"],
-        json!({
-            "sidebar_settings": false,
-            "sidebar_modules": {},
-            "admin_permissions": {},
-        })
+        permissions["sidebar_modules"],
+        json!({"admin": {"setting": false}})
     );
+    let matrix = permissions["admin_permissions"]
+        .as_object()
+        .expect("resource matrix");
+    assert!(!matrix.is_empty());
+    for (resource, actions) in matrix {
+        for (action, allowed) in actions.as_object().expect("actions") {
+            assert_eq!(allowed, &json!(false), "{resource}.{action}");
+        }
+    }
 }
 
 #[tokio::test]
