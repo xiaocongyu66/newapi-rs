@@ -400,9 +400,16 @@ async fn session_read_guard(
     response
 }
 
-pub(crate) fn set_cookie(response: &mut Response, value: &str, max_age: i64, secure: bool) {
+pub(crate) fn set_cookie(
+    response: &mut Response,
+    value: &str,
+    expires_at: i64,
+    max_age: i64,
+    secure: bool,
+) {
     let mut cookie = format!(
-        "{REFRESH_COOKIE}={value}; Path={REFRESH_COOKIE_PATH}; Max-Age={}; HttpOnly; SameSite=Strict",
+        "{REFRESH_COOKIE}={value}; Path={REFRESH_COOKIE_PATH}; Expires={}; Max-Age={}; HttpOnly; SameSite=Strict",
+        format_http_date(expires_at),
         max_age.max(1)
     );
     if secure {
@@ -414,8 +421,10 @@ pub(crate) fn set_cookie(response: &mut Response, value: &str, max_age: i64, sec
 }
 
 fn clear_cookie(response: &mut Response, secure: bool) {
+    // Go `ClearRefreshCookie`: `MaxAge=-1`、`Expires=time.Unix(1,0)`，写出
+    // `Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=-1`（与 set 相同属性序）。
     let mut cookie = format!(
-        "{REFRESH_COOKIE}=; Path={REFRESH_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Strict"
+        "{REFRESH_COOKIE}=; Path={REFRESH_COOKIE_PATH}; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=-1; HttpOnly; SameSite=Strict"
     );
     if secure {
         cookie.push_str("; Secure");
@@ -423,6 +432,92 @@ fn clear_cookie(response: &mut Response, secure: bool) {
     if let Ok(value) = HeaderValue::from_str(&cookie) {
         response.headers_mut().append(header::SET_COOKIE, value);
     }
+}
+
+/// RFC1123 HTTP-date（UTC，固定 `GMT` 后缀），对齐 Go `net/http` Cookie.String()
+/// 与 `httpdate::fmt_http_date` 输出。算法移植自 httpdate 1.0.3（MIT OR
+/// Apache-2.0，`src/date.rs`），只依赖整数算术，不引入额外直接依赖。
+pub(crate) fn format_http_date(epoch: i64) -> String {
+    let epoch = epoch.clamp(0, 253_402_300_799);
+    let days = epoch.div_euclid(86_400);
+    let secs = epoch.rem_euclid(86_400);
+    let hour = (secs / 3_600) as u32;
+    let min = ((secs % 3_600) / 60) as u32;
+    let sec = (secs % 60) as u32;
+
+    const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const LEAPOCH: i64 = 11_017;
+    const DAYS_PER_400Y: i64 = 365 * 400 + 97;
+    const DAYS_PER_100Y: i64 = 365 * 100 + 24;
+    const DAYS_PER_4Y: i64 = 365 * 4 + 1;
+    const MONTH_LENGTHS: [i64; 12] = [31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31, 29];
+
+    let days_since_leapoch = days - LEAPOCH;
+    let mut quad_century_cycles = days_since_leapoch / DAYS_PER_400Y;
+    let mut remdays = days_since_leapoch % DAYS_PER_400Y;
+    if remdays < 0 {
+        remdays += DAYS_PER_400Y;
+        quad_century_cycles -= 1;
+    }
+
+    let mut century_cycles = remdays / DAYS_PER_100Y;
+    if century_cycles == 4 {
+        century_cycles -= 1;
+    }
+    remdays -= century_cycles * DAYS_PER_100Y;
+
+    let mut quad_cycles = remdays / DAYS_PER_4Y;
+    if quad_cycles == 25 {
+        quad_cycles -= 1;
+    }
+    remdays -= quad_cycles * DAYS_PER_4Y;
+
+    let mut remyears = remdays / 365;
+    if remyears == 4 {
+        remyears -= 1;
+    }
+    remdays -= remyears * 365;
+
+    let mut year = 2000
+        + remyears
+        + 4 * quad_cycles
+        + 100 * century_cycles
+        + 400 * quad_century_cycles;
+
+    let mut month_index = 0usize;
+    for month_len in MONTH_LENGTHS {
+        month_index += 1;
+        if remdays < month_len {
+            break;
+        }
+        remdays -= month_len;
+    }
+    let mday = remdays + 1;
+    let month = if month_index + 2 > 12 {
+        year += 1;
+        month_index - 10
+    } else {
+        month_index + 2
+    };
+
+    let mut wday = (3 + days_since_leapoch) % 7;
+    if wday <= 0 {
+        wday += 7;
+    }
+
+    format!(
+        "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
+        WEEKDAYS[(wday - 1) as usize],
+        mday,
+        MONTHS[month - 1],
+        year,
+        hour,
+        min,
+        sec
+    )
 }
 
 async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -448,6 +543,7 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response 
     match auth.refresh(&raw, expected, now).await {
         Ok(result) => {
             let max_age = result.session.expires_at - now;
+            let expires_at = result.session.expires_at;
             let body = RotationBody {
                 access_token: result.access_token.expose_secret().to_owned(),
                 token_type: "Bearer",
@@ -458,6 +554,7 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response 
             set_cookie(
                 &mut response,
                 result.refresh_token.expose_secret(),
+                expires_at,
                 max_age,
                 secure,
             );
@@ -1164,11 +1261,12 @@ mod tests {
     #[test]
     fn refresh_cookie_carries_required_attributes() {
         let mut response = StatusCode::OK.into_response();
-        set_cookie(&mut response, "sid.secret", 5, true);
+        set_cookie(&mut response, "sid.secret", 1_700_000_005, 5, true);
         let value = response.headers()[header::SET_COOKIE].to_str().unwrap();
         for attribute in [
             "new_api_refresh=sid.secret",
             "Path=/api/user/auth",
+            "Expires=Tue, 14 Nov 2023 22:13:25 GMT",
             "Max-Age=5",
             "HttpOnly",
             "SameSite=Strict",
@@ -1176,11 +1274,44 @@ mod tests {
         ] {
             assert!(value.contains(attribute), "missing {attribute} in {value}");
         }
+        // Go Cookie.String() 写 Expires 后紧跟 Max-Age。
+        assert!(
+            value.contains("Expires=Tue, 14 Nov 2023 22:13:25 GMT; Max-Age=5"),
+            "unexpected cookie attribute order in {value}"
+        );
         let mut cleared = StatusCode::OK.into_response();
         clear_cookie(&mut cleared, false);
         let value = cleared.headers()[header::SET_COOKIE].to_str().unwrap();
-        assert!(value.contains("Max-Age=0"));
+        for attribute in [
+            "Expires=Thu, 01 Jan 1970 00:00:01 GMT",
+            "Max-Age=-1",
+            "HttpOnly",
+            "SameSite=Strict",
+        ] {
+            assert!(value.contains(attribute), "missing {attribute} in {value}");
+        }
+        assert!(
+            value.contains("Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=-1"),
+            "unexpected clear-cookie attribute order in {value}"
+        );
         assert!(!value.contains("; Secure"));
+    }
+
+    #[test]
+    fn format_http_date_matches_go_rfc1123_vectors() {
+        for (epoch, expected) in [
+            (0, "Thu, 01 Jan 1970 00:00:00 GMT"),
+            (1, "Thu, 01 Jan 1970 00:00:01 GMT"),
+            (1_700_000_000, "Tue, 14 Nov 2023 22:13:20 GMT"),
+            (2_000_000_000, "Wed, 18 May 2033 03:33:20 GMT"),
+            (951_782_399, "Mon, 28 Feb 2000 23:59:59 GMT"),
+            (951_782_400, "Tue, 29 Feb 2000 00:00:00 GMT"),
+            (4_107_542_399, "Sun, 28 Feb 2100 23:59:59 GMT"),
+            (4_107_542_400, "Mon, 01 Mar 2100 00:00:00 GMT"),
+            (253_402_300_799, "Fri, 31 Dec 9999 23:59:59 GMT"),
+        ] {
+            assert_eq!(format_http_date(epoch), expected, "epoch {epoch}");
+        }
     }
 
     #[test]
