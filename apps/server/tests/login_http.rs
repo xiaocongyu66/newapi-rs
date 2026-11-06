@@ -58,7 +58,10 @@ async fn send(state: &AppState, peer: SocketAddr, mut request: Request<Body>) ->
 }
 
 async fn body_bytes(response: Response) -> Vec<u8> {
-    to_bytes(response.into_body(), 2 * LIMIT).await.unwrap().to_vec()
+    to_bytes(response.into_body(), 2 * LIMIT)
+        .await
+        .unwrap()
+        .to_vec()
 }
 
 async fn body_text(response: Response) -> String {
@@ -187,14 +190,20 @@ async fn anonymous_body_limit_accepts_exact_limit_and_unbounded_declarations() {
         .header(header::CONTENT_LENGTH, "0")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(send(&state, addr, zero).await.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        send(&state, addr, zero).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 
     let missing = Request::builder()
         .method(Method::POST)
         .uri("/api/user/login")
         .body(Body::from("{\"username\":\"fixture\"}"))
         .unwrap();
-    assert_eq!(send(&state, addr, missing).await.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        send(&state, addr, missing).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }
 
 #[tokio::test]
@@ -222,7 +231,12 @@ async fn turnstile_enabled_gates_the_login_route_only() {
     assert!(body.contains("Turnstile 校验暂不可用"));
     assert!(!body.contains("opaque-token"));
 
-    let response = send(&state, addr, post_with_language("/api/user/login/2fa", "zh-CN")).await;
+    let response = send(
+        &state,
+        addr,
+        post_with_language("/api/user/login/2fa", "zh-CN"),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 
     db.close().await;
@@ -244,7 +258,12 @@ async fn turnstile_rejection_message_follows_accept_language() {
         ("en", "Turnstile token is empty"),
         ("zh-CN", "Turnstile token 为空"),
     ] {
-        let response = send(&state, addr, post_with_language("/api/user/login", language)).await;
+        let response = send(
+            &state,
+            addr,
+            post_with_language("/api/user/login", language),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_text(response).await;
         assert!(body.contains(expected), "language {language}");
