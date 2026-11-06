@@ -9,8 +9,8 @@
 //!   `channel.GetUserGroupRatio`
 //!
 //! Go keeps these maps in memory and refreshes them from the `options` table;
-//! this snapshot is the typed equivalent, loaded by the owner of the runtime
-//! state. No HTTP request performs a database read here.
+//! this snapshot is the typed equivalent. Until `AppState` owns a snapshot,
+//! the group handlers load it per request (see `groups_http::load_settings`).
 //!
 //! Defaults mirror the values seeded before any persisted option row is
 //! applied: `GroupRatio`/`GroupGroupRatio` start empty and `UserUsableGroups`

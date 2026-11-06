@@ -168,8 +168,9 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
-    // `/api/user/token`：Go `UserAuth` → CriticalRateLimit → 用户维度限流 →
-    // DisableCache → handler。用户维度限流尚未移植；handler 自写缓存头。
+    // `/api/user/token`：Go `UserAuth` → CriticalRateLimit →
+    // UserCriticalRateLimit("access-token") → DisableCache → handler；
+    // handler 自写缓存头，限流的 429/500 不带缓存头。
     let token_state = state.clone();
     let app = app.merge(
         Router::new()
