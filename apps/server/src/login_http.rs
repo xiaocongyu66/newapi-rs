@@ -152,17 +152,40 @@ pub async fn login_guard(
         // Go 的 Redis 故障分支：500 + Abort，且位于 DisableCache 之前。
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
-    request.extensions_mut().insert(ClientIp(ip));
+    request.extensions_mut().insert(ClientIp(ip.clone()));
     let mut response = match read_limited_body(state.anonymous_body_limit(), request).await {
         Err(status) => status.into_response(),
         Ok(request) => {
-            // Go 的 TurnstileCheck 位于体限制之后、handler 之前。工作区尚无
-            // siteverify 传输层：开启开关时决策层返回 Unavailable，不会静默放行。
-            // Go 只在 `/api/user/login` 注册 TurnstileCheck，`/login/2fa` 不受其约束。
-            let enabled = state.auth_settings().turnstile_check_enabled
-                && request.uri().path() == "/api/user/login";
+            // Go 的 TurnstileCheck 位于体限制之后、handler 之前。Go 只在
+            // `/api/user/login` 注册 TurnstileCheck，`/login/2fa` 不受其约束。
+            let auth = state.auth_settings();
+            let enabled = auth.turnstile_check_enabled && request.uri().path() == "/api/user/login";
             let token = crate::turnstile::query_token(request.uri().query());
-            let decision = crate::turnstile::decide(enabled, token.as_deref(), None);
+            let decision = if !enabled || token.is_none() {
+                // Disabled checks and empty tokens must not construct or call
+                // any verifier, so no siteverify request can be issued.
+                crate::turnstile::decide(enabled, token.as_deref(), "", None, None).await
+            } else {
+                // Tests and embedders can replace the transport through a
+                // request extension; production uses the shared HTTP client.
+                let injected = request
+                    .extensions()
+                    .get::<crate::turnstile::InjectedVerifier>()
+                    .cloned();
+                let http = crate::turnstile::HttpVerifier;
+                let verifier: &dyn crate::turnstile::Verifier = match injected.as_ref() {
+                    Some(injected) => injected.0.as_ref(),
+                    None => &http,
+                };
+                crate::turnstile::decide(
+                    true,
+                    token.as_deref(),
+                    &auth.turnstile_secret_key,
+                    Some(ip.as_str()),
+                    Some(verifier),
+                )
+                .await
+            };
             match decision.rejection_key() {
                 Some(key) => rejected(translate(request.headers(), key)),
                 None => next.run(request).await,
