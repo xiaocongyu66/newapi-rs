@@ -56,7 +56,12 @@ impl RateLimiter {
                 Ok((!allowed).then_some(retry_after))
             }
             RateLimiterBackend::Redis(limiter) => match limiter
-                .check(mark, client_ip, self.settings.requests, self.settings.window_seconds)
+                .check(
+                    mark,
+                    client_ip,
+                    self.settings.requests,
+                    self.settings.window_seconds,
+                )
                 .await
             {
                 Ok(RateLimitVerdict::Allowed) => Ok(None),
