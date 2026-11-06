@@ -689,3 +689,121 @@ async fn soft_delete_postgres(
     tx.commit().await?;
     Ok(())
 }
+
+// --- Affiliate code (`GET /api/user/aff`) -------------------------------
+
+/// Go `common.GetRandomString(4)` alphabet: lowercase, uppercase, digits.
+const AFF_CODE_CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const AFF_CODE_LENGTH: usize = 4;
+/// Bounded re-read after losing a conditional claim race.
+const AFF_CODE_CLAIM_ATTEMPTS: usize = 4;
+
+const SELECT_AFF_CODE: &str = "SELECT aff_code FROM users WHERE id = $1 AND deleted_at IS NULL";
+
+// Claim only an unset code. Concurrent readers never overwrite a code that
+// another request already persisted, removing the lost-update window in Go's
+// read-modify-write `User.Update`.
+const CLAIM_AFF_CODE: &str = r"
+UPDATE users SET aff_code = $1
+WHERE id = $2 AND deleted_at IS NULL
+    AND (aff_code IS NULL OR aff_code = '')
+";
+
+/// Fixed classification for affiliate-code reads/writes; never carries SQL text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AffCodeError {
+    /// No active (non soft-deleted) user row exists.
+    NotFound,
+    /// The code could not be written to or read back from storage.
+    Storage,
+}
+
+/// Go `common.GetRandomString(4)` for affiliate codes.
+pub fn generate_aff_code() -> String {
+    use rand::Rng;
+
+    let mut rng = rand::thread_rng();
+    (0..AFF_CODE_LENGTH)
+        .map(|_| char::from(AFF_CODE_CHARSET[rng.gen_range(0..AFF_CODE_CHARSET.len())]))
+        .collect()
+}
+
+impl UserProfileRepository {
+    /// Read the affiliate code of an active user. `Ok(None)` means the row
+    /// exists but the column is NULL/empty; [`AffCodeError::NotFound`] means no
+    /// active row (soft-deleted users included, matching Go GORM's default
+    /// scope in `GetUserById`).
+    pub async fn aff_code(&self, user_id: i64) -> Result<Option<String>, AffCodeError> {
+        let stored = match &self.db {
+            Database::Sqlite(pool) => sqlx::query_scalar::<_, Option<String>>(SELECT_AFF_CODE)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|_| AffCodeError::Storage)?,
+            Database::Postgres(pool) => sqlx::query_scalar::<_, Option<String>>(SELECT_AFF_CODE)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|_| AffCodeError::Storage)?,
+        };
+        match stored {
+            Some(Some(code)) if !code.is_empty() => Ok(Some(code)),
+            Some(_) => Ok(None),
+            None => Err(AffCodeError::NotFound),
+        }
+    }
+
+    /// Go `GetAffCode`: return the persisted code, or generate and persist a
+    /// 4-character code when the column is empty. The conditional update makes
+    /// concurrent claims safe: exactly one writer wins and every caller then
+    /// reads the winner's value.
+    pub async fn ensure_aff_code(&self, user_id: i64) -> Result<String, AffCodeError> {
+        for _ in 0..AFF_CODE_CLAIM_ATTEMPTS {
+            if let Some(code) = self.aff_code(user_id).await? {
+                return Ok(code);
+            }
+            let candidate = generate_aff_code();
+            if self.claim_aff_code(user_id, &candidate).await? == 1 {
+                return Ok(candidate);
+            }
+        }
+        match self.aff_code(user_id).await? {
+            Some(code) => Ok(code),
+            None => Err(AffCodeError::Storage),
+        }
+    }
+
+    async fn claim_aff_code(&self, user_id: i64, code: &str) -> Result<u64, AffCodeError> {
+        let affected = match &self.db {
+            Database::Sqlite(pool) => sqlx::query(CLAIM_AFF_CODE)
+                .bind(code)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .map_err(|_| AffCodeError::Storage)?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(CLAIM_AFF_CODE)
+                .bind(code)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .map_err(|_| AffCodeError::Storage)?
+                .rows_affected(),
+        };
+        Ok(affected)
+    }
+}
+
+#[cfg(test)]
+mod aff_code_tests {
+    use super::*;
+
+    #[test]
+    fn generated_aff_codes_are_four_alphanumeric_characters() {
+        for _ in 0..64 {
+            let code = generate_aff_code();
+            assert_eq!(code.len(), AFF_CODE_LENGTH);
+            assert!(code.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+        }
+    }
+}
