@@ -80,6 +80,11 @@ impl RedisRateLimiter {
         format!("{}:ip:{mark}:{client_ip}", self.namespace)
     }
 
+    /// Builds the same user key as Go's `redisUserRateLimitKey`.
+    pub fn user_key(&self, mark: &str, user_id: i64) -> String {
+        format!("{}:user:{mark}:{user_id}", self.namespace)
+    }
+
     /// Records one request and decides whether it is admitted.
     pub async fn check(
         &self,
@@ -88,10 +93,31 @@ impl RedisRateLimiter {
         max_requests: i64,
         duration_seconds: i64,
     ) -> Result<RateLimitVerdict, RedisLimitError> {
+        self.take(self.key(mark, client_ip), max_requests, duration_seconds)
+            .await
+    }
+
+    /// Go `UserCriticalRateLimit`: same window, keyed by user ID.
+    pub async fn check_user(
+        &self,
+        mark: &str,
+        user_id: i64,
+        max_requests: i64,
+        duration_seconds: i64,
+    ) -> Result<RateLimitVerdict, RedisLimitError> {
+        self.take(self.user_key(mark, user_id), max_requests, duration_seconds)
+            .await
+    }
+
+    async fn take(
+        &self,
+        key: String,
+        max_requests: i64,
+        duration_seconds: i64,
+    ) -> Result<RateLimitVerdict, RedisLimitError> {
         if max_requests <= 0 || duration_seconds <= 0 {
             return Err(RedisLimitError::Value);
         }
-        let key = self.key(mark, client_ip);
         // MultiplexedConnection 的克隆共享同一连接池，避免为并发请求加互斥锁。
         let mut connection = self.connection.clone();
         let (allowed, _count, ttl): (i64, i64, i64) = Script::new(SCRIPT)

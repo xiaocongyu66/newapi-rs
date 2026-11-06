@@ -176,6 +176,10 @@ fn build_router(state: AppState) -> Router {
             .route("/api/user/token", get(crate::self_http::access_token))
             .route_layer(middleware::from_fn_with_state(
                 token_state.clone(),
+                user_critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                token_state.clone(),
                 critical_guard,
             ))
             .route_layer(middleware::from_fn_with_state(
@@ -454,6 +458,38 @@ pub(crate) fn request_ip(
         forwarded_for.as_deref(),
         real_ip.as_deref(),
     )
+}
+
+/// Go `UserCriticalRateLimit(scope)`：在 `UserAuth` 之后按用户 ID 限流，
+/// 键为 `UC:<scope>` + user id；未认证（无扩展）时按 Go 返回 401。
+async fn user_critical_guard(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(user) = request
+        .extensions()
+        .get::<crate::auth::AuthenticatedUser>()
+        .cloned()
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match state
+        .check_user_rate_limit("UC:access-token", user.0.user_id, now_seconds())
+        .await
+    {
+        Ok(None) => next.run(request).await,
+        Ok(Some(retry_after)) => {
+            let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+            if retry_after > 0
+                && let Ok(value) = HeaderValue::from_str(&retry_after.to_string())
+            {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            response
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// Go `CriticalRateLimit`（mark "CT"）：仅做限流，429/500 都在

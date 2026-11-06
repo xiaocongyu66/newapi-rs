@@ -50,6 +50,43 @@ impl RateLimiter {
         }
     }
 
+    async fn check_user(
+        &self,
+        mark: &str,
+        user_id: i64,
+        now: i64,
+    ) -> Result<Option<i64>, RateLimitUnavailable> {
+        if !self.settings.enabled {
+            return Ok(None);
+        }
+        match &self.backend {
+            RateLimiterBackend::Memory(limiter) => {
+                let (allowed, retry_after) =
+                    limiter.check(&format!("{mark}:user:{user_id}"), now);
+                Ok((!allowed).then_some(retry_after))
+            }
+            RateLimiterBackend::Redis(limiter) => match limiter
+                .check_user(
+                    mark,
+                    user_id,
+                    self.settings.requests,
+                    self.settings.window_seconds,
+                )
+                .await
+            {
+                Ok(RateLimitVerdict::Allowed) => Ok(None),
+                Ok(RateLimitVerdict::Rejected { retry_after }) => Ok(Some(retry_after)),
+                Err(_) => {
+                    tracing::error!(
+                        event = "rate_limit_redis_error",
+                        "redis rate limit check failed"
+                    );
+                    Err(RateLimitUnavailable)
+                }
+            },
+        }
+    }
+
     async fn check(
         &self,
         mark: &str,
@@ -213,6 +250,21 @@ impl AppState {
             Some(limiter) => limiter.check(mark, client_ip, now).await,
             None => Ok(None),
         }
+    }
+
+    /// 用户维度关键路径限流（Go `UserCriticalRateLimit`）：内存键
+    /// `"<mark>:user:<id>"`，Redis 键 `rateLimit:v2:user:<mark>:<id>`。
+    /// 未注入限流器时直通（测试路径）。
+    pub async fn check_user_rate_limit(
+        &self,
+        mark: &str,
+        user_id: i64,
+        now: i64,
+    ) -> Result<Option<i64>, RateLimitUnavailable> {
+        let Some(limiter) = self.rate_limiter.as_ref() else {
+            return Ok(None);
+        };
+        limiter.check_user(mark, user_id, now).await
     }
 
     /// 全局 API 限流：Go `GlobalAPIRateLimit` 固定使用 mark "GA"，键推导与
@@ -404,6 +456,42 @@ async fn reload_until_shutdown(
 mod tests {
     use super::*;
     use std::{future::Future, task::Poll};
+
+    #[tokio::test]
+    async fn user_rate_limit_is_keyed_by_user_id() {
+        let state = AppState::default().bind_transport(
+            ProxyPolicy::parse_trusted_proxies(None).expect("proxy policy"),
+            RateLimiter::memory(RateLimitSettings {
+                enabled: true,
+                requests: 1,
+                window_seconds: 60,
+            }),
+            512,
+        );
+        let now = 1_000;
+        assert!(state
+            .check_user_rate_limit("UC:access-token", 7, now)
+            .await
+            .unwrap()
+            .is_none());
+        // Same user inside the window is rejected; another user is unaffected.
+        assert!(state
+            .check_user_rate_limit("UC:access-token", 7, now)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(state
+            .check_user_rate_limit("UC:access-token", 8, now)
+            .await
+            .unwrap()
+            .is_none());
+        // The IP-scoped limiter has its own key space.
+        assert!(state
+            .check_rate_limit("CT", "203.0.113.9", now)
+            .await
+            .unwrap()
+            .is_none());
+    }
 
     #[tokio::test]
     async fn shutdown_cancels_in_flight_reload_waiting_for_pool() {
