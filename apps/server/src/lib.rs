@@ -6,6 +6,7 @@ pub mod limit;
 mod login_http;
 pub mod request_lang;
 mod state;
+pub mod turnstile;
 
 pub use http::{MAX_BODY_BYTES, router};
 pub use state::{AppState, reload_loop};

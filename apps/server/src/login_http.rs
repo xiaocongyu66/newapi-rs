@@ -123,8 +123,9 @@ fn unavailable() -> Response {
 }
 
 /// 登录路由中间件，按 Go 注册顺序复刻：
-/// `CriticalRateLimit` → `DisableCache` → `AnonymousRequestBodyLimit` → handler。
-/// 因此 429 不带 no-cache 头，而 413 与 handler 响应都带。
+/// `CriticalRateLimit` → `DisableCache` → `AnonymousRequestBodyLimit` →
+/// `TurnstileCheck` → handler。因此 429 不带 no-cache 头，而 413、Turnstile
+/// 拒绝与 handler 响应都带。
 pub async fn login_guard(
     State(state): State<AppState>,
     mut request: Request,
@@ -147,38 +148,48 @@ pub async fn login_guard(
         return response;
     }
     request.extensions_mut().insert(ClientIp(ip));
-    let limit = state.anonymous_body_limit();
-    let mut response = if limit == 0 {
-        // Go `maxBytes <= 0` 直接放行；边界层仍有自身的兜底读取上限。
-        next.run(request).await
-    } else {
-        anonymous_body_limit(limit, request, next).await
+    let mut response = match read_limited_body(state.anonymous_body_limit(), request).await {
+        Err(response) => response,
+        Ok(request) => {
+            // Go 的 TurnstileCheck 位于体限制之后、handler 之前。工作区尚无
+            // siteverify 传输层：开启开关时决策层返回 Unavailable，不会静默放行。
+            // Go 只在 `/api/user/login` 注册 TurnstileCheck，`/login/2fa` 不受其约束。
+            let enabled = state.auth_settings().turnstile_check_enabled
+                && request.uri().path() == "/api/user/login";
+            let token = crate::turnstile::query_token(request.uri().query());
+            let decision = crate::turnstile::decide(enabled, token.as_deref(), None);
+            match decision.rejection_key() {
+                Some(key) => rejected(translate(request.headers(), key)),
+                None => next.run(request).await,
+            }
+        }
     };
     disable_cache_headers(&mut response);
     response
 }
 
 /// 复刻 Go `AnonymousRequestBodyLimit`：先看声明的 Content-Length，再以
-/// `limit + 1` 预算读取实际体；超限返回裸 413（无 JSON 包）。
-async fn anonymous_body_limit(limit: usize, request: Request, next: Next) -> Response {
+/// `limit + 1` 预算读取实际体；超限返回裸 413（无 JSON 包）。`limit == 0`
+/// 在 Go 中是“未启用”，这里同样不设限。
+async fn read_limited_body(limit: usize, request: Request) -> Result<Request, Response> {
+    if limit == 0 {
+        return Ok(request);
+    }
     let declared = request
         .headers()
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
     if declared.is_some_and(|declared| declared > limit as u64) {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        return Err(StatusCode::PAYLOAD_TOO_LARGE.into_response());
     }
     if declared.is_none_or(|declared| declared == 0) {
-        return next.run(request).await;
+        return Ok(request);
     }
     let (parts, body) = request.into_parts();
     match to_bytes(body, limit.saturating_add(1)).await {
-        Ok(bytes) if bytes.len() <= limit => {
-            next.run(Request::from_parts(parts, Body::from(bytes)))
-                .await
-        }
-        Ok(_) | Err(_) => StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+        Ok(bytes) if bytes.len() <= limit => Ok(Request::from_parts(parts, Body::from(bytes))),
+        Ok(_) | Err(_) => Err(StatusCode::PAYLOAD_TOO_LARGE.into_response()),
     }
 }
 

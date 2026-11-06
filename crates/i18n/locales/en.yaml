@@ -211,6 +211,12 @@ twofa.invalid_request: "Invalid parameters"
 twofa.flow_expired: "Session expired, please log in again"
 twofa.user_disabled: "User has been disabled"
 
+# Turnstile messages
+turnstile.token_empty: "Turnstile token is empty"
+turnstile.verify_failed: "Turnstile verification failed, please refresh and try again!"
+turnstile.verify_error: "Turnstile verification failed, please try again later"
+turnstile.unavailable: "Turnstile verification is temporarily unavailable, please contact the administrator"
+
 # Setup wizard messages
 setup.already_initialized: "The system has already been initialized"
 setup.schema_not_ready: "Database schema is not ready"

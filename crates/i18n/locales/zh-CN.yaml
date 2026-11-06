@@ -212,6 +212,12 @@ twofa.invalid_request: "参数错误"
 twofa.flow_expired: "会话已过期，请重新登录"
 twofa.user_disabled: "用户已被禁用"
 
+# Turnstile messages
+turnstile.token_empty: "Turnstile token 为空"
+turnstile.verify_failed: "Turnstile 校验失败，请刷新重试！"
+turnstile.verify_error: "Turnstile 校验失败，请稍后重试"
+turnstile.unavailable: "Turnstile 校验暂不可用，请联系管理员"
+
 # Setup wizard messages
 setup.already_initialized: "系统已经初始化完成"
 setup.schema_not_ready: "数据库结构未就绪"

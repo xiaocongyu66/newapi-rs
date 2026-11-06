@@ -211,6 +211,12 @@ twofa.invalid_request: "參數錯誤"
 twofa.flow_expired: "會話已過期，請重新登入"
 twofa.user_disabled: "使用者已被停用"
 
+# Turnstile messages
+turnstile.token_empty: "Turnstile token 為空"
+turnstile.verify_failed: "Turnstile 校驗失敗，請重新整理後重試！"
+turnstile.verify_error: "Turnstile 校驗失敗，請稍後重試"
+turnstile.unavailable: "Turnstile 校驗暫時不可用，請聯絡管理員"
+
 # Setup wizard messages
 setup.already_initialized: "系統已經初始化完成"
 setup.schema_not_ready: "資料庫結構未就緒"
