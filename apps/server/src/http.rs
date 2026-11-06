@@ -144,6 +144,16 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
+    let aff_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/aff", get(crate::aff_http::aff_code))
+            .route_layer(middleware::from_fn_with_state(
+                aff_state,
+                crate::auth::user_auth,
+            )),
+    );
     // `/api/user/self/groups` 与 `/api/user/models`：Go `UserAuth` → handler。
     let groups_auth_state = state.clone();
     let app = app.merge(
