@@ -242,10 +242,15 @@ async fn send(
         builder = builder.header(header::ACCEPT_LANGUAGE, language);
     }
     let request = builder.body(Body::from(body)).expect("build request");
-    let response = router(state.clone()).oneshot(request).await.expect("route login request");
+    let response = router(state.clone())
+        .oneshot(request)
+        .await
+        .expect("route login request");
     let status = response.status();
     let headers = response.headers().clone();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.expect("read response body");
+    let bytes = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("read response body");
     let value = serde_json::from_slice(&bytes).expect("response body is JSON");
     (status, headers, value)
 }
@@ -305,7 +310,9 @@ async fn successful_password_login_creates_session_and_audit_log() {
     assert_eq!(body["message"], "");
     let data = &body["data"];
     assert_eq!(data["token_type"], "Bearer");
-    let access_token = data["access_token"].as_str().expect("access token is a string");
+    let access_token = data["access_token"]
+        .as_str()
+        .expect("access token is a string");
     assert!(!access_token.is_empty());
     let segments: Vec<&str> = access_token.split('.').collect();
     assert_eq!(segments.len(), 3);
@@ -488,7 +495,11 @@ async fn enabled_two_fa_returns_pending_flow_without_session() {
     assert_eq!(body["success"], true);
     let data = &body["data"];
     assert_eq!(data["require_2fa"], true);
-    assert!(data["flow_token"].as_str().is_some_and(|token| !token.is_empty()));
+    assert!(
+        data["flow_token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+    );
     let expires_at = data["expires_at"].as_i64().expect("flow expiry");
     let ttl = expires_at - before;
     assert!(
@@ -550,7 +561,10 @@ async fn wrong_two_fa_code_keeps_flow_retryable() {
     )
     .await;
     let pending_token = &pending["data"]["flow_token"];
-    let flow_token = pending_token.as_str().expect("pending flow token").to_owned();
+    let flow_token = pending_token
+        .as_str()
+        .expect("pending flow token")
+        .to_owned();
 
     // 格式合法但未命中的备用码，走 Incorrect 分支。
     let wrong = json!({ "flow_token": flow_token, "code": "ZZZZ-ZZZZ" });
@@ -566,8 +580,7 @@ async fn wrong_two_fa_code_keeps_flow_retryable() {
     assert_ne!(message, MSG_FLOW_EXPIRED);
     assert!(!headers.contains_key(header::SET_COOKIE));
 
-    let (status, _, second) =
-        post_json(&state, "/api/user/login/2fa", Some("zh-CN"), wrong).await;
+    let (status, _, second) = post_json(&state, "/api/user/login/2fa", Some("zh-CN"), wrong).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(second["success"], false);
     assert_eq!(second["message"], message);
@@ -593,7 +606,10 @@ async fn backup_code_completes_two_fa_login_and_creates_session() {
     )
     .await;
     let pending_token = &pending["data"]["flow_token"];
-    let flow_token = pending_token.as_str().expect("pending flow token").to_owned();
+    let flow_token = pending_token
+        .as_str()
+        .expect("pending flow token")
+        .to_owned();
 
     let (status, headers, body) = post_json(
         &state,
@@ -606,7 +622,9 @@ async fn backup_code_completes_two_fa_login_and_creates_session() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["success"], true);
     let data = &body["data"];
-    let access_token = data["access_token"].as_str().expect("access token is a string");
+    let access_token = data["access_token"]
+        .as_str()
+        .expect("access token is a string");
     assert_eq!(access_token.split('.').count(), 3);
     assert_eq!(data["token_type"], "Bearer");
     assert_eq!(data["session"]["login_method"], "2fa");
