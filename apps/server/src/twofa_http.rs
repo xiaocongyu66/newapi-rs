@@ -624,10 +624,7 @@ mod tests {
         );
         assert_eq!(parse_code(br#"{"code":""}"#), Some(String::new()));
         assert_eq!(parse_code(br#"{"code":123456}"#), None);
-        assert_eq!(
-            parse_code(br#"{"flow_token":"x"}"#),
-            Some(String::new())
-        );
+        assert_eq!(parse_code(br#"{"flow_token":"x"}"#), Some(String::new()));
         assert_eq!(parse_code(b"null"), Some(String::new()));
         assert_eq!(parse_code(b"[]"), None);
         assert_eq!(parse_code(b""), None);
