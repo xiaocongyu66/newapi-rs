@@ -1,10 +1,11 @@
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{Path, Request, State},
+    extract::{ConnectInfo, Path, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -15,6 +16,7 @@ use newapi_security::{OriginRequest, check_session_origin};
 use serde::Serialize;
 
 use crate::AppState;
+use crate::boundary_mw::disable_cache_headers;
 
 const REFRESH_COOKIE: &str = "new_api_refresh";
 const REFRESH_COOKIE_PATH: &str = "/api/user/auth";
@@ -62,10 +64,10 @@ fn failure(status: StatusCode, message: &'static str) -> Response {
 /// JSON 404, including /api and trailing slashes. These are explicit P1 choices,
 /// not claims of equivalence with the unmeasured Go/Fiber middleware chain.
 pub fn router(state: AppState) -> Router {
-    build_router(state, false)
+    build_router(state)
 }
 
-fn build_router(state: AppState, session_routes: bool) -> Router {
+fn build_router(state: AppState) -> Router {
     let app = Router::new()
         .route("/api/notice", get(notice))
         .route("/api/about", get(about))
@@ -86,19 +88,27 @@ fn build_router(state: AppState, session_routes: bool) -> Router {
                 crate::login_http::login_guard,
             )),
     );
-    // 完整响应与保护链尚未就绪；生产入口不会注册会话路由。
-    let app = if session_routes {
-        app.route("/api/user/auth/refresh", post(refresh))
+    // refresh/logout：Go 顺序 SessionCookieOriginGuard → CriticalRateLimit →
+    // DisableCache → handler。
+    let mutation_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/auth/refresh", post(refresh))
             .route("/api/user/auth/logout", post(logout))
+            .route_layer(middleware::from_fn_with_state(mutation_state, session_mutation_guard)),
+    );
+    // sessions 读端点：Go 顺序 UserAuth → DisableCache，不参与关键路径限流。
+    let read_state = state.clone();
+    let app = app.merge(
+        Router::new()
             .route("/api/user/sessions", get(sessions))
             .route("/api/user/sessions/{sid}", delete(delete_session))
             .route(
                 "/api/user/sessions/revoke-others",
                 post(revoke_other_sessions),
             )
-    } else {
-        app
-    };
+            .route_layer(middleware::from_fn_with_state(read_state, session_read_guard)),
+    );
     app.fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(state)
@@ -293,6 +303,83 @@ fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
         trusted_urls: &trusted,
     })
     .is_ok()
+}
+
+/// 对齐 fasthttp `Peek`：重复头的多个值按逗号合并，解析器再按逗号切分。
+fn joined_header(headers: &HeaderMap, name: header::HeaderName) -> Option<String> {
+    let mut values = headers
+        .get_all(name)
+        .iter()
+        .filter_map(|value| value.to_str().ok());
+    let first = values.next()?;
+    Some(values.fold(first.to_owned(), |mut acc, value| {
+        acc.push_str(", ");
+        acc.push_str(value);
+        acc
+    }))
+}
+
+/// 可信代理链解析；`ConnectInfo` 缺失（测试直连）时 peer 为空，结果为空串，
+/// 与登录中间件的处理一致。
+fn request_ip(state: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+    let forwarded_for = joined_header(headers, header::HeaderName::from_static("x-forwarded-for"));
+    let real_ip = joined_header(headers, header::HeaderName::from_static("x-real-ip"));
+    state.client_ip(
+        peer.map(|address| address.ip()),
+        forwarded_for.as_deref(),
+        real_ip.as_deref(),
+    )
+}
+
+/// refresh/logout 的保护链，复刻 Go 注册顺序：
+/// `SessionCookieOriginGuard` → `CriticalRateLimit` → `DisableCache` → handler。
+/// 因此 429 与限流后端故障（500）都在 DisableCache 之前产生，不带 no-cache 头。
+async fn session_mutation_guard(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0);
+    let ip = request_ip(&state, request.headers(), peer);
+    if !origin_allowed(&state, request.headers()) {
+        // 来源拒绝属于业务错误，仍需带 no-cache 头。
+        let mut response = auth_failure(StatusCode::FORBIDDEN, "AUTH_ORIGIN_FORBIDDEN");
+        disable_cache_headers(&mut response);
+        return response;
+    }
+    let now = now_seconds();
+    // Go `mark` 为 "CT"：内存键是 mark + ClientIP，Redis 键由 limiter 组装。
+    match state.check_rate_limit("CT", &ip, now).await {
+        Ok(None) => {}
+        Ok(Some(retry_after)) => {
+            let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+            if retry_after > 0
+                && let Ok(value) = HeaderValue::from_str(&retry_after.to_string())
+            {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            return response;
+        }
+        // Go 的 Redis 故障分支：500 空体，位于 DisableCache 之前。
+        Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+    let mut response = next.run(request).await;
+    disable_cache_headers(&mut response);
+    response
+}
+
+/// sessions 读端点：Go `UserAuth` → `DisableCache`，不参与关键路径限流。
+async fn session_read_guard(
+    State(_state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    disable_cache_headers(&mut response);
+    response
 }
 
 pub(crate) fn set_cookie(response: &mut Response, value: &str, max_age: i64, secure: bool) {
@@ -778,7 +865,7 @@ mod tests {
             .issue_access(&identity, now)
             .unwrap();
         for path in ["/api/user/auth/logout", "/api/user/sessions"] {
-            let response = build_router(state.clone(), true)
+            let response = build_router(state.clone())
                 .oneshot(
                     Request::builder()
                         .method(if path.ends_with("logout") {
@@ -809,7 +896,7 @@ mod tests {
                     .contains("\"code\":\"AUTH_INTERNAL_ERROR\"")
             );
         }
-        let response = build_router(state, true)
+        let response = build_router(state)
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
@@ -850,7 +937,7 @@ mod tests {
                     HeaderValue::from_static("https://console.example"),
                 );
             }
-            let response = build_router(state.clone(), true)
+            let response = build_router(state.clone())
                 .oneshot(request)
                 .await
                 .unwrap();
@@ -922,7 +1009,7 @@ mod tests {
                 now,
             )
             .unwrap();
-        let app = build_router(auth_state(db.clone(), false), true);
+        let app = build_router(auth_state(db.clone(), false));
         let authorization = format!("Bearer {}", token.token.expose_secret());
         let response = app
             .clone()
@@ -1010,7 +1097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn incomplete_session_routes_are_not_public() {
+    async fn session_routes_are_registered_in_production_router() {
         for (method, path) in [
             (Method::POST, "/api/user/auth/refresh"),
             (Method::POST, "/api/user/auth/logout"),
@@ -1028,7 +1115,9 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_ne!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            // 未注入认证编排时，所有会话端点统一返回不可用。
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         }
     }
 
