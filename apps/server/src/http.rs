@@ -74,6 +74,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/home_page_content", get(home_page_content))
         .route("/api/user-agreement", get(user_agreement))
         .route("/api/privacy-policy", get(privacy_policy))
+        .route("/api/status", get(crate::status::handle))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready));
     // 登录路由：Go 顺序 CriticalRateLimit → DisableCache → 匿名体上限 → handler。
