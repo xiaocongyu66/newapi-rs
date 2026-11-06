@@ -16,6 +16,45 @@ pub enum Database {
 }
 
 impl Database {
+    /// 表是否存在；用于安装向导的就绪判定，不创建任何对象、不跑迁移。
+    pub async fn table_exists(&self, table: &str) -> Result<bool, sqlx::Error> {
+        match self {
+            Self::Sqlite(pool) => sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master \
+                 WHERE type = 'table' AND name = ?1)",
+            )
+            .bind(table)
+            .fetch_one(pool)
+            .await,
+            Self::Postgres(pool) => sqlx::query_scalar::<_, bool>(
+                "SELECT to_regclass($1) IS NOT NULL",
+            )
+            .bind(table)
+            .fetch_one(pool)
+            .await,
+        }
+    }
+
+    /// `setups` 表存在且至少有一行，等价于 Go 启动时恢复的 `constant.Setup`。
+    /// 缺表视为未初始化而不是读取失败。
+    pub async fn setup_completed(&self) -> Result<bool, sqlx::Error> {
+        if !self.table_exists("setups").await? {
+            return Ok(false);
+        }
+        match self {
+            Self::Sqlite(pool) => sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM setups)",
+            )
+            .fetch_one(pool)
+            .await,
+            Self::Postgres(pool) => sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM setups)",
+            )
+            .fetch_one(pool)
+            .await,
+        }
+    }
+
     /// Connect to an existing database without creating files or running migrations.
     ///
     /// No DSN or underlying connection error is logged here. Callers must log a

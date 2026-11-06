@@ -204,8 +204,9 @@ pub fn status_body(state: &AppState) -> Value {
         "passkey_allow_insecure": false,
         "passkey_user_verification": DEFAULT_PASSKEY_USER_VERIFICATION,
         "passkey_attachment": "",
-        // Go constant.Setup（setup.go:3）默认 false；安装向导未移植，恒为 false。
-        "setup": false,
+        // Go `constant.Setup`：由 `setups` 表（启动恢复 + setup 提交后 reload）
+        // 决定，不再硬编码。
+        "setup": state.setup_completed(),
         // 真实值：PublicConfig 快照 → Go legalSetting 联动语义
         // （`UserAgreement != ""` / `PrivacyPolicy != ""`，handle_misc.go:124-125）。
         "user_agreement_enabled": !public.user_agreement.is_empty(),
@@ -282,6 +283,35 @@ mod tests {
 
     fn default_data() -> Value {
         status_body(&AppState::default())
+    }
+
+    #[tokio::test]
+    async fn setup_flag_tracks_the_persisted_setup_row() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(r#"CREATE TABLE options ("key" TEXT PRIMARY KEY, "value" TEXT)"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE setups (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let db = Database::Sqlite(pool);
+        let state = AppState::initialize(&db).await.unwrap();
+        assert_eq!(status_body(&state)["data"]["setup"], Value::Bool(false));
+
+        sqlx::query("INSERT INTO setups (id) VALUES (1)")
+            .execute(match &db {
+                Database::Sqlite(pool) => pool,
+                Database::Postgres(_) => unreachable!(),
+            })
+            .await
+            .unwrap();
+        state.reload(&db).await.unwrap();
+        assert_eq!(status_body(&state)["data"]["setup"], Value::Bool(true));
     }
 
     #[test]

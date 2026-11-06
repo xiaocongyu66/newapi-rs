@@ -283,18 +283,21 @@ pub async fn can(
 }
 
 /// 策略不可读取时的降级权限，逐字段对齐 Go 的“空 enforcer”路径：
-/// `policy.Capabilities()` 从不返回错误，enforcer 为空或 `GetFilteredPolicy`
-/// 失败时仍返回完整资源/动作矩阵且全部为 false；侧栏由
-/// `calculateUserPermissions` 按角色决定，不依赖策略读取（管理员的
+/// `policy.Capabilities()` 从不返回错误，仍返回完整资源/动作矩阵；
+/// root 命中 `Can()` 的 superuser 短路而全为 true，admin/普通用户为 false；
+/// 侧栏由 `calculateUserPermissions` 按角色决定，不依赖策略读取（管理员的
 /// `admin.setting` 经 `policy.Can` 得到 false）。
 pub fn denied_permissions(system_role: i32) -> crate::self_user::Permissions {
     use crate::self_user::{Permissions, SidebarModulePermission};
 
+    // Go `Can()` 在检查 enforcer 之前先做 superuser 短路（resolver.go:13-17），
+    // 因此 root 即使在空 enforcer 下也是全 true；其余角色才退化为全 false。
+    let superuser = system_role >= ROLE_ROOT_VALUE;
     let mut admin_permissions = BTreeMap::new();
     for resource in CATALOG {
         let mut actions = BTreeMap::new();
         for action in resource.actions {
-            actions.insert(action.action.to_owned(), false);
+            actions.insert(action.action.to_owned(), superuser);
         }
         admin_permissions.insert(resource.resource.to_owned(), actions);
     }

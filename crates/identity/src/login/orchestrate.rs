@@ -568,7 +568,12 @@ mod tests {
             for resource in crate::policy::CATALOG {
                 let actions = &denied.admin_permissions[resource.resource];
                 assert_eq!(actions.len(), resource.actions.len());
-                assert!(actions.values().all(|allowed| !allowed));
+                if role >= 100 {
+                    // Go `Can()` 的 superuser 短路先于 enforcer 检查。
+                    assert!(actions.values().all(|allowed| *allowed));
+                } else {
+                    assert!(actions.values().all(|allowed| !allowed));
+                }
             }
         }
         // root：无侧栏设置、无模块。

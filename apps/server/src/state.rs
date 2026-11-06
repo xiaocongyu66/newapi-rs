@@ -91,6 +91,8 @@ impl RateLimiter {
 pub struct AppState {
     snapshot: Arc<RwLock<PublicConfig>>,
     ready: Arc<AtomicBool>,
+    /// Go `constant.Setup`：`setups` 表存在且非空；启动与每次 reload 重新判定。
+    setup: Arc<AtomicBool>,
     auth: Option<Arc<SessionAuth<AuthFence>>>,
     session_cookie: Arc<SessionCookieSettings>,
     db: Option<Database>,
@@ -113,6 +115,7 @@ impl Default for AppState {
         Self {
             snapshot: Arc::new(RwLock::new(PublicConfig::default())),
             ready: Arc::new(AtomicBool::new(false)),
+            setup: Arc::new(AtomicBool::new(false)),
             auth: None,
             session_cookie: Arc::new(SessionCookieSettings {
                 secure: false,
@@ -279,6 +282,11 @@ impl AppState {
         &self.session_cookie
     }
 
+    /// Go `constant.Setup` 的只读视图；安装提交后由 `reload` 刷新。
+    pub fn setup_completed(&self) -> bool {
+        self.setup.load(Ordering::Acquire)
+    }
+
     pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
@@ -318,6 +326,13 @@ impl AppState {
                 return Err(error);
             }
         };
+        let setup_next = match db.setup_completed().await {
+            Ok(next) => next,
+            Err(error) => {
+                self.mark_not_ready();
+                return Err(error);
+            }
+        };
         *self
             .quota_display
             .write()
@@ -330,6 +345,7 @@ impl AppState {
             .snapshot
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+        self.setup.store(setup_next, Ordering::Release);
         self.ready.store(true, Ordering::Release);
         Ok(())
     }
