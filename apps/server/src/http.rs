@@ -75,11 +75,16 @@ fn build_router(state: AppState, session_routes: bool) -> Router {
         .route("/health/live", get(live))
         .route("/health/ready", get(ready));
     // 登录路由：Go 顺序 CriticalRateLimit → DisableCache → 匿名体上限 → handler。
+    // 中间件依赖 AppState，必须用 from_fn_with_state 才能在 with_state 之前布层。
+    let login_state = state.clone();
     let app = app.merge(
         Router::new()
             .route("/api/user/login", post(crate::login_http::login))
             .route("/api/user/login/2fa", post(crate::login_http::login_two_fa))
-            .route_layer(middleware::from_fn(crate::login_http::login_guard)),
+            .route_layer(middleware::from_fn_with_state(
+                login_state,
+                crate::login_http::login_guard,
+            )),
     );
     // 完整响应与保护链尚未就绪；生产入口不会注册会话路由。
     let app = if session_routes {
