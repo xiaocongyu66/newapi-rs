@@ -6,7 +6,7 @@
 
 use std::error::Error;
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 /// TRUSTED_PROXIES 未设置或为空白时生效的默认网段，与 Go 逐一相同：
 /// 回环、RFC 1918 与 IPv6 ULA。
@@ -105,7 +105,7 @@ impl Network {
                 // 网络降级后仍是 4 字节形态时，Go 的 networkNumberAndMask
                 // 把 16 字节掩码截成 m[12:]，即有效前缀为 prefix-96（不足
                 // 则整段掩码为零，匹配任意 v4 地址）；否则网络留在 v6 空间。
-                let network = IpAddr::from(*masked);
+                let network = IpAddr::V6(Ipv6Addr::from(*masked));
                 if let IpAddr::V4(masked_v4) = demap_v4(network) {
                     match candidate {
                         IpAddr::V4(ip) => {
