@@ -403,6 +403,50 @@ async fn successful_password_login_creates_session_and_audit_log() {
 }
 
 #[tokio::test]
+async fn policy_storage_failure_degrades_to_denied_permissions() {
+    // Go `Capabilities()` 从不返回错误：策略不可读时每个权限判 false，登录
+    // 仍签发会话。这里用管理员角色 + DROP casbin_rule 制造真实 sqlx 失败，
+    // 覆盖 complete() 的降级路径（普通/root 角色在 Go 侧本就不读策略表）。
+    let db = fixture().await;
+    seed_user(&db, 1, 1).await;
+    sqlx::query("UPDATE users SET role = 10")
+        .execute(sqlite_pool(&db))
+        .await
+        .expect("promote fixture user to admin");
+    sqlx::query("DROP TABLE casbin_rule")
+        .execute(sqlite_pool(&db))
+        .await
+        .expect("drop policy fixture table");
+    let state = state_for(&db).await;
+
+    let (status, headers, body) = post_json(
+        &state,
+        "/api/user/login",
+        Some("zh-CN"),
+        json!({ "username": USERNAME, "password": PASSWORD }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["success"], true);
+    // 与 Go 空 enforcer 一致：全拒绝形状（健康的管理员会是
+    // sidebar_settings=true 与全 false 矩阵，而不是空 map）。
+    assert_eq!(
+        body["data"]["user"]["permissions"],
+        json!({
+            "sidebar_settings": false,
+            "sidebar_modules": {},
+            "admin_permissions": {},
+        })
+    );
+    // 会话照常签发。
+    assert!(!refresh_cookie(&headers).is_empty());
+    assert_eq!(count(&db, "SELECT COUNT(*) FROM user_sessions").await, 1);
+
+    db.close().await;
+}
+
+#[tokio::test]
 async fn wrong_password_returns_generic_error_without_side_effects() {
     let db = fixture().await;
     seed_user(&db, 1, 1).await;
