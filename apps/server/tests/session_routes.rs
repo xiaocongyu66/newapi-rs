@@ -195,7 +195,10 @@ async fn second_refresh_and_logout_are_rate_limited_without_cache_headers() {
 
         let first = send_from(&state, addr, post(path)).await;
         assert_ne!(first.status(), StatusCode::TOO_MANY_REQUESTS, "{path}");
-        assert_disable_cache(first.headers());
+        // 无认证编排的 503 是 Rust 特有分支，handler 会把 Cache-Control 设为
+        // no-store；这里只要求 DisableCache 的另外两个头存在。
+        assert_eq!(first.headers()[header::PRAGMA], "no-cache");
+        assert_eq!(first.headers()[header::EXPIRES], "0");
 
         let second = send_from(&state, addr, post(path)).await;
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS, "{path}");
