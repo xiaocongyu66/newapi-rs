@@ -10,7 +10,7 @@ mod state;
 pub mod turnstile;
 
 pub use http::{MAX_BODY_BYTES, router};
-pub use state::{AppState, reload_loop};
+pub use state::{AppState, RateLimiter, reload_loop};
 
 /// Install before startup. The default panic hook prints arbitrary payloads and
 /// source context; neither belongs in production logs.

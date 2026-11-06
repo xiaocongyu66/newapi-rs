@@ -9,7 +9,7 @@ use axum::{
     response::Response,
 };
 use newapi_security::client_ip::ProxyPolicy;
-use newapi_server::{AppState, limit::RateLimitSettings, router};
+use newapi_server::{AppState, RateLimiter, limit::RateLimitSettings, router};
 use newapi_storage::Database;
 use tower::ServiceExt;
 
@@ -24,7 +24,7 @@ fn peer(ip: &str) -> SocketAddr {
 fn transport_state(rate_limit: RateLimitSettings) -> AppState {
     AppState::default().bind_transport(
         ProxyPolicy::parse_trusted_proxies(None).unwrap(),
-        rate_limit,
+        RateLimiter::memory(rate_limit),
         ANONYMOUS_LIMIT_KB,
     )
 }

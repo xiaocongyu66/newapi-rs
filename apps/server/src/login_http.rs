@@ -137,15 +137,20 @@ pub async fn login_guard(
         .map(|info| info.0);
     let ip = request_ip(&state, request.headers(), peer);
     let now = crate::http::now_seconds();
-    // Go `mark` 为 "CT"，键为 mark + ClientIP（无分隔符）。
-    if let Some(retry_after) = state.check_rate_limit(&format!("CT{ip}"), now) {
-        let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
-        if retry_after > 0
-            && let Ok(value) = HeaderValue::from_str(&retry_after.to_string())
-        {
-            response.headers_mut().insert(header::RETRY_AFTER, value);
+    // Go `mark` 为 "CT"：内存键是 mark + ClientIP，Redis 键另由 limiter 组装。
+    match state.check_rate_limit("CT", &ip, now).await {
+        Ok(None) => {}
+        Ok(Some(retry_after)) => {
+            let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+            if retry_after > 0
+                && let Ok(value) = HeaderValue::from_str(&retry_after.to_string())
+            {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            return response;
         }
-        return response;
+        // Go 的 Redis 故障分支：500 + Abort，且位于 DisableCache 之前。
+        Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
     request.extensions_mut().insert(ClientIp(ip));
     let mut response = match read_limited_body(state.anonymous_body_limit(), request).await {

@@ -82,7 +82,7 @@ impl RedisRateLimiter {
 
     /// Records one request and decides whether it is admitted.
     pub async fn check(
-        &mut self,
+        &self,
         mark: &str,
         client_ip: &str,
         max_requests: i64,
@@ -92,11 +92,13 @@ impl RedisRateLimiter {
             return Err(RedisLimitError::Value);
         }
         let key = self.key(mark, client_ip);
+        // MultiplexedConnection 的克隆共享同一连接池，避免为并发请求加互斥锁。
+        let mut connection = self.connection.clone();
         let (allowed, _count, ttl): (i64, i64, i64) = Script::new(SCRIPT)
             .key(key)
             .arg(max_requests)
             .arg(duration_seconds)
-            .invoke_async(&mut self.connection)
+            .invoke_async(&mut connection)
             .await
             .map_err(classify)?;
         if allowed == 1 {

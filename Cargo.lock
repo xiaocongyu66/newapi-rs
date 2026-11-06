@@ -1077,6 +1077,7 @@ dependencies = [
  "newapi-identity",
  "newapi-security",
  "newapi-storage",
+ "redis",
  "serde",
  "serde_json",
  "sqlx",

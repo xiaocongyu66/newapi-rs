@@ -17,6 +17,61 @@ use tokio::sync::watch;
 
 use crate::boundary_mw::anonymous_body_limit_bytes;
 use crate::limit::{RateLimitSettings, SlidingWindowLimiter};
+use crate::limit_redis::{RateLimitVerdict, RedisRateLimiter};
+
+/// Go `CriticalRateLimit` 的后端选择：配置 Redis 时走固定窗口，否则进程内滑动窗口。
+enum RateLimiterBackend {
+    Memory(SlidingWindowLimiter),
+    Redis(RedisRateLimiter),
+}
+
+/// 关键路径限流的完整状态（开关、阈值与后端），生产启动时由 `main` 构建。
+pub struct RateLimiter {
+    settings: RateLimitSettings,
+    backend: RateLimiterBackend,
+}
+
+impl RateLimiter {
+    pub fn memory(settings: RateLimitSettings) -> Self {
+        Self {
+            settings,
+            backend: RateLimiterBackend::Memory(SlidingWindowLimiter::new(settings)),
+        }
+    }
+
+    pub fn redis(settings: RateLimitSettings, limiter: RedisRateLimiter) -> Self {
+        Self {
+            settings,
+            backend: RateLimiterBackend::Redis(limiter),
+        }
+    }
+
+    async fn check(&self, mark: &str, client_ip: &str, now: i64) -> Result<Option<i64>, ()> {
+        if !self.settings.enabled {
+            return Ok(None);
+        }
+        match &self.backend {
+            RateLimiterBackend::Memory(limiter) => {
+                let (allowed, retry_after) = limiter.check(&format!("{mark}{client_ip}"), now);
+                Ok((!allowed).then_some(retry_after))
+            }
+            RateLimiterBackend::Redis(limiter) => match limiter
+                .check(mark, client_ip, self.settings.requests, self.settings.window_seconds)
+                .await
+            {
+                Ok(RateLimitVerdict::Allowed) => Ok(None),
+                Ok(RateLimitVerdict::Rejected { retry_after }) => Ok(Some(retry_after)),
+                Err(_) => {
+                    tracing::error!(
+                        event = "rate_limit_redis_error",
+                        "redis rate limit check failed"
+                    );
+                    Err(())
+                }
+            },
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -31,8 +86,8 @@ pub struct AppState {
     flow_key: Option<Arc<Vec<u8>>>,
     /// 可信代理解析策略；未注入时只信任直连 peer（测试路径）。
     proxy_policy: Option<Arc<ProxyPolicy>>,
-    /// `CriticalRateLimit` 的进程内滑动窗口；未注入时不做限流（测试路径）。
-    rate_limiter: Option<Arc<SlidingWindowLimiter>>,
+    /// `CriticalRateLimit`；未注入时不做限流（测试路径）。
+    rate_limiter: Option<Arc<RateLimiter>>,
     anonymous_body_limit: usize,
 }
 
@@ -96,11 +151,11 @@ impl AppState {
     pub fn bind_transport(
         mut self,
         proxy_policy: ProxyPolicy,
-        rate_limit: RateLimitSettings,
+        rate_limit: RateLimiter,
         anonymous_request_body_limit_kb: i64,
     ) -> Self {
         self.proxy_policy = Some(Arc::new(proxy_policy));
-        self.rate_limiter = Some(Arc::new(SlidingWindowLimiter::new(rate_limit)));
+        self.rate_limiter = Some(Arc::new(rate_limit));
         self.anonymous_body_limit = anonymous_body_limit_bytes(anonymous_request_body_limit_kb);
         self
     }
@@ -118,11 +173,18 @@ impl AppState {
         }
     }
 
-    /// 关键路径限流：返回 `Some(retry_after)` 表示拒绝，`None` 表示放行。
-    pub fn check_rate_limit(&self, key: &str, now: i64) -> Option<i64> {
-        let limiter = self.rate_limiter.as_ref()?;
-        let (allowed, retry_after) = limiter.check(key, now);
-        (!allowed).then_some(retry_after)
+    /// 关键路径限流：`Ok(Some(retry_after))` 拒绝，`Ok(None)` 放行；
+    /// `Err(())` 表示 Redis 后端故障（Go 回复 500）。
+    pub async fn check_rate_limit(
+        &self,
+        mark: &str,
+        client_ip: &str,
+        now: i64,
+    ) -> Result<Option<i64>, ()> {
+        match self.rate_limiter.as_ref() {
+            Some(limiter) => limiter.check(mark, client_ip, now).await,
+            None => Ok(None),
+        }
     }
 
     /// 匿名请求体上限（字节）；0 表示 Go 语义下的“未启用”。

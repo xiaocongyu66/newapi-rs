@@ -98,17 +98,33 @@ async fn run() -> Result<(), ()> {
             return Err(());
         }
     };
+    // 与 Go 一致：配置 Redis 时关键路径限流走 Redis 固定窗口；连接失败终止启动。
+    let rate_limit_settings = newapi_server::limit::RateLimitSettings {
+        enabled: config.critical_rate_limit_enabled,
+        requests: config.critical_rate_limit_requests,
+        window_seconds: config.critical_rate_limit_duration_seconds,
+    };
+    let rate_limiter = match config.redis_url() {
+        Some(url) => match newapi_server::limit_redis::RedisRateLimiter::connect(url).await {
+            Ok(limiter) => newapi_server::RateLimiter::redis(rate_limit_settings, limiter),
+            Err(_) => {
+                tracing::error!(
+                    event = "rate_limit_redis_unavailable",
+                    "redis rate limit connection failed"
+                );
+                db.close().await;
+                return Err(());
+            }
+        },
+        None => newapi_server::RateLimiter::memory(rate_limit_settings),
+    };
     let auth = SessionAuth::with_fence(db.clone(), AuthKeys::new(&secret), fence);
     let state = initial
         .bind_auth(Arc::new(auth), config.session_cookie.clone())
         .bind_runtime(db.clone(), &secret)
         .bind_transport(
             proxy_policy,
-            newapi_server::limit::RateLimitSettings {
-                enabled: config.critical_rate_limit_enabled,
-                requests: config.critical_rate_limit_requests,
-                window_seconds: config.critical_rate_limit_duration_seconds,
-            },
+            rate_limiter,
             config.anonymous_request_body_limit_kb,
         );
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {
