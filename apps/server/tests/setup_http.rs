@@ -77,8 +77,7 @@ const DEMO_SITE_MODE: &str = "SELECT value FROM options WHERE \"key\" = 'DemoSit
 const ROOT_ROW: &str = "SELECT count(*) FROM users WHERE role = 100 AND status = 1 AND quota = 100000000 AND auth_version = 1 AND access_token IS NULL AND deleted_at IS NULL AND \"group\" = 'default' AND display_name = 'Root User' AND username = '管理员'";
 const ROOT_PASSWORD: &str = "SELECT password FROM users WHERE role = 100";
 const INSERT_LEGACY_SETUP: &str = "INSERT INTO setups(id) VALUES (42)";
-const INSERT_EXISTING_ROOT: &str =
-    "INSERT INTO users(username,password,role,status,aff_code) VALUES ('root','fixture',100,1,'aff')";
+const INSERT_EXISTING_ROOT: &str = "INSERT INTO users(username,password,role,status,aff_code) VALUES ('root','fixture',100,1,'aff')";
 
 fn router(state: AppState) -> Router {
     let post_only = Router::new()
@@ -96,7 +95,9 @@ fn router(state: AppState) -> Router {
 async fn send(state: &AppState, request: Request<Body>) -> (StatusCode, Value) {
     let response = router(state.clone()).oneshot(request).await.unwrap();
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024).await.unwrap();
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
     let body = serde_json::from_slice(&bytes).unwrap_or_default();
     (status, body)
 }
@@ -120,20 +121,29 @@ fn post_setup(body: &str) -> Request<Body> {
         .unwrap()
 }
 
-async fn exec(db: &Database, sql: &str) {
+async fn exec(db: &Database, sql: &'static str) {
     match db {
         Database::Sqlite(pool) => {
-            sqlx::query::<sqlx::Sqlite>(sql).execute(pool).await.unwrap();
+            sqlx::query::<sqlx::Sqlite>(sql)
+                .execute(pool)
+                .await
+                .unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::query::<sqlx::Postgres>(sql).execute(pool).await.unwrap();
+            sqlx::query::<sqlx::Postgres>(sql)
+                .execute(pool)
+                .await
+                .unwrap();
         }
     }
 }
 
-async fn scalar_i64(db: &Database, sql: &str) -> i64 {
+async fn scalar_i64(db: &Database, sql: &'static str) -> i64 {
     match db {
-        Database::Sqlite(pool) => sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await.unwrap(),
+        Database::Sqlite(pool) => sqlx::query_scalar::<_, i64>(sql)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
         Database::Postgres(pool) => sqlx::query_scalar::<_, i64>(sql)
             .fetch_one(pool)
             .await
@@ -141,7 +151,7 @@ async fn scalar_i64(db: &Database, sql: &str) -> i64 {
     }
 }
 
-async fn scalar_string(db: &Database, sql: &str) -> String {
+async fn scalar_string(db: &Database, sql: &'static str) -> String {
     match db {
         Database::Sqlite(pool) => sqlx::query_scalar::<_, String>(sql)
             .fetch_one(pool)
@@ -180,7 +190,8 @@ async fn create_schema(db: &Database) {
             .map(|column| format!("\"{column}\" TEXT"))
             .collect::<Vec<_>>()
             .join(",");
-        exec(db, &format!("CREATE TABLE \"{table}\" ({definitions})")).await;
+        let statement = format!("CREATE TABLE \"{table}\" ({definitions})");
+        exec(db, Box::leak(statement.into_boxed_str())).await;
     }
 }
 
@@ -252,7 +263,10 @@ async fn database_scenarios(db: &Database) {
 
     // setups: fixed id=1, version, positive Unix seconds.
     assert_eq!(scalar_i64(db, COUNT_SETUPS).await, 1);
-    assert_eq!(scalar_string(db, SETUP_VERSION).await, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        scalar_string(db, SETUP_VERSION).await,
+        env!("CARGO_PKG_VERSION")
+    );
     assert!(scalar_i64(db, SETUP_INITIALIZED_AT).await > 0);
 
     // users: one Go-shaped root with a bcrypt cost10 hash of the password.
