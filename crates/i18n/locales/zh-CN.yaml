@@ -53,6 +53,12 @@ token.db_error: "无效的令牌，数据库查询出错，请联系管理员"
 token.auto_groups_too_many: "每个令牌最多可选择 {{.Max}} 个 Auto 分组"
 token.auto_groups_duplicate: "Auto 分组 {{.Group}} 重复"
 token.auto_groups_invalid: "Auto 分组 {{.Group}} 不可用或无权访问"
+token.max_tokens_reached: "已达到最大令牌数量限制 ({{.Max}})"
+token.invalid_quota_value: "无效的额度数值"
+token.search_too_many: "令牌数量超过上限，仅允许精确搜索，请勿使用 % 通配符"
+token.search_consecutive_wildcard: "搜索模式中不允许包含连续的 % 通配符"
+token.search_wildcard_limit: "搜索模式中最多允许包含 2 个 % 通配符"
+token.search_keyword_too_short: "使用模糊搜索时，关键词长度至少为 2 个字符"
 
 # Redemption messages
 redemption.name_length: "兑换码名称长度必须在1-20之间"

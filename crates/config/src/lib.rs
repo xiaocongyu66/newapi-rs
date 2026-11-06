@@ -16,6 +16,10 @@ pub struct Config {
     pub critical_rate_limit_enabled: bool,
     pub critical_rate_limit_requests: i64,
     pub critical_rate_limit_duration_seconds: i64,
+    /// 令牌搜索限流；对应 Go `SearchRateLimit` 的三个环境变量。
+    pub search_rate_limit_enabled: bool,
+    pub search_rate_limit_requests: i64,
+    pub search_rate_limit_duration_seconds: i64,
     /// 全局 API 限流；对应 Go `GlobalAPIRateLimit` 的三个环境变量。
     pub global_api_rate_limit_enabled: bool,
     pub global_api_rate_limit_requests: i64,
@@ -142,6 +146,21 @@ impl Config {
             1_200,
             i64::MAX as u64,
         )? as i64;
+        // Go `initRateLimitVariables` 的 SearchRateLimit*：默认 10/60。
+        let search_rate_limit_enabled =
+            bool_with_default(lookup("SEARCH_RATE_LIMIT_ENABLE")?, true);
+        let search_rate_limit_requests = positive_integer(
+            lookup("SEARCH_RATE_LIMIT")?,
+            "SEARCH_RATE_LIMIT",
+            10,
+            i64::MAX as u64,
+        )? as i64;
+        let search_rate_limit_duration_seconds = positive_integer(
+            lookup("SEARCH_RATE_LIMIT_DURATION")?,
+            "SEARCH_RATE_LIMIT_DURATION",
+            60,
+            i64::MAX as u64,
+        )? as i64;
         // Go `initRateLimitVariables` 的 GlobalApiRateLimit*：默认 360/180。
         let global_api_rate_limit_enabled =
             bool_with_default(lookup("GLOBAL_API_RATE_LIMIT_ENABLE")?, true);
@@ -170,6 +189,9 @@ impl Config {
             critical_rate_limit_enabled,
             critical_rate_limit_requests,
             critical_rate_limit_duration_seconds,
+            search_rate_limit_enabled,
+            search_rate_limit_requests,
+            search_rate_limit_duration_seconds,
             global_api_rate_limit_enabled,
             global_api_rate_limit_requests,
             global_api_rate_limit_duration_seconds,

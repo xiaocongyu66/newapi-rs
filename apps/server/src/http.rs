@@ -144,6 +144,62 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // `/api/token*`：Go 组级 `UserAuth`；`/search` 另挂 `SearchRateLimit`，
+    // `/{id}/key` 另挂 `CriticalRateLimit`，缓存头由 handler 写。
+    let token_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/token/",
+                get(crate::token_http::list_tokens)
+                    .post(crate::token_http::add_token)
+                    .put(crate::token_http::update_token),
+            )
+            .route(
+                "/api/token",
+                get(crate::token_http::list_tokens)
+                    .post(crate::token_http::add_token)
+                    .put(crate::token_http::update_token),
+            )
+            .route(
+                "/api/token/auto-groups",
+                get(crate::token_http::token_auto_groups),
+            )
+            .route(
+                "/api/token/{id}",
+                get(crate::token_http::get_token).delete(crate::token_http::delete_token),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                token_state.clone(),
+                crate::auth::user_auth,
+            )),
+    );
+    let token_search_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/token/search", get(crate::token_http::search_tokens))
+            .route_layer(middleware::from_fn_with_state(
+                token_search_state.clone(),
+                search_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                token_search_state,
+                crate::auth::user_auth,
+            )),
+    );
+    let token_key_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/token/{id}/key", post(crate::token_http::get_token_key))
+            .route_layer(middleware::from_fn_with_state(
+                token_key_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                token_key_state,
+                crate::auth::user_auth,
+            )),
+    );
     // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
     let aff_state = state.clone();
     let app = app.merge(
@@ -469,6 +525,34 @@ pub(crate) fn request_ip(
         forwarded_for.as_deref(),
         real_ip.as_deref(),
     )
+}
+
+/// Go `SearchRateLimit`（mark "SR"，用户维度）：未认证返回 401，429/500
+/// 在 handler 写缓存头之前产生。
+async fn search_guard(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let Some(user) = request
+        .extensions()
+        .get::<crate::auth::AuthenticatedUser>()
+        .cloned()
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match state
+        .check_search_rate_limit(user.0.user_id, now_seconds())
+        .await
+    {
+        Ok(None) => next.run(request).await,
+        Ok(Some(retry_after)) => {
+            let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+            if retry_after > 0
+                && let Ok(value) = HeaderValue::from_str(&retry_after.to_string())
+            {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            response
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// Go `UserCriticalRateLimit(scope)`：在 `UserAuth` 之后按用户 ID 限流，

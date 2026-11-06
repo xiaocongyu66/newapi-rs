@@ -52,6 +52,12 @@ token.db_error: "Invalid token, database query error, please contact administrat
 token.auto_groups_too_many: "A token can select at most {{.Max}} Auto groups"
 token.auto_groups_duplicate: "Auto group {{.Group}} is duplicated"
 token.auto_groups_invalid: "Auto group {{.Group}} is unavailable or unauthorized"
+token.max_tokens_reached: "The maximum number of tokens has been reached ({{.Max}})"
+token.invalid_quota_value: "Invalid quota value"
+token.search_too_many: "Too many tokens to search; use an exact match without % wildcards"
+token.search_consecutive_wildcard: "Consecutive % wildcards are not allowed"
+token.search_wildcard_limit: "At most 2 % wildcards are allowed in the search pattern"
+token.search_keyword_too_short: "Fuzzy search requires a keyword of at least 2 characters"
 
 # Redemption messages
 redemption.name_length: "Redemption code name length must be between 1-20"

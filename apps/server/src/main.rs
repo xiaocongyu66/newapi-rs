@@ -118,6 +118,27 @@ async fn run() -> Result<(), ()> {
         },
         None => newapi_server::RateLimiter::memory(rate_limit_settings),
     };
+    // Go `SearchRateLimit`：用户维度的令牌搜索限流，默认 10 次/60 秒。
+    let search_rate_limit_settings = newapi_server::limit::RateLimitSettings {
+        enabled: config.search_rate_limit_enabled,
+        requests: config.search_rate_limit_requests,
+        window_seconds: config.search_rate_limit_duration_seconds,
+    };
+    let search_rate_limiter = match config.redis_url() {
+        Some(url) => match newapi_server::limit_redis::RedisRateLimiter::connect(url).await {
+            Ok(limiter) => newapi_server::RateLimiter::redis(search_rate_limit_settings, limiter),
+            Err(_) => {
+                tracing::error!(
+                    event = "rate_limit_redis_unavailable",
+                    mark = "SR",
+                    "redis rate limit connection failed"
+                );
+                db.close().await;
+                return Err(());
+            }
+        },
+        None => newapi_server::RateLimiter::memory(search_rate_limit_settings),
+    };
     // Go `GlobalAPIRateLimit` 与关键路径共用后端选择：Redis 优先，否则进程内。
     let global_rate_limit_settings = newapi_server::limit::RateLimitSettings {
         enabled: config.global_api_rate_limit_enabled,
@@ -148,6 +169,7 @@ async fn run() -> Result<(), ()> {
             rate_limiter,
             config.anonymous_request_body_limit_kb,
         )
+        .bind_search_rate_limit(search_rate_limiter)
         .bind_global_api_rate_limit(global_rate_limiter);
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {
         Ok(listener) => listener,
