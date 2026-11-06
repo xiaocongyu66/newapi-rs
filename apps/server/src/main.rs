@@ -118,6 +118,27 @@ async fn run() -> Result<(), ()> {
         },
         None => newapi_server::RateLimiter::memory(rate_limit_settings),
     };
+    // Go `GlobalAPIRateLimit` 与关键路径共用后端选择：Redis 优先，否则进程内。
+    let global_rate_limit_settings = newapi_server::limit::RateLimitSettings {
+        enabled: config.global_api_rate_limit_enabled,
+        requests: config.global_api_rate_limit_requests,
+        window_seconds: config.global_api_rate_limit_duration_seconds,
+    };
+    let global_rate_limiter = match config.redis_url() {
+        Some(url) => match newapi_server::limit_redis::RedisRateLimiter::connect(url).await {
+            Ok(limiter) => newapi_server::RateLimiter::redis(global_rate_limit_settings, limiter),
+            Err(_) => {
+                tracing::error!(
+                    event = "rate_limit_redis_unavailable",
+                    mark = "GA",
+                    "redis rate limit connection failed"
+                );
+                db.close().await;
+                return Err(());
+            }
+        },
+        None => newapi_server::RateLimiter::memory(global_rate_limit_settings),
+    };
     let auth = SessionAuth::with_fence(db.clone(), AuthKeys::new(&secret), fence);
     let state = initial
         .bind_auth(Arc::new(auth), config.session_cookie.clone())
@@ -126,7 +147,8 @@ async fn run() -> Result<(), ()> {
             proxy_policy,
             rate_limiter,
             config.anonymous_request_body_limit_kb,
-        );
+        )
+        .bind_global_api_rate_limit(global_rate_limiter);
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {
         Ok(listener) => listener,
         Err(_) => {
