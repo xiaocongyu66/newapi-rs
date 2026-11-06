@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod boundary_mw;
 mod global_limit;
+pub mod groups_http;
 mod http;
 pub mod limit;
 pub mod limit_redis;

@@ -88,6 +88,9 @@ fn build_router(state: AppState) -> Router {
                 crate::setup_http::setup_body_limit,
             )),
     );
+    // `/api/user/groups`：Go 该路由不挂 UserAuth；同 handler 也挂在
+    // `/api/user/self/groups`（那一条在 UserAuth 组内）。
+    let app = app.route("/api/user/groups", get(crate::groups_http::user_groups));
     // `POST /api/user/register`：Go 顺序 CriticalRateLimit → 匿名体上限 →
     // TurnstileCheck → handler（该路由不挂 DisableCache）。
     let register_state = state.clone();
@@ -97,6 +100,20 @@ fn build_router(state: AppState) -> Router {
             .route_layer(middleware::from_fn_with_state(
                 register_state,
                 crate::register_http::register_guard,
+            )),
+    );
+    // `/api/user/self/groups` 与 `/api/user/models`：Go `UserAuth` → handler。
+    let groups_auth_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/self/groups",
+                get(crate::groups_http::user_groups),
+            )
+            .route("/api/user/models", get(crate::groups_http::user_models))
+            .route_layer(middleware::from_fn_with_state(
+                groups_auth_state,
+                crate::auth::user_auth,
             )),
     );
     // `/api/user/self`：Go `UserAuth` → handler（该路由不挂 DisableCache）。
