@@ -102,6 +102,24 @@ fn build_router(state: AppState) -> Router {
                 crate::register_http::register_guard,
             )),
     );
+    // `/api/user/2fa/*`：Go `selfRoute` 组内（`UserAuth`）；status 无
+    // DisableCache，四个 POST 由 handler 自行写缓存头。
+    let twofa_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/2fa/status", get(crate::twofa_http::status))
+            .route("/api/user/2fa/setup", post(crate::twofa_http::setup))
+            .route("/api/user/2fa/enable", post(crate::twofa_http::enable))
+            .route("/api/user/2fa/disable", post(crate::twofa_http::disable))
+            .route(
+                "/api/user/2fa/backup_codes",
+                post(crate::twofa_http::backup_codes),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                twofa_state,
+                crate::auth::user_auth,
+            )),
+    );
     // `PUT /api/user/self`：Go `UserAuth → CriticalRateLimit → DisableCache →
     // handler`（缓存头由 handler 写）；`DELETE /api/user/self` 仅 `UserAuth`。
     let self_put_state = state.clone();

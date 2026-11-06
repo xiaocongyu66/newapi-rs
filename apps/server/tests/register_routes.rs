@@ -154,6 +154,30 @@ fn register_request_with_query(query: &str) -> Request<Body> {
         .unwrap()
 }
 
+/// Deterministic siteverify stub: no network is touched in CI.
+struct FixedVerifier(bool);
+
+impl newapi_server::turnstile::Verifier for FixedVerifier {
+    fn verify<'a>(
+        &'a self,
+        _secret: &'a str,
+        _token: &'a str,
+        _remote_ip: Option<&'a str>,
+    ) -> newapi_server::turnstile::VerifyFuture<'a> {
+        Box::pin(async move { Ok(self.0) })
+    }
+}
+
+fn register_request_with_verdict(query: &str, verdict: bool) -> Request<Body> {
+    let mut request = register_request_with_query(query);
+    request.extensions_mut().insert(
+        newapi_server::turnstile::InjectedVerifier(std::sync::Arc::new(FixedVerifier(
+            verdict,
+        ))),
+    );
+    request
+}
+
 async fn send(state: &AppState, request: Request<Body>) -> Response {
     router(state.clone()).oneshot(request).await.unwrap()
 }
@@ -460,11 +484,14 @@ async fn run_contract(db: Database) {
     assert_eq!(body["success"], json!(false));
     assert_eq!(body["message"], json!("Turnstile token 为空"));
 
-    // A token without a siteverify transport is a fixed rejection, never a pass.
-    let body = body_json(send(&app, register_request_with_query("turnstile=token")).await).await;
+    // A rejecting siteverify yields Go's fixed failure, never a pass.
+    let body = body_json(
+        send(&app, register_request_with_verdict("turnstile=token", false)).await,
+    )
+    .await;
     assert_eq!(
         body["message"],
-        json!("Turnstile 校验暂不可用，请联系管理员")
+        json!("Turnstile 校验失败，请刷新重试！")
     );
     set_option(&db, "TurnstileCheckEnabled", "false").await;
 
