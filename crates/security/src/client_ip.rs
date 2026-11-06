@@ -267,8 +267,8 @@ fn walk_forwarded_chain(header: Option<&str>, policy: &ProxyPolicy) -> Option<St
         return None;
     }
     let items: Vec<&str> = header.split(',').collect();
-    for index in (0..items.len()).rev() {
-        let item = items[index].trim();
+    for (index, raw) in items.iter().enumerate().rev() {
+        let item = raw.trim();
         let Ok(parsed) = parse_address(item) else {
             break;
         };
