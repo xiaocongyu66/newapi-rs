@@ -359,50 +359,50 @@ pub struct SessionProjection {
 const UPDATE_SETTING: &str = "UPDATE users SET setting=$1 WHERE id=$2 AND deleted_at IS NULL";
 const SELECT_PASSWORD: &str =
     "SELECT COALESCE(password, '') AS password FROM users WHERE id=$1 AND deleted_at IS NULL";
-const UPDATE_PROFILE: &str = r#"
+const UPDATE_PROFILE: &str = r"
 UPDATE users SET
     username = CASE WHEN $1 = '' THEN username ELSE $1 END,
     display_name = CASE WHEN $2 = '' THEN display_name ELSE $2 END
 WHERE id = $3 AND deleted_at IS NULL
-"#;
-const UPDATE_PASSWORD: &str = r#"
+";
+const UPDATE_PASSWORD: &str = r"
 UPDATE users SET
     password = $1,
     username = CASE WHEN $2 = '' THEN username ELSE $2 END,
     display_name = CASE WHEN $3 = '' THEN display_name ELSE $3 END,
     auth_version = CASE WHEN COALESCE(auth_version, 0) < 1 THEN 2 ELSE COALESCE(auth_version, 0) + 1 END
 WHERE id = $4 AND deleted_at IS NULL
-"#;
+";
 const SELECT_AUTH_VERSION: &str =
     "SELECT CAST(auth_version AS BIGINT) AS auth_version FROM users WHERE id=$1 AND deleted_at IS NULL";
-const ADVANCE_SESSION: &str = r#"
+const ADVANCE_SESSION: &str = r"
 UPDATE user_sessions SET
     version = version + 1,
     user_auth_version = $1,
     last_active_at = $2
 WHERE sid = $3 AND user_id = $4 AND status = 'active' AND expires_at > $2
     AND version = $5 AND user_auth_version = $6
-"#;
-const SELECT_SESSION_VIEW: &str = r#"
+";
+const SELECT_SESSION_VIEW: &str = r"
 SELECT sid, COALESCE(login_method, ''), COALESCE(ip, ''), COALESCE(user_agent, ''),
     COALESCE(CAST(created_at AS BIGINT), 0),
     COALESCE(CAST(last_active_at AS BIGINT), 0),
     COALESCE(CAST(expires_at AS BIGINT), 0)
 FROM user_sessions WHERE sid = $1
-"#;
+";
 // Go `User.Delete` 在软删除前用 Unscoped 递增版本；NULL/0 旧值从 1 起步。
-const BUMP_AUTH_VERSION: &str = r#"
+const BUMP_AUTH_VERSION: &str = r"
 UPDATE users SET auth_version =
     CASE WHEN COALESCE(auth_version, 0) < 1 THEN 2 ELSE COALESCE(auth_version, 0) + 1 END
 WHERE id = $1
-"#;
+";
 const DELETE_QQ_BINDING: &str = "DELETE FROM qq_bindings WHERE user_id = $1";
 const SOFT_DELETE_USER: &str =
     "UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL";
-const REVOKE_ALL_SESSIONS: &str = r#"
+const REVOKE_ALL_SESSIONS: &str = r"
 UPDATE user_sessions SET status = 'revoked', revoked_at = $1, revoked_reason = 'user_deleted'
 WHERE user_id = $2 AND status = 'active' AND expires_at > $1
-"#;
+";
 
 impl UserProfileRepository {
     /// Go `UpdateUserSetting`：GORM 的 `Updates` 对零行匹配也不报错。
