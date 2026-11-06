@@ -246,3 +246,18 @@ impl AuthService {
   - `GroupSpecialUsableGroup` 覆盖层未加载（Go 默认空，配置后才会不同）；groups handler 目前每请求读 options（待 AppState 快照接管）。
   - 注册的存储/bcrypt 错误统一收敛为 `common.database_error`（代码注释已说明，避免泄露）。
 - 文档定位：§8.3 的差分清单以 `e88494f` 起为准；`4b9c493` 本身仍是旧 §8.2 文本。
+
+### 8.4 2026-11-06 邀请码端点与 JWT 篡改用例修复 @ `79e856a`
+
+**证据绑定（普通 push）**
+- Rust SHA：`79e856a78d…`（`migration/p2`），P1 run `42230524900`，attempt `1`，**success**
+- pg14（14.24）/ pg17（17.11）：fmt/check/clippy exit 0；workspace-tests **360 passed / 0 failed**；session_cache 9/0
+- 证据目录：`/tmp/p1-evidence-79e8/`
+
+**本切片交付**
+- `GET /api/user/aff`（`aff_http.rs` + `users.rs`）：`UserAuth`、无缓存头；空 aff_code 时生成 4 位字母数字，条件更新保证并发只写一个值，其余请求读胜出值；失效用户返回固定 i18n 文案。
+- 测试修复：JWT 篡改用例改为翻转签名**首字符**。base64url 末字符可能只承载填充位，翻转后解码字节不变，签名仍有效，导致用例偶发走到 `AUTH_SESSION_REVOKED`。
+- 2FA 空/缺失 `code` 语义对齐（`1e53866`）：缺失、`null`、空串先走状态检查，与 Go `BindJSON` 零值一致。
+
+**契约差分（新增）**
+- aff：4 位码唯一索引冲突时返回 `common.database_error`（Go 返回原始错误文本），不做冲突重试。
