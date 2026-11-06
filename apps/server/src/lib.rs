@@ -7,6 +7,7 @@ pub mod limit_redis;
 mod login_http;
 pub mod request_lang;
 mod state;
+pub mod status;
 pub mod turnstile;
 
 pub use http::{MAX_BODY_BYTES, router};
