@@ -261,3 +261,29 @@ impl AuthService {
 
 **契约差分（新增）**
 - aff：4 位码唯一索引冲突时返回 `common.database_error`（Go 返回原始错误文本），不做冲突重试。
+
+### 8.5 2026-11-06 API Token 管理端点与搜索限流 @ `fdf9a0a`
+
+**证据绑定（普通 push）**
+- Rust SHA：`fdf9a0a544…`（`migration/p2`），P1 run `42239814982`，attempt `1`，**success**
+- pg14（14.24）/ pg17（17.11）：fmt/check/clippy exit 0；workspace-tests **370 passed / 0 failed**；session_cache 9/0
+- 证据目录：`/tmp/p1-evidence-fdf9/`
+
+**本切片交付**
+- `/api/token` 八个端点（`token_http.rs` + `tokens.rs`）：列表/搜索/auto-groups/详情/取 key/创建/更新/删除；全部按 `user_id` 限定，他人 token 返回业务失败而非 404/403。
+- 分页别名 `p/page_size/ps/size`、上限 100；搜索 `keyword`/`token`（剥一次 `sk-`）、`%` 通配规则与超量用户限制；掩码规则与 Go 一致；仅 `/{id}/key` 返回明文并写三个缓存头。
+- quota 校验（非负、`QuotaPerUnit` 上限、NaN/Inf）、名称字节长度、token 数量上限、`auto_groups` 三态与非 auto 清空 + `cross_group_retry=false`。
+- 路由分层：组级 `UserAuth`；`/search` 挂用户维度 `SearchRateLimit`（mark "SR"）；`/{id}/key` 挂 `CriticalRateLimit`；`/api/token` 与 `/api/token/` 均可达。
+- 新增 `SEARCH_RATE_LIMIT_ENABLE/SEARCH_RATE_LIMIT/SEARCH_RATE_LIMIT_DURATION`（默认 true/10/60），Redis 优先、否则进程内；内存键 `<mark>:user:<id>`、Redis 键 `rateLimit:v2:user:<mark>:<id>`。
+- 查询解析为避免 axum `query` 特性引入新依赖，改为本地 `%XX`/`+` 解码（仅影响畸形转义的边界情形）。
+
+**契约差分（新增，须保留记录）**
+- 未移植 `/api/token/batch`、`/api/token/batch/keys`；未移植 token Redis 缓存及写后失效。
+- `token_setting.max_user_tokens`、`AutoGroups`、`MaxTokenAutoGroups`、`GroupRatio`/`UserUsableGroups` 仍每请求读 `options`。
+- `GroupSpecialUsableGroup` 覆盖层未加载；`Token.DeletedAt` 不作为 JSON 字段输出。
+- 搜索 `keyword` 不做自动加 `%`：与 Go `SanitizeLikePattern` 一致，客户端需自带通配符。
+- 空 body/非 JSON 的 token 创建/更新请求：`null` 视为零值，其余非对象为无效参数（Go `BindJSON` 语义）。
+
+**独立复核（aff 切片 `79e856a`）**
+- 结论 **PASS**：字母表/长度、软删作用域、条件更新并发语义、信封与路由、测试确定性（含 PG）均核对通过。
+- 非阻塞：`parse_code(b"")` 已在 `e603789` 对齐 Go 零值；`/api/user/aff` 未断言无缓存头（路由仅挂 `UserAuth`）；未做并发声明专门测试（SQL 探针已独立验证）。
