@@ -73,6 +73,7 @@ fn utc_civil(epoch: i64) -> (i64, u32, u32, u32, u32, u32) {
 /// 写入 Go `LogTypeLogin` 审计行。`extra` 是 login_method/user_agent 等
 /// 附加信息；`op` 字段由 action+params 组成，与 Go `buildOpField` 一致。
 /// 失败仅记 `tracing::warn`，与 Go 的 SysLog 行为一致。
+#[allow(clippy::too_many_arguments)]
 pub async fn record_login_log(
     db: &Database,
     user_id: i64,

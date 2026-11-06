@@ -222,8 +222,7 @@ impl ProxyPolicy {
     /// 该地址能否为转发头背书。空策略（none）谁都不信，peer 为任何值都返回假。
     pub fn trusts(&self, ip: IpAddr) -> bool {
         let ip = demap_v4(ip);
-        self.exact.iter().any(|exact| *exact == ip)
-            || self.ranges.iter().any(|range| range.contains(ip))
+        self.exact.contains(&ip) || self.ranges.iter().any(|range| range.contains(ip))
     }
 }
 
