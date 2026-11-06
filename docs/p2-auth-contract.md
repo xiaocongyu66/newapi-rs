@@ -236,3 +236,13 @@ impl AuthService {
 - 2FA：`SystemName` 未入快照（issuer 固定 `New API`）、系统日志表写入与 `PublishUserAuthCache` 未移植、管理端 `Admin2FA*` 不在范围。
 - Turnstile：10s 超时与 64 KiB 响应上限为契约要求的安全差异；错误文案使用固定 i18n key（不泄露外部错误文本）。
 - 用户维度限流仅接入 `/api/user/token`；Go 另有 `/api/verify` 等未移植路由。
+
+**独立复核（`4b9c493`，verification agent）**
+- 结论 **PASS**：注册/Turnstile/groups/self 更新/2FA/用户限流与 Go 语义逐项对照通过，未发现数据完整性、认证、授权、fail-open 或路由可达性缺陷。
+- 已记录的非阻塞差异：
+  - 2FA 空/缺失 `code` 的状态检查顺序（已在 `1e53866` 对齐 Go zero-value 语义）。
+  - Turnstile：畸形 `%` 转义 Go 丢弃该参数、Rust 作为字面 token 发送（仍 fail-closed）；Go 的 JSON 字段匹配大小写不敏感（`SUCCESS`），Rust 要求小写；Cloudflare 实际只发小写。
+  - `PUT /api/user/self` 空体/非 JSON：Go 视为无操作成功，Rust 返回 `common.invalid_params`。
+  - `GroupSpecialUsableGroup` 覆盖层未加载（Go 默认空，配置后才会不同）；groups handler 目前每请求读 options（待 AppState 快照接管）。
+  - 注册的存储/bcrypt 错误统一收敛为 `common.database_error`（代码注释已说明，避免泄露）。
+- 文档定位：§8.3 的差分清单以 `e88494f` 起为准；`4b9c493` 本身仍是旧 §8.2 文本。
