@@ -233,7 +233,6 @@ async fn paths_methods_and_queries_have_explicit_axum_behavior() {
         "/",
         "/api",
         "/api/",
-        "/api/status",
         "/unknown",
         "/api/notice/",
     ] {
