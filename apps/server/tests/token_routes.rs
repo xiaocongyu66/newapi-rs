@@ -220,7 +220,7 @@ async fn seed_token(
                 (user_id,"key",status,name,created_time,accessed_time,expired_time,
                  remain_quota,used_quota,unlimited_quota,model_limits_enabled,
                  model_limits,allow_ips,"group",cross_group_retry,auto_groups)
-                VALUES ($1,$2,$3,$4,1,1,$5,$6,0,$7,0,'','',$8,0,$9)
+                VALUES ($1,$2,$3,$4,1,1,$5,$6,0,$7,FALSE,'','',$8,FALSE,$9)
                 RETURNING CAST(id AS BIGINT)"#,
         )
         .bind(user_id)
@@ -841,7 +841,7 @@ async fn run_contract(db: Database) {
         send_json(
             &app,
             Method::GET,
-            "/api/token/search?keyword=alpha",
+            "/api/token/search?keyword=%25alpha%25",
             Some(&auth_a),
             None,
         )

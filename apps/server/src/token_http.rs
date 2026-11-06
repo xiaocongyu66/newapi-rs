@@ -168,17 +168,16 @@ fn page_info(query: &PageQuery) -> PageInfo {
         page = if compat != 0 { compat } else { 1 };
     }
     if page_size == 0 {
-        if let Some(value) = parse_i64(query.ps.as_deref()) {
-            if value != 0 {
-                page_size = value;
-            }
+        if let Some(value) = parse_i64(query.ps.as_deref())
+            && value != 0
+        {
+            page_size = value;
         }
-        if page_size == 0 {
-            if let Some(value) = parse_i64(query.size.as_deref()) {
-                if value != 0 {
-                    page_size = value;
-                }
-            }
+        if page_size == 0
+            && let Some(value) = parse_i64(query.size.as_deref())
+            && value != 0
+        {
+            page_size = value;
         }
         if page_size == 0 {
             page_size = 10;
