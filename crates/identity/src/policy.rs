@@ -282,17 +282,41 @@ pub async fn can(
         .can(user_id, role, permission))
 }
 
-/// 策略不可读取时的降级权限：全部拒绝。Go `Capabilities()` 从不返回错误——
-/// `e == nil` 或 `GetFilteredPolicy` 失败时每个权限判 false；普通用户的
-/// `admin_permissions` 本来就是全 false 矩阵，root/admin 降级时同样全拒绝，
-/// 与 Go `Can()` 在空 enforcer 下的行为一致。
-pub fn denied_permissions() -> crate::self_user::Permissions {
-    use crate::self_user::Permissions;
+/// 策略不可读取时的降级权限，逐字段对齐 Go 的“空 enforcer”路径：
+/// `policy.Capabilities()` 从不返回错误，enforcer 为空或 `GetFilteredPolicy`
+/// 失败时仍返回完整资源/动作矩阵且全部为 false；侧栏由
+/// `calculateUserPermissions` 按角色决定，不依赖策略读取（管理员的
+/// `admin.setting` 经 `policy.Can` 得到 false）。
+pub fn denied_permissions(system_role: i32) -> crate::self_user::Permissions {
+    use crate::self_user::{Permissions, SidebarModulePermission};
 
+    let mut admin_permissions = BTreeMap::new();
+    for resource in CATALOG {
+        let mut actions = BTreeMap::new();
+        for action in resource.actions {
+            actions.insert(action.action.to_owned(), false);
+        }
+        admin_permissions.insert(resource.resource.to_owned(), actions);
+    }
+    let (sidebar_settings, sidebar_modules) = match system_role {
+        ROLE_ROOT_VALUE => (false, BTreeMap::new()),
+        ROLE_ADMIN_VALUE => {
+            let mut setting = BTreeMap::new();
+            setting.insert("setting".to_owned(), false);
+            let mut modules = BTreeMap::new();
+            modules.insert("admin".to_owned(), SidebarModulePermission::Actions(setting));
+            (true, modules)
+        }
+        _ => {
+            let mut modules = BTreeMap::new();
+            modules.insert("admin".to_owned(), SidebarModulePermission::Enabled(false));
+            (true, modules)
+        }
+    };
     Permissions {
-        sidebar_settings: false,
-        sidebar_modules: BTreeMap::new(),
-        admin_permissions: BTreeMap::new(),
+        sidebar_settings,
+        sidebar_modules,
+        admin_permissions,
     }
 }
 

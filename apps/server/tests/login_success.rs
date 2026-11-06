@@ -432,16 +432,28 @@ async fn policy_storage_failure_degrades_to_denied_permissions() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["success"], true);
-    // 与 Go 空 enforcer 一致：全拒绝形状（健康的管理员会是
-    // sidebar_settings=true 与全 false 矩阵，而不是空 map）。
-    assert_eq!(
-        body["data"]["user"]["permissions"],
-        json!({
-            "sidebar_settings": false,
-            "sidebar_modules": {},
-            "admin_permissions": {},
-        })
-    );
+    // 与 Go 空 enforcer 一致：矩阵仍完整但每个动作 false，侧栏按管理员
+    // 角色输出（`calculateUserPermissions` 不依赖策略读取）。
+    let permissions = &body["data"]["user"]["permissions"];
+    assert_eq!(permissions["sidebar_settings"], true);
+    assert_eq!(permissions["sidebar_modules"], json!({"admin": {"setting": false}}));
+    let matrix = permissions["admin_permissions"]
+        .as_object()
+        .expect("admin_permissions must stay a resource map");
+    assert!(!matrix.is_empty(), "resource matrix must not be empty");
+    for (resource, actions) in matrix {
+        let actions = actions
+            .as_object()
+            .unwrap_or_else(|| panic!("{resource} must map to actions"));
+        assert!(!actions.is_empty(), "{resource} must keep its actions");
+        for (action, allowed) in actions {
+            assert_eq!(
+                allowed,
+                &Value::Bool(false),
+                "{resource}.{action} must be denied"
+            );
+        }
+    }
     // 会话照常签发。
     assert!(!refresh_cookie(&headers).is_empty());
     assert_eq!(count(&db, "SELECT COUNT(*) FROM user_sessions").await, 1);

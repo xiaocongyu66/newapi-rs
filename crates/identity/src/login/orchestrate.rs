@@ -401,7 +401,7 @@ impl LoginService {
                     user_id = profile.id,
                     "login permission load failed; denying all permissions"
                 );
-                denied_permissions()
+                denied_permissions(profile.role as i32)
             });
         Ok(LoginSuccess {
             bundle,
@@ -555,21 +555,42 @@ mod tests {
     }
 
     #[test]
-    fn denied_permissions_denies_everything_and_survives_assembly() {
-        // Go 空 enforcer 的降级形状：侧栏开关关闭、模块与 admin 矩阵全空。
-        let denied = denied_permissions();
-        assert!(!denied.sidebar_settings);
-        assert!(denied.sidebar_modules.is_empty());
-        assert!(denied.admin_permissions.is_empty());
+    fn denied_permissions_matches_go_empty_enforcer_shape() {
+        // Go `policy.Capabilities()` 在空 enforcer 下仍返回完整资源/动作矩阵，
+        // 每个动作都是 false；侧栏由 `calculateUserPermissions` 按角色决定。
+        for role in [100, 10, 1] {
+            let denied = denied_permissions(role);
+            assert_eq!(
+                denied.admin_permissions.len(),
+                crate::policy::CATALOG.len(),
+                "role {role} must keep the full resource matrix"
+            );
+            for resource in crate::policy::CATALOG {
+                let actions = &denied.admin_permissions[resource.resource];
+                assert_eq!(actions.len(), resource.actions.len());
+                assert!(actions.values().all(|allowed| !allowed));
+            }
+        }
+        // root：无侧栏设置、无模块。
+        let root = denied_permissions(100);
+        assert!(!root.sidebar_settings);
+        assert!(root.sidebar_modules.is_empty());
+        // admin：可设置侧栏，system.settings 为 false。
+        let admin = denied_permissions(10);
+        assert!(admin.sidebar_settings);
         assert_eq!(
-            serde_json::to_value(&denied).expect("serialize denied permissions"),
-            json!({
-                "sidebar_settings": false,
-                "sidebar_modules": {},
-                "admin_permissions": {},
-            })
+            serde_json::to_value(&admin.sidebar_modules).expect("serialize modules"),
+            json!({"admin": {"setting": false}})
+        );
+        // 普通用户：可设置侧栏，管理员区域关闭。
+        let user = denied_permissions(1);
+        assert!(user.sidebar_settings);
+        assert_eq!(
+            serde_json::to_value(&user.sidebar_modules).expect("serialize modules"),
+            json!({"admin": false})
         );
         // `assemble` 原样透传降级权限；组装层不会为角色补齐或推导任何授权。
+        let denied = denied_permissions(10);
         let user = assemble_self_user(
             fixture_profile(),
             denied.clone(),
@@ -580,13 +601,10 @@ mod tests {
         );
         assert_eq!(user.permissions, denied);
         let serialized = serde_json::to_value(&user).expect("serialize self user");
+        assert_eq!(serialized["permissions"]["sidebar_settings"], true);
         assert_eq!(
-            serialized["permissions"],
-            json!({
-                "sidebar_settings": false,
-                "sidebar_modules": {},
-                "admin_permissions": {},
-            })
+            serialized["permissions"]["sidebar_modules"],
+            json!({"admin": {"setting": false}})
         );
     }
 
