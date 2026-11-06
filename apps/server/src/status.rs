@@ -169,9 +169,11 @@ pub fn status_body(state: &AppState) -> Value {
         "default_collapse_sidebar": false,  // Go common.DefaultCollapseSidebar (constants.go:33)
         "mj_notify_enabled": false, // Go usage.MjNotifyEnabled (configure_perf.go:98)。until P3。
         "chats": default_chats(),   // Go usage.Chats 默认列表。until P3。
-        // Go catalog/manage_channels.go:12,15 与 resolve_group.go:74 默认。until P3。
-        "demo_site_enabled": false,
-        "self_use_mode_enabled": false,
+        // 真实值：PublicConfig 快照（options `DemoSiteEnabled`/`SelfUseModeEnabled`，
+        // Go `channel` 内存标志），尚未移植时为 Go 默认 false。
+        "demo_site_enabled": public.demo_site_enabled,
+        "self_use_mode_enabled": public.self_use_mode_enabled,
+        // Go resolve_group.go:74 默认。until P3。
         "default_use_auto_group": false,
         // 真实值：AuthSettings 快照。
         "register_enabled": auth.register_enabled,
@@ -391,6 +393,8 @@ mod tests {
             ("TurnstileCheckEnabled", "true"),
             ("TurnstileSiteKey", "site-key-123"),
             ("legal.user_agreement", "the terms"),
+            ("SelfUseModeEnabled", "true"),
+            ("DemoSiteEnabled", "true"),
             ("general_setting.quota_display_type", "TOKENS"),
         ])
         .await;
@@ -404,6 +408,9 @@ mod tests {
         // PublicConfig 非空 → 联动为 true；缺失/空仍为 false。
         assert_eq!(data["user_agreement_enabled"], Value::Bool(true));
         assert_eq!(data["privacy_policy_enabled"], Value::Bool(false));
+        // 运行模式真实值：options 字符串 "true" → Go 内存标志 true。
+        assert_eq!(data["self_use_mode_enabled"], Value::Bool(true));
+        assert_eq!(data["demo_site_enabled"], Value::Bool(true));
         // QuotaDisplay 真实值：TOKENS → 非货币展示。
         assert_eq!(data["quota_display_type"], "TOKENS");
         assert_eq!(data["display_in_currency"], Value::Bool(false));

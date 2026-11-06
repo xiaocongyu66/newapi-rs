@@ -12,6 +12,11 @@ pub struct PublicConfig {
     pub home_page_content: String,
     pub user_agreement: String,
     pub privacy_policy: String,
+    /// Go `channel.SelfUseModeEnabled`：options 键 `SelfUseModeEnabled` 为
+    /// "true" 时启用，缺失/其它值按 Go `value == "true"` 判定为 false。
+    pub self_use_mode_enabled: bool,
+    /// Go `channel.DemoSiteEnabled`，解析语义同上。
+    pub demo_site_enabled: bool,
 }
 
 impl PublicConfig {

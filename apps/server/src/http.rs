@@ -75,8 +75,19 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user-agreement", get(user_agreement))
         .route("/api/privacy-policy", get(privacy_policy))
         .route("/api/status", get(crate::status::handle))
+        .route("/api/setup", get(crate::setup_http::inspect))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready));
+    // Go `POST /api/setup` 只挂匿名体上限（`register_api.go:28`）。
+    let setup_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/setup", post(crate::setup_http::complete))
+            .route_layer(middleware::from_fn_with_state(
+                setup_state,
+                crate::setup_http::setup_body_limit,
+            )),
+    );
     // 登录路由：Go 顺序 CriticalRateLimit → DisableCache → 匿名体上限 → handler。
     // 中间件依赖 AppState，必须用 from_fn_with_state 才能在 with_state 之前布层。
     let login_state = state.clone();

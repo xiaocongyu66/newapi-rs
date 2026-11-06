@@ -129,7 +129,20 @@ pub async fn complete(State(state): State<AppState>, headers: HeaderMap, body: B
         demo_site_enabled: request.demo_site_enabled,
     };
     match repository.complete(input).await {
-        Ok(_) => response(&lang, StatusCode::OK, true, "setup.success"),
+        Ok(_) => {
+            // 契约 §“提交后刷新内存”：Go 在事务后直接写 channel 标志；Rust
+            // 通过重载 PublicConfig 快照让 /api/status 立即反映新模式。
+            if let Some(db) = state.db()
+                && state.reload(&db).await.is_err()
+            {
+                // 事务已提交，快照失败不应伪装成初始化失败；标记事件即可。
+                tracing::error!(
+                    event = "setup_snapshot_reload_failed",
+                    "setup committed but the config snapshot reload failed"
+                );
+            }
+            response(&lang, StatusCode::OK, true, "setup.success")
+        }
         Err(error) => error_response(&lang, error),
     }
 }

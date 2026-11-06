@@ -78,6 +78,8 @@ fn fields(config: &PublicConfig) -> [&str; 5] {
 async fn contract(db: &Database) {
     let default = PublicConfig::default();
     assert_eq!(fields(&default), [""; 5]);
+    assert!(!default.self_use_mode_enabled);
+    assert!(!default.demo_site_enabled);
     assert!(PublicConfig::load(db, &default).await.is_err());
     execute(
         db,
@@ -118,6 +120,17 @@ async fn contract(db: &Database) {
     let loaded = PublicConfig::load(db, &default).await.unwrap();
     assert_eq!(fields(&loaded), expected);
     assert_eq!(fields(&default), [""; 5]);
+
+    // Go `applyOperationSetting`：只有字面量 "true" 打开运行模式标志。
+    insert(db, "SelfUseModeEnabled", Some("true")).await;
+    insert(db, "DemoSiteEnabled", Some("TRUE")).await;
+    let modes = PublicConfig::load(db, &loaded).await.unwrap();
+    assert!(modes.self_use_mode_enabled);
+    assert!(!modes.demo_site_enabled, "Go compares against \"true\" literally");
+    insert(db, "DemoSiteEnabled", Some("false")).await;
+    let modes = PublicConfig::load(db, &modes).await.unwrap();
+    assert!(modes.self_use_mode_enabled);
+    assert!(!modes.demo_site_enabled);
 
     execute(db, "DELETE FROM options WHERE \"key\" = 'Notice'").await;
     let deleted = PublicConfig::load(db, &loaded).await.unwrap();

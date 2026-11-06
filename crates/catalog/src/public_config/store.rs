@@ -2,12 +2,14 @@ use newapi_storage::Database;
 
 use super::PublicConfig;
 
-const KEYS: [&str; 5] = [
+const KEYS: [&str; 7] = [
     "Notice",
     "About",
     "HomePageContent",
     "legal.user_agreement",
     "legal.privacy_policy",
+    "SelfUseModeEnabled",
+    "DemoSiteEnabled",
 ];
 
 pub(super) async fn load(
@@ -19,26 +21,30 @@ pub(super) async fn load(
         Database::Sqlite(pool) => {
             sqlx::query_as(
                 "SELECT \"key\", \"value\" FROM \"options\" \
-                 WHERE \"key\" IN (?, ?, ?, ?, ?)",
+                 WHERE \"key\" IN (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(KEYS[0])
             .bind(KEYS[1])
             .bind(KEYS[2])
             .bind(KEYS[3])
             .bind(KEYS[4])
+            .bind(KEYS[5])
+            .bind(KEYS[6])
             .fetch_all(pool)
             .await?
         }
         Database::Postgres(pool) => {
             sqlx::query_as(
                 "SELECT \"key\", \"value\" FROM \"options\" \
-                 WHERE \"key\" IN ($1, $2, $3, $4, $5)",
+                 WHERE \"key\" IN ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(KEYS[0])
             .bind(KEYS[1])
             .bind(KEYS[2])
             .bind(KEYS[3])
             .bind(KEYS[4])
+            .bind(KEYS[5])
+            .bind(KEYS[6])
             .fetch_all(pool)
             .await?
         }
@@ -62,6 +68,9 @@ pub(super) async fn load(
             "HomePageContent" => next.home_page_content = value,
             "legal.user_agreement" => next.user_agreement = value,
             "legal.privacy_policy" => next.privacy_policy = value,
+            // Go `applyOperationSetting`：内存标志即 `value == "true"`。
+            "SelfUseModeEnabled" => next.self_use_mode_enabled = value == "true",
+            "DemoSiteEnabled" => next.demo_site_enabled = value == "true",
             _ => {}
         }
     }
