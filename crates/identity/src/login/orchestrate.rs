@@ -266,7 +266,7 @@ impl LoginService {
             return Ok(rejected(MSG_2FA_FLOW_EXPIRED, lang));
         }
         match self.two_fa.by_user_id(profile.id).await {
-            Ok(record) if record.is_some_and(|record| record.is_enabled) => {}
+            Ok(record) if record.as_ref().is_some_and(|record| record.is_enabled) => {}
             Ok(_) => return Ok(rejected(MSG_2FA_NOT_ENABLED, lang)),
             Err(error) => {
                 tracing::warn!(
@@ -408,8 +408,18 @@ pub fn payload_auth_version(payload: &str) -> Option<i64> {
 pub async fn update_last_login(db: &Database, user_id: i64, now: i64) {
     let sql = "UPDATE users SET last_login_at=$1 WHERE id=$2";
     let result = match db {
-        Database::Sqlite(pool) => sqlx::query(sql).bind(now).bind(user_id).execute(pool).await,
-        Database::Postgres(pool) => sqlx::query(sql).bind(now).bind(user_id).execute(pool).await,
+        Database::Sqlite(pool) => sqlx::query(sql)
+            .bind(now)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(sql)
+            .bind(now)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .map(|_| ()),
     };
     if result.is_err() {
         tracing::warn!(
