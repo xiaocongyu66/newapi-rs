@@ -48,7 +48,7 @@ impl Error for ProxyConfigError {}
 /// 手写前缀匹配的一条网段。`ipnet` 虽已是本 crate 依赖，但按移植约定
 /// 匹配逻辑自行实现，以便逐条对齐 Go `net.ParseCIDR` 与
 /// `net.IPNet.Contains`（含 `networkNumberAndMask`）的行为。
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Network {
     /// v4 文本写法（点分十进制），前缀上限 32，`masked` 已按前缀掩码。
     V4 { masked: u32, prefix: u8 },
@@ -167,7 +167,7 @@ fn demap_v4(ip: IpAddr) -> IpAddr {
 
 /// 引擎的代理策略：peer 或转发链上的地址是否可信由它回答。
 /// 不含任何秘密，可信地址是运维拓扑而非凭据。
-#[derive(Clone, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ProxyPolicy {
     exact: Vec<IpAddr>,
     ranges: Vec<Network>,
