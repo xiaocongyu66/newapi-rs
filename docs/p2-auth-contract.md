@@ -147,14 +147,16 @@ impl AuthService {
 
 远程验收必须实际连接SQLite、PG及Redis，覆盖同一cookie并发刷新、refresh与logout竞争、过宽限replay与并发轮换、fence失败/DB回滚/终态写失败、用户禁用/降权后的旧access、跨用户撤销；断言HTTP JSON/头/cookie和DB最终状态。绑定集成SHA、Actions run ID、退出码、测试/跳过数，独立复核后才PASS。本轮没有任何运行结果，也没有复制真实用户凭据。
 
-## 8. 2026-11-06 登录垂直切片状态（未验收）
+## 8. 2026-11-06 登录与会话路由切片状态（待独立复核）
 
-**已实现并待远程 CI 验证**：`POST /api/user/login`、`POST /api/user/login/2fa` 编排（密码/2FA pending/2FA 校验/会话签发/最后登录/登录审计/SelfUser 装配）、额度展示快照、`UserProfile.auth_version`、关键路径滑动窗口限流（内存）、可信代理客户端 IP、匿名体上限与 DisableCache 三头、Accept-Language 语言解析、Turnstile 决策层接线、登录/2FA 文案 key；`apps/server/tests/{login_http,login_success}.rs` 覆盖中间件顺序、成功登录、2FA pending/错误码/备用码。
+**已通过远程 CI 的实现**（普通 push 的 locked 门禁；独立复核结论尚未回填）：
+- 登录垂直切片 @ `2db1e9d`，P1 run `42145672841`：prepare、Go oracle、process differential（9/9、35 http_checks）、verify pg14+pg17 全绿。覆盖 `POST /api/user/login`、`POST /api/user/login/2fa`（密码/2FA pending/2FA 校验/会话签发/最后登录/登录审计/SelfUser 装配）、额度展示快照、`UserProfile.auth_version`、关键路径限流、可信代理客户端 IP、匿名体上限与 DisableCache 三头、Accept-Language 语言解析、Turnstile 决策层接线；`apps/server/tests/{login_http,login_success}.rs` 覆盖中间件顺序、成功登录、2FA pending/错误码/备用码。
+- 会话路由注册 @ `aa3b9d7`，P1 run `42147797666`：同样全绿。refresh/logout 按 `Origin → CriticalRateLimit → DisableCache`；sessions 三端点按 `Bearer 校验 → DisableCache`；`session_routes.rs` 覆盖注册、缓存头、来源拒绝、429 与无 Bearer 401。DisableCache 在 handler 之后补齐，成功登录等显式 `Cache-Control: no-store` 不会被覆盖。
+- Redis 关键路径限流（Lua 固定窗口，键 `rateLimit:v2:ip:<mark>:<ip>`，mark=`CT`）已随上述 SHA 合入，配置 `REDIS_CONN_STRING` 时替代进程内滑动窗口；`tests/redis_rate_limit.rs` 在真实 Redis 上执行。
 
-**明确未完成，不得视为本切片通过**：
+**明确未完成，不得视为本阶段通过**：
 - Turnstile 只有纯决策层；工作区没有 HTTP client 依赖，**未实现向 Cloudflare 的 `siteverify` 请求**。开关启用时密码登录返回 HTTP 200 `{success:false,message: Turnstile 校验暂不可用…}`（Go 的网络错误也是 200 + message），不会静默放行；补齐传输层前不得宣称 Turnstile 可用。
-- 限流仅有进程内实现；配置 Redis 时 Go 走 Redis 固定窗口，Rust 尚未实现，多实例下限流不共享。Go 默认启用的全局 Web/API 限流（`GLOBAL_WEB_RATE_LIMIT_*`、`GLOBAL_API_RATE_LIMIT_*`）同样未移植。
-- `/api/user/auth/refresh|logout`、`/api/user/sessions*` 仍不在生产 router 注册（既有切片遗留）。
+- Go 默认启用的全局 Web/API 限流（`GLOBAL_WEB_RATE_LIMIT_*`、`GLOBAL_API_RATE_LIMIT_*`）尚未合并；当前仅有关键路径限流。
 - 注册、验证码、密码重置、初始化、API Key、`/api/status` 等 P2 项未在本切片。
 
-**验收前置**：远程 Actions 的 fmt/check/clippy/test 全绿且实际连接 SQLite、PostgreSQL 与 Redis；登录 HTTP 契约测试覆盖成功、2FA pending、非法参数、禁用账号、存储故障、限流 429、体上限 413、DisableCache/Cookie 头；独立 verification 复核后更新本节。
+**验收前置**：上述 SHA 的 fmt/check/clippy/test 已全绿且实际连接 SQLite、PostgreSQL 14/17 与 Redis；仍需独立 verification 按精确 SHA 复核后才可标记通过，届时更新本节。
