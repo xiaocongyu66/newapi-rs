@@ -73,6 +73,81 @@ struct PageQuery {
     status_only: Option<String>,
 }
 
+/// Go/axum query decoding parity without the axum `query` feature:
+/// `+` is a space and `%XX` decodes one byte.
+fn query_pairs(uri: &Uri) -> Vec<(String, String)> {
+    let Some(query) = uri.query() else {
+        return Vec::new();
+    };
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (percent_decode(key), percent_decode(value))
+        })
+        .collect()
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                match (hex_value(bytes[index + 1]), hex_value(bytes[index + 2])) {
+                    (Some(high), Some(low)) => {
+                        out.push(high * 16 + low);
+                        index += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn page_query(uri: &Uri) -> PageQuery {
+    let pairs = query_pairs(uri);
+    let get = |key: &str| {
+        pairs
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone())
+    };
+    PageQuery {
+        p: get("p"),
+        page_size: get("page_size"),
+        ps: get("ps"),
+        size: get("size"),
+        keyword: get("keyword"),
+        token: get("token"),
+        status_only: get("status_only"),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PageInfo {
     page: i64,
@@ -186,12 +261,13 @@ fn parse_token_request(body: &[u8]) -> Option<TokenRequest> {
 pub async fn list_tokens(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    Query(query): Query<PageQuery>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    let query = page_query(&uri);
     let repository = TokenRepository::new(db);
     let info = page_info(&query);
     let tokens = match repository
@@ -228,12 +304,13 @@ pub async fn list_tokens(
 pub async fn search_tokens(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    Query(query): Query<PageQuery>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    let query = page_query(&uri);
     let repository = TokenRepository::new(db);
     let info = page_info(&query);
     let mut keyword = query.keyword.clone().unwrap_or_default();
@@ -518,13 +595,14 @@ pub async fn add_token(
 pub async fn update_token(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    Query(query): Query<PageQuery>,
+    uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    let query = page_query(&uri);
     let Some(request) = parse_token_request(&body) else {
         return api_error(&headers, MSG_INVALID_PARAMS);
     };

@@ -545,8 +545,11 @@ fn validate_numeric_code(code: &str) -> Result<String, NumericCodeError> {
 /// Go `BindJSON` into the request struct: a missing, `null` or empty `code`
 /// deserializes to the zero value and state checks run first; only a
 /// non-object top level or a non-string `code` is the fixed "参数错误" branch.
-/// An entirely empty body still fails JSON decoding.
+/// Go's adapter treats a zero-length body as "leave the zero value".
 fn parse_code(body: &[u8]) -> Option<String> {
+    if body.is_empty() {
+        return Some(String::new());
+    }
     let value: Value = serde_json::from_slice(body).ok()?;
     if value.is_null() {
         return Some(String::new());
@@ -613,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn body_parsing_requires_a_non_empty_string_code() {
+    fn body_parsing_follows_go_zero_value_semantics() {
         assert_eq!(
             parse_code(br#"{"code":"123456"}"#).as_deref(),
             Some("123456")
@@ -627,6 +630,6 @@ mod tests {
         assert_eq!(parse_code(br#"{"flow_token":"x"}"#), Some(String::new()));
         assert_eq!(parse_code(b"null"), Some(String::new()));
         assert_eq!(parse_code(b"[]"), None);
-        assert_eq!(parse_code(b""), None);
+        assert_eq!(parse_code(b""), Some(String::new()));
     }
 }
