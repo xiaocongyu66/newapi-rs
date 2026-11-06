@@ -490,9 +490,10 @@ async fn enabled_two_fa_returns_pending_flow_without_session() {
     assert_eq!(data["require_2fa"], true);
     assert!(data["flow_token"].as_str().is_some_and(|token| !token.is_empty()));
     let expires_at = data["expires_at"].as_i64().expect("flow expiry");
+    let ttl = expires_at - before;
     assert!(
-        (expires_at - before).abs() <= 10,
-        "pending flow should expire about 300 seconds after the request"
+        (295..=305).contains(&ttl),
+        "pending flow should expire about 300 seconds after the request, got {ttl}"
     );
     assert!(!headers.contains_key(header::SET_COOKIE));
 
