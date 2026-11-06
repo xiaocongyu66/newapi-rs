@@ -1,6 +1,8 @@
 //! 初始化投影与用户公开原始资料仓储；不是鉴权服务或完整 SelfUser DTO。
 
 use newapi_storage::Database;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::Row;
 
 /// Go buildSelfUserData 所需的公开原始列，不含凭据、管理员备注或派生展示。
@@ -259,4 +261,438 @@ impl LoginCredentialRepository {
         })
         .transpose()
     }
+}
+
+/// Go `dto.UserSetting` 的 JSON 形状。字段顺序、`omitempty` 语义与 Go 一致：
+/// 零值字符串/数字/布尔省略，`gotify_priority` 始终输出。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserSetting {
+    #[serde(skip_serializing_if = "is_default")]
+    pub notify_type: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub quota_warning_threshold: f64,
+    #[serde(skip_serializing_if = "is_default")]
+    pub webhook_url: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub webhook_secret: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub notification_email: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub bark_url: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub gotify_url: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub gotify_token: String,
+    pub gotify_priority: i64,
+    #[serde(skip_serializing_if = "is_default")]
+    pub upstream_model_update_notify_enabled: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    pub accept_unset_model_ratio_model: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    pub record_ip_log: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    pub sidebar_modules: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub billing_preference: String,
+    #[serde(skip_serializing_if = "is_default")]
+    pub language: String,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+impl UserSetting {
+    /// Go `User.GetSetting`：无法解析时记录日志并使用零值设置，不部分采用。
+    /// `encoding/json` 把 null 视为目标字段的零值，因此先剔除 null 键再解码，
+    /// 非 null 的类型错误才整体回退为零值设置。
+    pub fn from_json(raw: &str) -> Self {
+        let Ok(Value::Object(mut object)) = serde_json::from_str::<Value>(raw) else {
+            return Self::default();
+        };
+        object.retain(|_, value| !value.is_null());
+        serde_json::from_value(Value::Object(object)).unwrap_or_default()
+    }
+
+    /// Go `json.Marshal(dto.UserSetting)`；结构与字段均为可序列化原语。
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("user setting is always serializable")
+    }
+}
+
+/// 用户资料/会话改写的固定分类；不携带数据库错误文本。
+pub enum UserMutationError {
+    NotFound,
+    SessionInactive,
+    Storage(sqlx::Error),
+}
+
+impl From<sqlx::Error> for UserMutationError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Storage(error)
+    }
+}
+
+/// Go `AdvanceUserSessionAuthVersion` 的输入；会话版本与用户版本都必须匹配。
+pub struct SessionAdvance<'a> {
+    pub user_id: i64,
+    pub sid: &'a str,
+    pub expected_session_version: i64,
+    pub expected_user_auth_version: i64,
+    pub next_user_auth_version: i64,
+    pub now: i64,
+}
+
+/// 会话公开投影；与 Go `LoginSessionView` 字段一一对应（`current` 由调用方设定）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionProjection {
+    pub sid: String,
+    pub login_method: String,
+    pub ip: String,
+    pub user_agent: String,
+    pub created_at: i64,
+    pub last_active_at: i64,
+    pub expires_at: i64,
+}
+
+const UPDATE_SETTING: &str = "UPDATE users SET setting=$1 WHERE id=$2 AND deleted_at IS NULL";
+const SELECT_PASSWORD: &str =
+    "SELECT COALESCE(password, '') AS password FROM users WHERE id=$1 AND deleted_at IS NULL";
+const UPDATE_PROFILE: &str = r"
+UPDATE users SET
+    username = CASE WHEN $1 = '' THEN username ELSE $1 END,
+    display_name = CASE WHEN $2 = '' THEN display_name ELSE $2 END
+WHERE id = $3 AND deleted_at IS NULL
+";
+const UPDATE_PASSWORD: &str = r"
+UPDATE users SET
+    password = $1,
+    username = CASE WHEN $2 = '' THEN username ELSE $2 END,
+    display_name = CASE WHEN $3 = '' THEN display_name ELSE $3 END,
+    auth_version = CASE WHEN COALESCE(auth_version, 0) < 1 THEN 2 ELSE COALESCE(auth_version, 0) + 1 END
+WHERE id = $4 AND deleted_at IS NULL
+";
+const SELECT_AUTH_VERSION: &str =
+    "SELECT CAST(auth_version AS BIGINT) AS auth_version FROM users WHERE id=$1 AND deleted_at IS NULL";
+const ADVANCE_SESSION: &str = r"
+UPDATE user_sessions SET
+    version = version + 1,
+    user_auth_version = $1,
+    last_active_at = $2
+WHERE sid = $3 AND user_id = $4 AND status = 'active' AND expires_at > $2
+    AND version = $5 AND user_auth_version = $6
+";
+const SELECT_SESSION_VIEW: &str = r"
+SELECT sid, COALESCE(login_method, ''), COALESCE(ip, ''), COALESCE(user_agent, ''),
+    COALESCE(CAST(created_at AS BIGINT), 0),
+    COALESCE(CAST(last_active_at AS BIGINT), 0),
+    COALESCE(CAST(expires_at AS BIGINT), 0)
+FROM user_sessions WHERE sid = $1
+";
+// Go `User.Delete` 在软删除前用 Unscoped 递增版本；NULL/0 旧值从 1 起步。
+const BUMP_AUTH_VERSION: &str = r"
+UPDATE users SET auth_version =
+    CASE WHEN COALESCE(auth_version, 0) < 1 THEN 2 ELSE COALESCE(auth_version, 0) + 1 END
+WHERE id = $1
+";
+const DELETE_QQ_BINDING: &str = "DELETE FROM qq_bindings WHERE user_id = $1";
+const SOFT_DELETE_USER: &str =
+    "UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL";
+const REVOKE_ALL_SESSIONS: &str = r"
+UPDATE user_sessions SET status = 'revoked', revoked_at = $1, revoked_reason = 'user_deleted'
+WHERE user_id = $2 AND status = 'active' AND expires_at > $1
+";
+
+impl UserProfileRepository {
+    /// Go `UpdateUserSetting`：GORM 的 `Updates` 对零行匹配也不报错。
+    pub async fn update_setting(&self, user_id: i64, setting: &str) -> Result<(), sqlx::Error> {
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(UPDATE_SETTING)
+                    .bind(setting)
+                    .bind(user_id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(UPDATE_SETTING)
+                    .bind(setting)
+                    .bind(user_id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Go `GetUserById(id, true)` 的密码列；行不存在为 `None`，NULL 密码为 `Some("")`。
+    pub async fn password_hash(&self, user_id: i64) -> Result<Option<String>, sqlx::Error> {
+        let password = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_scalar::<_, String>(SELECT_PASSWORD)
+                    .bind(user_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_scalar::<_, String>(SELECT_PASSWORD)
+                    .bind(user_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
+        Ok(password)
+    }
+
+    /// Go `cleanUser.Update(false)`：`Updates(struct)` 跳过零值，空用户名/昵称不覆盖。
+    pub async fn update_profile(
+        &self,
+        user_id: i64,
+        username: &str,
+        display_name: &str,
+    ) -> Result<(), UserMutationError> {
+        let affected = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(UPDATE_PROFILE)
+                    .bind(username)
+                    .bind(display_name)
+                    .bind(user_id)
+                    .execute(pool)
+                    .await?
+                    .rows_affected()
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(UPDATE_PROFILE)
+                    .bind(username)
+                    .bind(display_name)
+                    .bind(user_id)
+                    .execute(pool)
+                    .await?
+                    .rows_affected()
+            }
+        };
+        if affected == 0 {
+            return Err(UserMutationError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// Go `UpdateWithTx(tx, true)`：同一事务写密码、非空用户名/昵称并递增 `auth_version`。
+    /// 返回递增后的版本；密码原文不经过本函数。
+    pub async fn update_password(
+        &self,
+        user_id: i64,
+        password_hash: &str,
+        username: &str,
+        display_name: &str,
+    ) -> Result<i64, UserMutationError> {
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await?;
+                let affected = sqlx::query(UPDATE_PASSWORD)
+                    .bind(password_hash)
+                    .bind(username)
+                    .bind(display_name)
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+                if affected == 0 {
+                    return Err(UserMutationError::NotFound);
+                }
+                let version = sqlx::query_scalar::<_, i64>(SELECT_AUTH_VERSION)
+                    .bind(user_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                Ok(version)
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                let affected = sqlx::query(UPDATE_PASSWORD)
+                    .bind(password_hash)
+                    .bind(username)
+                    .bind(display_name)
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+                if affected == 0 {
+                    return Err(UserMutationError::NotFound);
+                }
+                let version = sqlx::query_scalar::<_, i64>(SELECT_AUTH_VERSION)
+                    .bind(user_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                Ok(version)
+            }
+        }
+    }
+
+    /// Go `AdvanceUserSessionAuthVersion`：仅当会话仍活跃且版本匹配时前进一代。
+    pub async fn advance_session_auth_version(
+        &self,
+        input: SessionAdvance<'_>,
+    ) -> Result<SessionProjection, UserMutationError> {
+        if input.user_id <= 0
+            || input.sid.is_empty()
+            || input.expected_session_version <= 0
+            || input.expected_user_auth_version <= 0
+            || input.next_user_auth_version <= input.expected_user_auth_version
+        {
+            return Err(UserMutationError::SessionInactive);
+        }
+        match &self.db {
+            Database::Sqlite(pool) => advance_session_sqlite(pool, &input).await,
+            Database::Postgres(pool) => advance_session_postgres(pool, &input).await,
+        }
+    }
+
+    /// Go `User.Delete`：递增版本、解绑 QQ、软删除并撤销所有活跃会话。
+    /// 用户缓存失效尚未移植（当前认证路径直接读库），不伪造缓存写入。
+    pub async fn soft_delete(&self, user_id: i64, now: i64) -> Result<(), UserMutationError> {
+        if user_id <= 0 {
+            return Err(UserMutationError::NotFound);
+        }
+        match &self.db {
+            Database::Sqlite(pool) => soft_delete_sqlite(pool, user_id, now).await,
+            Database::Postgres(pool) => soft_delete_postgres(pool, user_id, now).await,
+        }
+    }
+}
+
+async fn advance_session_sqlite(
+    pool: &sqlx::SqlitePool,
+    input: &SessionAdvance<'_>,
+) -> Result<SessionProjection, UserMutationError> {
+    let mut tx = pool.begin().await?;
+    let affected = sqlx::query(ADVANCE_SESSION)
+        .bind(input.next_user_auth_version)
+        .bind(input.now)
+        .bind(input.sid)
+        .bind(input.user_id)
+        .bind(input.expected_session_version)
+        .bind(input.expected_user_auth_version)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(UserMutationError::SessionInactive);
+    }
+    let row = sqlx::query_as::<_, (String, String, String, String, i64, i64, i64)>(
+        SELECT_SESSION_VIEW,
+    )
+    .bind(input.sid)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(SessionProjection {
+        sid: row.0,
+        login_method: row.1,
+        ip: row.2,
+        user_agent: row.3,
+        created_at: row.4,
+        last_active_at: row.5,
+        expires_at: row.6,
+    })
+}
+
+async fn advance_session_postgres(
+    pool: &sqlx::PgPool,
+    input: &SessionAdvance<'_>,
+) -> Result<SessionProjection, UserMutationError> {
+    let mut tx = pool.begin().await?;
+    let affected = sqlx::query(ADVANCE_SESSION)
+        .bind(input.next_user_auth_version)
+        .bind(input.now)
+        .bind(input.sid)
+        .bind(input.user_id)
+        .bind(input.expected_session_version)
+        .bind(input.expected_user_auth_version)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(UserMutationError::SessionInactive);
+    }
+    let row = sqlx::query_as::<_, (String, String, String, String, i64, i64, i64)>(
+        SELECT_SESSION_VIEW,
+    )
+    .bind(input.sid)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(SessionProjection {
+        sid: row.0,
+        login_method: row.1,
+        ip: row.2,
+        user_agent: row.3,
+        created_at: row.4,
+        last_active_at: row.5,
+        expires_at: row.6,
+    })
+}
+
+async fn soft_delete_sqlite(
+    pool: &sqlx::SqlitePool,
+    user_id: i64,
+    now: i64,
+) -> Result<(), UserMutationError> {
+    let mut tx = pool.begin().await?;
+    let affected = sqlx::query(BUMP_AUTH_VERSION)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(UserMutationError::NotFound);
+    }
+    sqlx::query(DELETE_QQ_BINDING)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(SOFT_DELETE_USER)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(REVOKE_ALL_SESSIONS)
+        .bind(now)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn soft_delete_postgres(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    now: i64,
+) -> Result<(), UserMutationError> {
+    let mut tx = pool.begin().await?;
+    let affected = sqlx::query(BUMP_AUTH_VERSION)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(UserMutationError::NotFound);
+    }
+    sqlx::query(DELETE_QQ_BINDING)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(SOFT_DELETE_USER)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(REVOKE_ALL_SESSIONS)
+        .bind(now)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
