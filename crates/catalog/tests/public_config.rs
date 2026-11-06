@@ -126,11 +126,18 @@ async fn contract(db: &Database) {
     insert(db, "DemoSiteEnabled", Some("TRUE")).await;
     let modes = PublicConfig::load(db, &loaded).await.unwrap();
     assert!(modes.self_use_mode_enabled);
-    assert!(!modes.demo_site_enabled, "Go compares against \"true\" literally");
-    insert(db, "DemoSiteEnabled", Some("false")).await;
+    assert!(
+        !modes.demo_site_enabled,
+        "Go compares against \"true\" literally"
+    );
+    execute(
+        db,
+        "UPDATE options SET \"value\" = 'true' WHERE \"key\" = 'DemoSiteEnabled'",
+    )
+    .await;
     let modes = PublicConfig::load(db, &modes).await.unwrap();
     assert!(modes.self_use_mode_enabled);
-    assert!(!modes.demo_site_enabled);
+    assert!(modes.demo_site_enabled);
 
     execute(db, "DELETE FROM options WHERE \"key\" = 'Notice'").await;
     let deleted = PublicConfig::load(db, &loaded).await.unwrap();

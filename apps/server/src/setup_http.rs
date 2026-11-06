@@ -231,7 +231,11 @@ fn error_response(lang: &str, error: SetupError) -> Response {
 
 fn response(lang: &str, status: StatusCode, success: bool, key: &str) -> Response {
     let message = newapi_i18n::translate(lang, key, std::iter::empty::<(&str, &str)>());
-    (status, Json(json!({ "success": success, "message": message }))).into_response()
+    (
+        status,
+        Json(json!({ "success": success, "message": message })),
+    )
+        .into_response()
 }
 
 fn language(headers: &HeaderMap) -> String {
@@ -287,11 +291,7 @@ mod tests {
     #[test]
     fn credentials_follow_go_byte_length_order() {
         // 5 CJK characters are 15 UTF-8 bytes, so Go's `len > 12` rejects them.
-        let long = request(
-            "管理员管理员管理员管理员管理员",
-            "secret123",
-            "secret123",
-        );
+        let long = request("管理员管理员管理员管理员管理员", "secret123", "secret123");
         assert_eq!(
             validate_credentials(&long, false),
             Some("setup.username_too_long")

@@ -88,6 +88,31 @@ fn build_router(state: AppState) -> Router {
                 crate::setup_http::setup_body_limit,
             )),
     );
+    // `/api/user/self`：Go `UserAuth` → handler（该路由不挂 DisableCache）。
+    let self_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/self", get(crate::self_http::self_user))
+            .route_layer(middleware::from_fn_with_state(
+                self_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // `/api/user/token`：Go `UserAuth` → CriticalRateLimit → 用户维度限流 →
+    // DisableCache → handler。用户维度限流尚未移植；handler 自写缓存头。
+    let token_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/token", get(crate::self_http::access_token))
+            .route_layer(middleware::from_fn_with_state(
+                token_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                token_state,
+                crate::auth::user_auth,
+            )),
+    );
     // 登录路由：Go 顺序 CriticalRateLimit → DisableCache → 匿名体上限 → handler。
     // 中间件依赖 AppState，必须用 from_fn_with_state 才能在 with_state 之前布层。
     let login_state = state.clone();
@@ -359,6 +384,29 @@ pub(crate) fn request_ip(
         forwarded_for.as_deref(),
         real_ip.as_deref(),
     )
+}
+
+/// Go `CriticalRateLimit`（mark "CT"）：仅做限流，429/500 都在
+/// DisableCache 之前产生，因此响应不带缓存头。
+async fn critical_guard(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0);
+    let ip = request_ip(&state, request.headers(), peer);
+    match state.check_rate_limit("CT", &ip, now_seconds()).await {
+        Ok(None) => next.run(request).await,
+        Ok(Some(retry_after)) => {
+            let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+            if retry_after > 0
+                && let Ok(value) = HeaderValue::from_str(&retry_after.to_string())
+            {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+            response
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// refresh/logout 的保护链，复刻 Go 注册顺序：

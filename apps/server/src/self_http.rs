@@ -82,7 +82,7 @@ pub async fn self_user(
                 category = crate::database_error_class(&error),
                 "self permission load failed; denying all permissions"
             );
-            denied_permissions()
+            denied_permissions(auth_user.0.role as i32)
         }
     };
     match self_user_body(profile, permissions, state.quota_display()) {
@@ -296,7 +296,7 @@ mod tests {
     fn self_body_flattens_profile_and_keeps_permissions_separate() {
         let body = self_user_body(
             profile(),
-            denied_permissions(),
+            denied_permissions(1),
             QuotaDisplaySettings {
                 quota_per_unit: 500_000.0,
                 kind: QuotaDisplayKind::Usd,
