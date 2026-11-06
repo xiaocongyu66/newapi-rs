@@ -358,12 +358,15 @@ async fn successful_password_login_creates_session_and_audit_log() {
     assert_eq!(refresh_sid, sid);
     let expected_refresh_hash = AuthKeys::new(SECRET).refresh_hash(refresh_secret);
 
-    let cache_control = headers
-        .get(header::CACHE_CONTROL)
-        .expect("login responses are non-cacheable")
-        .to_str()
-        .expect("cache-control is ASCII");
-    assert!(cache_control.contains("no-store"));
+    // Go `setAuthNoStore` 覆盖 DisableCache 的完整串：成功响应必须是精确的
+    // no-store，且 DisableCache 的 Pragma/Expires 仍然存在。
+    assert_eq!(
+        headers[header::CACHE_CONTROL],
+        "no-store",
+        "handler setAuthNoStore must override the DisableCache value"
+    );
+    assert_eq!(headers[header::PRAGMA], "no-cache");
+    assert_eq!(headers[header::EXPIRES], "0");
 
     let pool = sqlite_pool(&db);
     let sessions: Vec<SessionRow> = sqlx::query_as(SELECT_SESSIONS)
