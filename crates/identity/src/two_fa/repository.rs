@@ -1,4 +1,4 @@
-//! 登录路径使用的 2FA 读取、TOTP/备用码校验与失败锁定。
+//! 2FA 读取、TOTP/备用码校验、失败锁定与管理端点事务。
 //!
 //! 表结构严格对齐 Go `identity.TwoFA` / `identity.TwoFABackupCode` 的
 //! GORM 列名：`two_fas`、`two_fa_backup_codes`。时间列在数据库中是
@@ -6,7 +6,10 @@
 
 use std::fmt;
 
+use hmac::{Hmac, Mac};
 use newapi_storage::Database;
+use rand::{RngCore, rngs::OsRng};
+use sha1::Sha1;
 use sqlx::Row;
 
 use crate::crypto;
@@ -36,6 +39,14 @@ pub enum TwoFaError {
     InvalidUser,
     /// Go “更新2FA失败次数冲突，请重试”。
     AttemptsConflict,
+    /// Go `ErrTwoFAAlreadyEnabled` / “2FA已经启用”。
+    AlreadyEnabled,
+    /// Go “用户已存在2FA设置”。
+    AlreadyExists,
+    /// Go `GetUserById` 找不到待设置用户。
+    UserNotFound,
+    /// 待验证设置已不存在（Go `DeletePendingTwoFASetup` 的 ErrRecordNotFound）。
+    SetupRequired,
     /// 固定存储错误文本，绝不转述 SQLx/GORM 错误。
     Unavailable,
 }
@@ -51,6 +62,10 @@ impl fmt::Display for TwoFaError {
             Self::NotEnabled => "2FA is not enabled",
             Self::InvalidUser => "user id must not be empty",
             Self::AttemptsConflict => "2FA failed-attempt update conflict",
+            Self::AlreadyEnabled => "2FA is already enabled",
+            Self::AlreadyExists => "2FA setup already exists",
+            Self::UserNotFound => "user does not exist",
+            Self::SetupRequired => "2FA setup is required",
             Self::Unavailable => "2FA storage is unavailable",
         })
     }
@@ -78,6 +93,10 @@ impl TwoFaError {
             Self::NotEnabled => plain("twofa.not_enabled"),
             Self::InvalidUser => plain("twofa.user_id_empty"),
             Self::AttemptsConflict => plain("twofa.attempts_conflict"),
+            Self::AlreadyEnabled => plain("twofa.already_enabled"),
+            Self::AlreadyExists => plain("twofa.already_exists"),
+            Self::UserNotFound => plain("twofa.user_not_found"),
+            Self::SetupRequired => plain("twofa.setup_required"),
             // Go handler 对存储错误直接返回 err.Error()；Rust 不转述 SQL 文本。
             Self::Unavailable => plain("common.database_error"),
         }
@@ -118,6 +137,140 @@ impl fmt::Debug for TwoFa {
             .field("last_used_at", &self.last_used_at)
             .finish()
     }
+}
+
+/// Go `common.BackupCodeCount`。
+pub const BACKUP_CODE_COUNT: usize = 4;
+/// Go `common.BackupCodeLength`（不含 `XXXX-XXXX` 分隔符）。
+pub const BACKUP_CODE_LENGTH: usize = 8;
+/// Go `common.Get2FAIssuer()` 默认值（`common.SystemName`）。
+///
+/// `SystemName` option 尚未进入 catalog 快照；这里使用 Go 的编译期默认值，
+/// 与 `apps/server/src/status.rs` 的 `DEFAULT_SYSTEM_NAME` 保持一致。
+pub const TWO_FA_ISSUER: &str = "New API";
+
+const TOTP_PERIOD_SECONDS: i64 = 30;
+const TOTP_MODULUS: u32 = 1_000_000;
+const BACKUP_CODE_CHARSET: &[u8; 36] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const BASE32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/// Go `common.GenerateTOTPSecret`：20 字节 CSPRNG 密钥的 base32（无 padding）。
+///
+/// pquerna/otp `totp.Generate` 的默认 `SecretSize` 为 20；返回 `None` 表示
+/// 操作系统随机源不可用，由调用方映射为固定的生成失败文案。
+pub fn generate_totp_secret() -> Option<String> {
+    let mut bytes = [0u8; 20];
+    OsRng.try_fill_bytes(&mut bytes).ok()?;
+    Some(base32_encode(&bytes))
+}
+
+/// Go `common.GenerateBackupCodes`：4 个 `XXXX-XXXX`（A-Z0-9）备用码。
+pub fn generate_backup_codes() -> Option<Vec<String>> {
+    let mut codes = Vec::with_capacity(BACKUP_CODE_COUNT);
+    for _ in 0..BACKUP_CODE_COUNT {
+        let mut raw = [0u8; BACKUP_CODE_LENGTH];
+        for slot in &mut raw {
+            let mut byte = [0u8; 1];
+            OsRng.try_fill_bytes(&mut byte).ok()?;
+            // Go 对单个随机字节取模；这里保持同一分布。
+            *slot = BACKUP_CODE_CHARSET[usize::from(byte[0]) % BACKUP_CODE_CHARSET.len()];
+        }
+        let text = std::str::from_utf8(&raw).ok()?;
+        codes.push(format!("{}-{}", &text[..4], &text[4..]));
+    }
+    Some(codes)
+}
+
+/// Go `common.GenerateQRCodeData` 的逐字节拼接：`otpauth://totp/{issuer}:{username} ({issuer})?secret=...`
+/// ——Go 不做 URL 编码，因此这里也不编码。
+pub fn generate_qr_code_data(secret: &str, username: &str) -> String {
+    let account = format!("{username} ({TWO_FA_ISSUER})");
+    format!(
+        "otpauth://totp/{TWO_FA_ISSUER}:{account}?secret={secret}&issuer={TWO_FA_ISSUER}&digits=6&period=30"
+    )
+}
+
+/// 确定性 TOTP 投影（RFC 4226 截断，30 秒周期），用于测试与运维工具。
+///
+/// 生产校验始终走 [`validate_totp_code`]（含 ±1 步窗口）；本函数只返回
+/// `now` 对应时间步的六位码，输入非法时返回 `None`。
+pub fn totp_code_at(secret: &str, now: i64) -> Option<String> {
+    if now < 0 {
+        return None;
+    }
+    let key = decode_secret_base32(secret)?;
+    let counter = u64::try_from(now / TOTP_PERIOD_SECONDS).ok()?;
+    let mut mac = Hmac::<Sha1>::new_from_slice(&key).ok()?;
+    mac.update(&counter.to_be_bytes());
+    let digest = mac.finalize().into_bytes();
+    let offset = usize::from(digest[19] & 0x0f);
+    let binary = (u32::from(digest[offset] & 0x7f) << 24)
+        | (u32::from(digest[offset + 1]) << 16)
+        | (u32::from(digest[offset + 2]) << 8)
+        | u32::from(digest[offset + 3]);
+    Some(format!("{:06}", binary % TOTP_MODULUS))
+}
+
+fn base32_encode(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity((bytes.len() * 8).div_ceil(5));
+    let mut buffer: u32 = 0;
+    let mut bits: u32 = 0;
+    for byte in bytes {
+        buffer = (buffer << 8) | u32::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            output.push(BASE32_ALPHABET[((buffer >> bits) & 0x1f) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        output.push(BASE32_ALPHABET[((buffer << (5 - bits)) & 0x1f) as usize] as char);
+    }
+    output
+}
+
+// 与 `crate::two_fa::totp` 的私有解码器语义一致：大小写不敏感、无 padding、
+// 忽略 `\r`/`\n`，长度余数 1/3/6 非法。
+fn decode_secret_base32(secret: &str) -> Option<Vec<u8>> {
+    let secret = secret.trim();
+    let mut output = Vec::with_capacity(secret.len() * 5 / 8);
+    let mut buffer: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut symbols: usize = 0;
+    for byte in secret.bytes() {
+        if byte == b'\r' || byte == b'\n' {
+            continue;
+        }
+        let value = match byte.to_ascii_uppercase() {
+            b'A'..=b'Z' => byte.to_ascii_uppercase() - b'A',
+            b'2'..=b'7' => byte - b'2' + 26,
+            _ => return None,
+        };
+        buffer = (buffer << 5) | u32::from(value);
+        bits += 5;
+        symbols += 1;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((buffer >> bits) as u8);
+            buffer &= (1u32 << bits) - 1;
+        }
+    }
+    match symbols % 8 {
+        1 | 3 | 6 => None,
+        _ => Some(output),
+    }
+}
+
+fn hash_backup_codes(codes: &[String]) -> Result<Vec<String>, TwoFaError> {
+    codes
+        .iter()
+        .map(|code| {
+            let normalized = normalize_backup_code(code).ok_or(TwoFaError::Unavailable)?;
+            crypto::hash_password(normalized.as_bytes())
+                .map(|hash| hash.expose_secret().to_owned())
+                .map_err(|_| TwoFaError::Unavailable)
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -273,6 +426,428 @@ impl TwoFaRepository {
         Ok(())
     }
 
+    /// Go `GetUserById` 中本切片所需的唯一列；未软删除的用户才可见。
+    pub async fn username(&self, user_id: i64) -> Result<Option<String>, TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        match &self.database {
+            Database::Sqlite(pool) => sqlx::query_scalar::<_, String>(SELECT_USERNAME)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|_| TwoFaError::Unavailable),
+            Database::Postgres(pool) => sqlx::query_scalar::<_, String>(SELECT_USERNAME)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|_| TwoFaError::Unavailable),
+        }
+    }
+
+    /// Go `DeletePendingTwoFASetup`：仅删除 `is_enabled=false` 的记录；备用码与
+    /// 主记录均 Unscoped 硬删除。
+    pub async fn delete_pending_setup(&self, user_id: i64) -> Result<(), TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        match &self.database {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id(&mut *tx, user_id, false).await?;
+                let Some(id) = id else {
+                    return Err(TwoFaError::SetupRequired);
+                };
+                hard_delete_backup_codes(&mut *tx, user_id).await?;
+                sqlx::query(HARD_DELETE_FACTOR_BY_ID)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(())
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id_locked(&mut *tx, user_id, false).await?;
+                let Some(id) = id else {
+                    return Err(TwoFaError::SetupRequired);
+                };
+                hard_delete_backup_codes_pg(&mut *tx, user_id).await?;
+                sqlx::query(HARD_DELETE_FACTOR_BY_ID)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Go `CreatePendingTwoFASetup`：先确认用户存在且没有既有记录（含软删除），
+    /// 再写入 `is_enabled=false` 的待验证记录。
+    pub async fn create_pending_setup(
+        &self,
+        user_id: i64,
+        secret: &str,
+        now: i64,
+    ) -> Result<(), TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        match &self.database {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let existing = sqlx::query_scalar::<_, i64>(SELECT_ANY_FACTOR_ID)
+                    .bind(user_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                if existing.is_some() {
+                    return Err(TwoFaError::AlreadyExists);
+                }
+                let user = sqlx::query_scalar::<_, String>(SELECT_USERNAME)
+                    .bind(user_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                if user.is_none() {
+                    return Err(TwoFaError::UserNotFound);
+                }
+                sqlx::query(INSERT_PENDING_SQLITE)
+                    .bind(user_id)
+                    .bind(secret)
+                    .bind(false)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(())
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let existing = sqlx::query_scalar::<_, i64>(SELECT_ANY_FACTOR_ID)
+                    .bind(user_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                if existing.is_some() {
+                    return Err(TwoFaError::AlreadyExists);
+                }
+                let user = sqlx::query_scalar::<_, String>(SELECT_USERNAME)
+                    .bind(user_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                if user.is_none() {
+                    return Err(TwoFaError::UserNotFound);
+                }
+                sqlx::query(INSERT_PENDING_POSTGRES)
+                    .bind(user_id)
+                    .bind(secret)
+                    .bind(false)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Go `CreatePendingTwoFASetupBackupCodes`：锁定待验证记录后软删除旧码，
+    /// 再写入新码（bcrypt cost 10）。
+    pub async fn create_pending_backup_codes(
+        &self,
+        user_id: i64,
+        codes: &[String],
+        now: i64,
+    ) -> Result<(), TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        let hashes = hash_backup_codes(codes)?;
+        match &self.database {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let pending = select_factor_id(&mut *tx, user_id, false).await?;
+                if pending.is_none() {
+                    return Err(TwoFaError::SetupRequired);
+                }
+                sqlx::query(SOFT_DELETE_CODES_SQLITE)
+                    .bind(user_id)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                insert_backup_codes_sqlite(&mut *tx, user_id, &hashes, now).await?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(())
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let pending = select_factor_id_locked(&mut *tx, user_id, false).await?;
+                if pending.is_none() {
+                    return Err(TwoFaError::SetupRequired);
+                }
+                sqlx::query(SOFT_DELETE_CODES_POSTGRES)
+                    .bind(user_id)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                insert_backup_codes_postgres(&mut *tx, user_id, &hashes, now).await?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Go `GetUnusedBackupCodeCount`：排除已使用与软删除的备用码。
+    pub async fn unused_backup_code_count(&self, user_id: i64) -> Result<i64, TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        match &self.database {
+            Database::Sqlite(pool) => sqlx::query_scalar::<_, i64>(COUNT_UNUSED_CODES)
+                .bind(user_id)
+                .bind(false)
+                .fetch_one(pool)
+                .await
+                .map_err(|_| TwoFaError::Unavailable),
+            Database::Postgres(pool) => sqlx::query_scalar::<_, i64>(COUNT_UNUSED_CODES)
+                .bind(user_id)
+                .bind(false)
+                .fetch_one(pool)
+                .await
+                .map_err(|_| TwoFaError::Unavailable),
+        }
+    }
+
+    /// Go `EnableWithAuthVersion`：同一事务内启用待验证记录并递增
+    /// `users.auth_version`，返回递增后的版本供会话轮换使用。
+    pub async fn enable_with_auth_version(
+        &self,
+        user_id: i64,
+        now: i64,
+    ) -> Result<i64, TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        match &self.database {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id(&mut *tx, user_id, false).await?;
+                let Some(id) = id else {
+                    return Err(TwoFaError::AlreadyEnabled);
+                };
+                let next = bump_auth_version_sqlite(&mut *tx, user_id).await?;
+                let affected = sqlx::query(UPDATE_ENABLE_SQLITE)
+                    .bind(true)
+                    .bind(now)
+                    .bind(id)
+                    .bind(false)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?
+                    .rows_affected();
+                if affected != 1 {
+                    return Err(TwoFaError::AlreadyEnabled);
+                }
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(next)
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id_locked(&mut *tx, user_id, false).await?;
+                let Some(id) = id else {
+                    return Err(TwoFaError::AlreadyEnabled);
+                };
+                let next = bump_auth_version_postgres(&mut *tx, user_id).await?;
+                let affected = sqlx::query(UPDATE_ENABLE_POSTGRES)
+                    .bind(true)
+                    .bind(now)
+                    .bind(id)
+                    .bind(false)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?
+                    .rows_affected();
+                if affected != 1 {
+                    return Err(TwoFaError::AlreadyEnabled);
+                }
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(next)
+            }
+        }
+    }
+
+    /// Go `DisableTwoFAWithAuthVersion`：同一事务内硬删除 2FA 记录与备用码，
+    /// 并递增 `users.auth_version`。
+    pub async fn disable_with_auth_version(
+        &self,
+        user_id: i64,
+        _now: i64,
+    ) -> Result<i64, TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        match &self.database {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id(&mut *tx, user_id, true).await?;
+                let Some(id) = id else {
+                    return Err(TwoFaError::NotEnabled);
+                };
+                let next = bump_auth_version_sqlite(&mut *tx, user_id).await?;
+                hard_delete_backup_codes(&mut *tx, user_id).await?;
+                sqlx::query(HARD_DELETE_FACTOR_BY_ID)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(next)
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id_locked(&mut *tx, user_id, true).await?;
+                let Some(id) = id else {
+                    return Err(TwoFaError::NotEnabled);
+                };
+                let next = bump_auth_version_postgres(&mut *tx, user_id).await?;
+                hard_delete_backup_codes_pg(&mut *tx, user_id).await?;
+                sqlx::query(HARD_DELETE_FACTOR_BY_ID)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(next)
+            }
+        }
+    }
+
+    /// Go `ReplaceBackupCodesWithAuthVersion`：锁定已启用记录，递增
+    /// `users.auth_version`，软删除旧码并写入新码。
+    pub async fn replace_backup_codes_with_auth_version(
+        &self,
+        user_id: i64,
+        codes: &[String],
+        now: i64,
+    ) -> Result<i64, TwoFaError> {
+        if user_id == 0 {
+            return Err(TwoFaError::InvalidUser);
+        }
+        let hashes = hash_backup_codes(codes)?;
+        match &self.database {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id(&mut *tx, user_id, true).await?;
+                if id.is_none() {
+                    return Err(TwoFaError::NotEnabled);
+                }
+                let next = bump_auth_version_sqlite(&mut *tx, user_id).await?;
+                sqlx::query(SOFT_DELETE_CODES_SQLITE)
+                    .bind(user_id)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                insert_backup_codes_sqlite(&mut *tx, user_id, &hashes, now).await?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(next)
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
+                let id = select_factor_id_locked(&mut *tx, user_id, true).await?;
+                if id.is_none() {
+                    return Err(TwoFaError::NotEnabled);
+                }
+                let next = bump_auth_version_postgres(&mut *tx, user_id).await?;
+                sqlx::query(SOFT_DELETE_CODES_POSTGRES)
+                    .bind(user_id)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                insert_backup_codes_postgres(&mut *tx, user_id, &hashes, now).await?;
+                tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
+                Ok(next)
+            }
+        }
+    }
+
+    /// Go `Disable2FA` 的校验顺序：锁定 → （数字格式合法时）TOTP → 复检锁定
+    /// → 备用码。与登录路径不同，增量失败计数/用量更新的错误在 Go 中被吞掉。
+    pub async fn validate_disable_code(
+        &self,
+        user_id: i64,
+        code: &str,
+        numeric_code: Option<&str>,
+        now: i64,
+    ) -> Result<(), TwoFaError> {
+        let mut two_fa = match self.by_user_id(user_id).await? {
+            Some(two_fa) if two_fa.is_enabled => two_fa,
+            _ => return Err(TwoFaError::NotEnabled),
+        };
+        if let Some(until) = two_fa.locked_until.filter(|until| now < *until) {
+            return Err(TwoFaError::Locked { until });
+        }
+
+        let mut verified = false;
+        if let Some(numeric) = numeric_code {
+            if validate_totp_code(&two_fa.secret, numeric, now) {
+                verified = true;
+            } else {
+                let _ = self.increment_failed_attempts(&mut two_fa, now).await;
+            }
+        }
+
+        if !verified {
+            if let Some(until) = two_fa.locked_until.filter(|until| now < *until) {
+                return Err(TwoFaError::Locked { until });
+            }
+            match self.validate_backup_code(user_id, code, now).await? {
+                true => verified = true,
+                false => {
+                    let _ = self.increment_failed_attempts(&mut two_fa, now).await;
+                    return Err(TwoFaError::Incorrect);
+                }
+            }
+        }
+
+        // Go 在成功后只记日志，不把 usage 更新错误返回给调用方。
+        let _ = self.reset_usage(two_fa.id, now).await;
+        Ok(())
+    }
+
+    /// Go `ValidateTOTPAndUpdateUsage`：仅 TOTP（备用码重新生成端点），带锁定
+    /// 与失败计数语义；计数/用量更新失败不改变响应。
+    pub async fn validate_totp_management(
+        &self,
+        user_id: i64,
+        code: &str,
+        now: i64,
+    ) -> Result<(), TwoFaError> {
+        let mut two_fa = match self.by_user_id(user_id).await? {
+            Some(two_fa) if two_fa.is_enabled => two_fa,
+            _ => return Err(TwoFaError::NotEnabled),
+        };
+        if let Some(until) = two_fa.locked_until.filter(|until| now < *until) {
+            return Err(TwoFaError::Locked { until });
+        }
+        if !validate_totp_code(&two_fa.secret, code, now) {
+            let _ = self.increment_failed_attempts(&mut two_fa, now).await;
+            return Err(TwoFaError::Incorrect);
+        }
+        let _ = self.reset_usage(two_fa.id, now).await;
+        Ok(())
+    }
+
     /// Go `IncrementFailedAttempts`：先读当前值，再以
     /// `failed_attempts` + 未锁定条件做 CAS；冲突最多重试 5 次。
     async fn increment_failed_attempts(
@@ -393,6 +968,136 @@ impl TwoFaRepository {
     }
 }
 
+async fn select_factor_id(
+    tx: &mut sqlx::SqliteConnection,
+    user_id: i64,
+    is_enabled: bool,
+) -> Result<Option<i64>, TwoFaError> {
+    sqlx::query_scalar::<_, i64>(SELECT_FACTOR_ID)
+        .bind(user_id)
+        .bind(is_enabled)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| TwoFaError::Unavailable)
+}
+
+async fn select_factor_id_locked(
+    tx: &mut sqlx::PgConnection,
+    user_id: i64,
+    is_enabled: bool,
+) -> Result<Option<i64>, TwoFaError> {
+    sqlx::query_scalar::<_, i64>(SELECT_FACTOR_ID_LOCKED)
+        .bind(user_id)
+        .bind(is_enabled)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| TwoFaError::Unavailable)
+}
+
+async fn hard_delete_backup_codes(
+    tx: &mut sqlx::SqliteConnection,
+    user_id: i64,
+) -> Result<(), TwoFaError> {
+    sqlx::query(HARD_DELETE_BACKUP_CODES)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map(|_| ())
+        .map_err(|_| TwoFaError::Unavailable)
+}
+
+async fn hard_delete_backup_codes_pg(
+    tx: &mut sqlx::PgConnection,
+    user_id: i64,
+) -> Result<(), TwoFaError> {
+    sqlx::query(HARD_DELETE_BACKUP_CODES)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map(|_| ())
+        .map_err(|_| TwoFaError::Unavailable)
+}
+
+async fn insert_backup_codes_sqlite(
+    tx: &mut sqlx::SqliteConnection,
+    user_id: i64,
+    hashes: &[String],
+    now: i64,
+) -> Result<(), TwoFaError> {
+    for hash in hashes {
+        sqlx::query(INSERT_BACKUP_CODE_SQLITE)
+            .bind(user_id)
+            .bind(hash)
+            .bind(false)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| TwoFaError::Unavailable)?;
+    }
+    Ok(())
+}
+
+async fn insert_backup_codes_postgres(
+    tx: &mut sqlx::PgConnection,
+    user_id: i64,
+    hashes: &[String],
+    now: i64,
+) -> Result<(), TwoFaError> {
+    for hash in hashes {
+        sqlx::query(INSERT_BACKUP_CODE_POSTGRES)
+            .bind(user_id)
+            .bind(hash)
+            .bind(false)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| TwoFaError::Unavailable)?;
+    }
+    Ok(())
+}
+
+// Go `IncrementUserAuthVersionWithTx`：NULL/0 旧版本从 1 起步；更新后在同一
+// 事务内读回递增后的版本。未使用 RETURNING，保持 SQLite/PostgreSQL 同一形状。
+async fn bump_auth_version_sqlite(
+    tx: &mut sqlx::SqliteConnection,
+    user_id: i64,
+) -> Result<i64, TwoFaError> {
+    let affected = sqlx::query(BUMP_AUTH_VERSION)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| TwoFaError::Unavailable)?
+        .rows_affected();
+    if affected != 1 {
+        return Err(TwoFaError::UserNotFound);
+    }
+    sqlx::query_scalar::<_, i64>(SELECT_AUTH_VERSION_UNSCOPED)
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| TwoFaError::Unavailable)
+}
+
+async fn bump_auth_version_postgres(
+    tx: &mut sqlx::PgConnection,
+    user_id: i64,
+) -> Result<i64, TwoFaError> {
+    let affected = sqlx::query(BUMP_AUTH_VERSION)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| TwoFaError::Unavailable)?
+        .rows_affected();
+    if affected != 1 {
+        return Err(TwoFaError::UserNotFound);
+    }
+    sqlx::query_scalar::<_, i64>(SELECT_AUTH_VERSION_UNSCOPED)
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| TwoFaError::Unavailable)
+}
+
 fn decode_sqlite_two_fa(row: sqlx::sqlite::SqliteRow) -> Result<TwoFa, TwoFaError> {
     Ok(TwoFa {
         id: row.try_get("id").map_err(|_| TwoFaError::Unavailable)?,
@@ -436,6 +1141,62 @@ fn decode_postgres_two_fa(row: sqlx::postgres::PgRow) -> Result<TwoFa, TwoFaErro
             .map_err(|_| TwoFaError::Unavailable)?,
     })
 }
+
+const SELECT_USERNAME: &str = "SELECT username FROM users WHERE id = $1 AND deleted_at IS NULL";
+
+const SELECT_ANY_FACTOR_ID: &str = "SELECT id FROM two_fas WHERE user_id = $1 ORDER BY id LIMIT 1";
+
+const SELECT_FACTOR_ID: &str = "SELECT id FROM two_fas \
+    WHERE user_id = $1 AND is_enabled = $2 AND deleted_at IS NULL ORDER BY id LIMIT 1";
+
+const SELECT_FACTOR_ID_LOCKED: &str = "SELECT id FROM two_fas \
+    WHERE user_id = $1 AND is_enabled = $2 AND deleted_at IS NULL ORDER BY id LIMIT 1 FOR UPDATE";
+
+const INSERT_PENDING_SQLITE: &str = "INSERT INTO two_fas \
+    (user_id, secret, is_enabled, failed_attempts, created_at, updated_at) \
+    VALUES ($1, $2, $3, 0, datetime($4, 'unixepoch'), datetime($4, 'unixepoch'))";
+
+const INSERT_PENDING_POSTGRES: &str = "INSERT INTO two_fas \
+    (user_id, secret, is_enabled, failed_attempts, created_at, updated_at) \
+    VALUES ($1, $2, $3, 0, to_timestamp($4::BIGINT), to_timestamp($4::BIGINT))";
+
+const SOFT_DELETE_CODES_SQLITE: &str = "UPDATE two_fa_backup_codes \
+    SET deleted_at = datetime($2, 'unixepoch') \
+    WHERE user_id = $1 AND deleted_at IS NULL";
+
+const SOFT_DELETE_CODES_POSTGRES: &str = "UPDATE two_fa_backup_codes \
+    SET deleted_at = to_timestamp($2::BIGINT) \
+    WHERE user_id = $1 AND deleted_at IS NULL";
+
+const HARD_DELETE_BACKUP_CODES: &str = "DELETE FROM two_fa_backup_codes WHERE user_id = $1";
+
+const HARD_DELETE_FACTOR_BY_ID: &str = "DELETE FROM two_fas WHERE id = $1";
+
+const INSERT_BACKUP_CODE_SQLITE: &str = "INSERT INTO two_fa_backup_codes \
+    (user_id, code_hash, is_used, created_at) \
+    VALUES ($1, $2, $3, datetime($4, 'unixepoch'))";
+
+const INSERT_BACKUP_CODE_POSTGRES: &str = "INSERT INTO two_fa_backup_codes \
+    (user_id, code_hash, is_used, created_at) \
+    VALUES ($1, $2, $3, to_timestamp($4::BIGINT))";
+
+const COUNT_UNUSED_CODES: &str = "SELECT COUNT(*) FROM two_fa_backup_codes \
+    WHERE user_id = $1 AND is_used = $2 AND deleted_at IS NULL";
+
+const UPDATE_ENABLE_SQLITE: &str = "UPDATE two_fas SET is_enabled = $1, failed_attempts = 0, \
+    locked_until = NULL, updated_at = datetime($2, 'unixepoch') \
+    WHERE id = $3 AND is_enabled = $4 AND deleted_at IS NULL";
+
+const UPDATE_ENABLE_POSTGRES: &str = "UPDATE two_fas SET is_enabled = $1, failed_attempts = 0, \
+    locked_until = NULL, updated_at = to_timestamp($2::BIGINT) \
+    WHERE id = $3 AND is_enabled = $4 AND deleted_at IS NULL";
+
+const BUMP_AUTH_VERSION: &str = "UPDATE users SET auth_version = \
+    CASE WHEN COALESCE(auth_version, 0) < 1 THEN 2 ELSE COALESCE(auth_version, 0) + 1 END \
+    WHERE id = $1";
+
+const SELECT_AUTH_VERSION_UNSCOPED: &str =
+    "SELECT CAST(auth_version AS BIGINT) FROM users WHERE id = $1";
 
 const SQLITE_SELECT_BY_USER: &str = "SELECT id, user_id, secret, is_enabled, failed_attempts, \
     CASE WHEN locked_until IS NULL THEN NULL ELSE CAST(strftime('%s', locked_until) AS INTEGER) END AS locked_epoch, \
