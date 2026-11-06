@@ -213,3 +213,26 @@ impl AuthService {
 - 过期 JWT 返回 `AUTH_UNAUTHORIZED`（Go 为 `AUTH_TOKEN_EXPIRED`）；`Auth-Version` 响应头未复刻；PAT token 形态为 32 位字母数字（Go 为变长 Base64）。
 - `/api/user/self/groups`、`/api/user/groups`、`/api/user/models` 未移植（依赖 group ratio 设置）。
 - 注册 `POST /api/user/register` 正在并行实现；Turnstile `siteverify` 传输层仍缺。
+
+### 8.3 2026-11-06 注册、Turnstile 传输、用户组/模型、self 更新/注销、2FA 与用户维度限流 @ `4b9c493`
+
+**证据绑定（普通 push）**
+- Rust SHA：`4b9c493279…`（`migration/p2`），P1 run `42222126442`，attempt `1`，**success**
+- pg14（14.24）/ pg17（17.11）：fmt/check/clippy exit 0；workspace-tests **354 passed / 0 failed**；session_cache 9/0；catalog 契约 3/3；identity 10（sqlite）/ 9（postgres）passed
+- 证据目录：`/tmp/p1-evidence-4b9c/`
+
+**本切片交付**
+- `POST /api/user/register`（`register_http.rs` + `registration.rs`）：开关顺序、Go v10 校验文案、邮箱验证分支、软删用户名占用、邀请码、创建默认字段、双后端契约测试。
+- Turnstile `siteverify` 传输层（`turnstile.rs`）：`reqwest 0.13.5`（探针基线）+ `rustls` aws-lc provider；form `secret/response/remoteip`；传输/解码失败 fail-closed；登录与注册 guard 接入；测试用注入 verifier 保持确定性。
+- `GET /api/user/groups`（匿名）、`GET /api/user/self/groups`、`GET /api/user/models`（`groups_http.rs` + `catalog/group_settings`）：`GroupRatio`/`UserUsableGroups`/`GroupGroupRatio` 快照与默认值、`auto` 字符串比例、用户组自追加；models 暂为空数组（等价 resolver 未注册）。
+- `PUT/DELETE /api/user/self`（`self_http.rs` + `users.rs`）：侧栏/语言优先分支、占位密码回滚、旧密码校验、`auth_version` 递增与会话轮换、软删除、root 保护；PUT 挂 CT + handler 写 DisableCache，DELETE 仅 UserAuth。
+- 2FA 管理（`twofa_http.rs` + `two_fa/repository.rs`）：status/setup/enable/disable/backup_codes，锁定与失败计数、4×`XXXX-XXXX` 备用码、otpauth URI、`auth_version+1` 与会话轮换。
+- 用户维度关键限流（`state.rs` / `limit_redis.rs` / `http.rs`）：`UserCriticalRateLimit("access-token")`，内存键 `<mark>:user:<id>`、Redis 键 `rateLimit:v2:user:<mark>:<id>`，`/api/user/token` 顺序 `UserAuth → CT → 用户限流 → handler`。
+- 验证者 `57f6947` 两处阻塞缺陷已修：`/api/status` 的 `setup` 读持久 `setups` 表；root 降级权限为 Go superuser 短路下的全 true。
+
+**契约差分（须保留记录）**
+- 注册：默认 token 生成（Go 默认关闭）、`finishInsert` 侧栏初始化与邀请人奖励、发码端点、form-urlencoded/multipart 绑定未移植。
+- models：`abilities` 解析与 `group` 查询参数选择未移植，恒返回空数组。
+- 2FA：`SystemName` 未入快照（issuer 固定 `New API`）、系统日志表写入与 `PublishUserAuthCache` 未移植、管理端 `Admin2FA*` 不在范围。
+- Turnstile：10s 超时与 64 KiB 响应上限为契约要求的安全差异；错误文案使用固定 i18n key（不泄露外部错误文本）。
+- 用户维度限流仅接入 `/api/user/token`；Go 另有 `/api/verify` 等未移植路由。
