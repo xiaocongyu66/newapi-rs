@@ -204,7 +204,7 @@ pub async fn register(State(state): State<AppState>, headers: HeaderMap, body: B
 /// 注册路由没有 `DisableCache`，因此任何拒绝都不带缓存头。
 pub async fn register_guard(
     State(state): State<AppState>,
-    mut request: Request,
+    request: Request,
     next: Next,
 ) -> Response {
     let peer = request
@@ -384,7 +384,7 @@ mod tests {
             validation_error(&request("user", &"x".repeat(21))),
             Some(field_error("Password", "max")),
         );
-        assert_eq!(validation_error(&request("user", "x".repeat(20))), None);
+        assert_eq!(validation_error(&request("user", &"x".repeat(20))), None);
     }
 
     #[test]
