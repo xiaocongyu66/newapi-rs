@@ -9,7 +9,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use newapi_identity::auth_session::{SessionAuthError, SessionView};
 use newapi_security::{OriginRequest, check_session_origin};
@@ -100,6 +100,30 @@ fn build_router(state: AppState) -> Router {
             .route_layer(middleware::from_fn_with_state(
                 register_state,
                 crate::register_http::register_guard,
+            )),
+    );
+    // `PUT /api/user/self`：Go `UserAuth → CriticalRateLimit → DisableCache →
+    // handler`（缓存头由 handler 写）；`DELETE /api/user/self` 仅 `UserAuth`。
+    let self_put_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/self", put(crate::self_http::update_self))
+            .route_layer(middleware::from_fn_with_state(
+                self_put_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                self_put_state,
+                crate::auth::user_auth,
+            )),
+    );
+    let self_delete_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/self", delete(crate::self_http::delete_self))
+            .route_layer(middleware::from_fn_with_state(
+                self_delete_state,
+                crate::auth::user_auth,
             )),
     );
     // `/api/user/self/groups` 与 `/api/user/models`：Go `UserAuth` → handler。
