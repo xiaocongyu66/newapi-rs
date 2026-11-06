@@ -201,7 +201,7 @@ async fn run_contract(db: Database) {
         body["message"],
         json!("管理员关闭了通过密码进行注册，请使用第三方账户验证的形式进行注册"),
     );
-    assert_eq!(fetch_count(&db, "user"), 0);
+    assert_eq!(fetch_count(&db, "user").await, 0);
 
     set_option(&db, "PasswordRegisterEnabled", "true").await;
     let app = state(&db).await;
