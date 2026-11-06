@@ -282,6 +282,20 @@ pub async fn can(
         .can(user_id, role, permission))
 }
 
+/// 策略不可读取时的降级权限：全部拒绝。Go `Capabilities()` 从不返回错误——
+/// `e == nil` 或 `GetFilteredPolicy` 失败时每个权限判 false；普通用户的
+/// `admin_permissions` 本来就是全 false 矩阵，root/admin 降级时同样全拒绝，
+/// 与 Go `Can()` 在空 enforcer 下的行为一致。
+pub fn denied_permissions() -> crate::self_user::Permissions {
+    use crate::self_user::Permissions;
+
+    Permissions {
+        sidebar_settings: false,
+        sidebar_modules: BTreeMap::new(),
+        admin_permissions: BTreeMap::new(),
+    }
+}
+
 /// 在支持的规则编码范围内保持 Go 权限输出；不支持的编码返回错误。
 /// 仅角色与策略决定内容，不读取用户设置或额度；侧栏复用同一策略快照。
 pub async fn self_user_permissions(

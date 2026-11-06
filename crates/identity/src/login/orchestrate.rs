@@ -12,7 +12,7 @@ use crate::audit::record_login_log;
 use crate::auth_flow::{AuthFlowMatch, AuthFlowRepository, CreateAuthFlow, PURPOSE_TWO_FA_LOGIN};
 use crate::auth_session::{AuthFence, LoginInput, RefreshResult, SessionAuth, SessionAuthError};
 use crate::login::{LoginCredentialError, LoginCredentialRepository, validate_and_fill};
-use crate::policy::{CasbinRuleRepository, self_user_permissions};
+use crate::policy::{CasbinRuleRepository, denied_permissions, self_user_permissions};
 use crate::self_user::{Permissions, QuotaDisplaySettings, SelfUser, SelfUserInput, assemble};
 use crate::sessions::SessionError;
 use crate::two_fa::{TwoFaError, TwoFaRepository};
@@ -329,6 +329,9 @@ impl LoginService {
 
     /// Port of Go `setupLoginAtAuthVersion`：权威重读 → 状态与会话版本 →
     /// 签发会话 → `UpdateUserLastLoginAt` → 审计日志 → SelfUser 所需资料。
+    /// Go `Capabilities()` 从不返回错误，因此权限装配失败（策略表损坏或不可
+    /// 读）按 Go 的空 enforcer 语义降级为全拒绝权限，签发会话后的登录始终
+    /// 成功，不会退化为 `LoginFailure::Storage`。
     async fn complete(
         &self,
         expected_auth_version: Option<i64>,
@@ -387,9 +390,19 @@ impl LoginService {
             now,
         )
         .await;
+        // Go `Capabilities()` 从不返回错误：enforcer 为 nil 或策略读取失败时
+        // 每个权限判 false，登录仍然成功。Rust 同样把策略加载失败降级为全
+        // 拒绝权限，绝不让"会话已签发"的响应变成错误。
         let permissions = self_user_permissions(&self.policy, profile.id, profile.role as i32)
             .await
-            .map_err(|_| LoginFailure::Storage)?;
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    event = "permissions_load_failed",
+                    user_id = profile.id,
+                    "login permission load failed; denying all permissions"
+                );
+                denied_permissions()
+            });
         Ok(LoginSuccess {
             bundle,
             profile,
@@ -510,6 +523,71 @@ mod tests {
         // Go 对非字符串值扫描失败按零值处理。
         assert_eq!(sidebar_modules(r#"{"sidebar_modules":true}"#), "");
         assert_eq!(sidebar_modules("{}"), "");
+    }
+
+    fn fixture_profile() -> UserProfile {
+        UserProfile {
+            id: 7,
+            username: "fixture".into(),
+            display_name: "Fixture".into(),
+            role: 1,
+            status: login::USER_STATUS_ENABLED,
+            email: String::new(),
+            github_id: String::new(),
+            discord_id: String::new(),
+            oidc_id: String::new(),
+            wechat_id: String::new(),
+            telegram_id: String::new(),
+            group: "default".into(),
+            quota: 0,
+            used_quota: 0,
+            request_count: 0,
+            aff_code: String::new(),
+            aff_count: 0,
+            aff_quota: 0,
+            aff_history_quota: 0,
+            inviter_id: 0,
+            linux_do_id: String::new(),
+            setting: String::new(),
+            stripe_customer: String::new(),
+            auth_version: 1,
+        }
+    }
+
+    #[test]
+    fn denied_permissions_denies_everything_and_survives_assembly() {
+        // Go 空 enforcer 的降级形状：侧栏开关关闭、模块与 admin 矩阵全空。
+        let denied = denied_permissions();
+        assert!(!denied.sidebar_settings);
+        assert!(denied.sidebar_modules.is_empty());
+        assert!(denied.admin_permissions.is_empty());
+        assert_eq!(
+            serde_json::to_value(&denied).expect("serialize denied permissions"),
+            json!({
+                "sidebar_settings": false,
+                "sidebar_modules": {},
+                "admin_permissions": {},
+            })
+        );
+        // `assemble` 原样透传降级权限；组装层不会为角色补齐或推导任何授权。
+        let user = assemble_self_user(
+            fixture_profile(),
+            denied.clone(),
+            QuotaDisplaySettings {
+                quota_per_unit: 500_000.0,
+                kind: crate::self_user::QuotaDisplayKind::Usd,
+            },
+        );
+        assert_eq!(user.permissions, denied);
+        let serialized = serde_json::to_value(&user).expect("serialize self user");
+        assert_eq!(
+            serialized["permissions"],
+            json!({
+                "sidebar_settings": false,
+                "sidebar_modules": {},
+                "admin_permissions": {},
+            })
+        );
     }
 
     #[test]
