@@ -77,7 +77,7 @@ impl RedisRateLimiter {
 
     /// Builds the same IP key as Go's `redisIPRateLimitKey`.
     pub fn key(&self, mark: &str, client_ip: &str) -> String {
-        format!("{}:ip:{}:{}", self.namespace, mark, client_ip)
+        format!("{}:ip:{mark}:{client_ip}", self.namespace)
     }
 
     /// Records one request and decides whether it is admitted.
