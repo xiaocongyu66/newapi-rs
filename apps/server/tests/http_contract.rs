@@ -229,13 +229,7 @@ async fn failed_initial_schema_load_and_recovery() {
 #[tokio::test]
 async fn paths_methods_and_queries_have_explicit_axum_behavior() {
     let state = AppState::default();
-    for path in [
-        "/",
-        "/api",
-        "/api/",
-        "/unknown",
-        "/api/notice/",
-    ] {
+    for path in ["/", "/api", "/api/", "/unknown", "/api/notice/"] {
         assert_eq!(
             request(&state, Method::GET, path).await,
             (
