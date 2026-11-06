@@ -208,6 +208,12 @@ twofa.code_incorrect: "驗證碼或備用碼錯誤，請重試"
 twofa.locked_until: "帳戶已被鎖定，請在{{.Until}}後重試"
 twofa.attempts_conflict: "更新2FA失敗次數衝突，請重試"
 
+# Turnstile messages
+turnstile.token_empty: "Turnstile token 為空"
+turnstile.verify_failed: "Turnstile 校驗失敗，請重新整理後重試！"
+turnstile.verify_error: "Turnstile 校驗失敗，請稍後重試"
+turnstile.unavailable: "Turnstile 校驗暫時不可用，請聯絡管理員"
+
 # Setup wizard messages
 setup.already_initialized: "系統已經初始化完成"
 setup.schema_not_ready: "資料庫結構未就緒"

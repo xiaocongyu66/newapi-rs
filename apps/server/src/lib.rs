@@ -1,5 +1,6 @@
 //! P1 composition and HTTP boundary; business SQL belongs to catalog.
 pub mod auth;
+pub mod turnstile;
 mod http;
 mod state;
 
