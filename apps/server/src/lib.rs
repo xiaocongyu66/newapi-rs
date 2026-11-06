@@ -12,13 +12,13 @@ pub mod limit;
 pub mod limit_redis;
 mod login_http;
 pub mod register_http;
-pub mod twofa_http;
 pub mod request_lang;
 pub mod self_http;
 pub mod setup_http;
 mod state;
 pub mod status;
 pub mod turnstile;
+pub mod twofa_http;
 
 pub use http::{MAX_BODY_BYTES, router};
 pub use state::{AppState, RateLimitUnavailable, RateLimiter, reload_loop};

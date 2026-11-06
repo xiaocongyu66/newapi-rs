@@ -454,14 +454,14 @@ impl TwoFaRepository {
         match &self.database {
             Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id(&mut *tx, user_id, false).await?;
+                let id = select_factor_id(&mut tx, user_id, false).await?;
                 let Some(id) = id else {
                     return Err(TwoFaError::SetupRequired);
                 };
-                hard_delete_backup_codes(&mut *tx, user_id).await?;
+                hard_delete_backup_codes(&mut tx, user_id).await?;
                 sqlx::query(HARD_DELETE_FACTOR_BY_ID)
                     .bind(id)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
@@ -469,14 +469,14 @@ impl TwoFaRepository {
             }
             Database::Postgres(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id_locked(&mut *tx, user_id, false).await?;
+                let id = select_factor_id_locked(&mut tx, user_id, false).await?;
                 let Some(id) = id else {
                     return Err(TwoFaError::SetupRequired);
                 };
-                hard_delete_backup_codes_pg(&mut *tx, user_id).await?;
+                hard_delete_backup_codes_pg(&mut tx, user_id).await?;
                 sqlx::query(HARD_DELETE_FACTOR_BY_ID)
                     .bind(id)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
@@ -501,7 +501,7 @@ impl TwoFaRepository {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
                 let existing = sqlx::query_scalar::<_, i64>(SELECT_ANY_FACTOR_ID)
                     .bind(user_id)
-                    .fetch_optional(&mut *tx)
+                    .fetch_optional(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 if existing.is_some() {
@@ -509,7 +509,7 @@ impl TwoFaRepository {
                 }
                 let user = sqlx::query_scalar::<_, String>(SELECT_USERNAME)
                     .bind(user_id)
-                    .fetch_optional(&mut *tx)
+                    .fetch_optional(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 if user.is_none() {
@@ -520,7 +520,7 @@ impl TwoFaRepository {
                     .bind(secret)
                     .bind(false)
                     .bind(now)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
@@ -530,7 +530,7 @@ impl TwoFaRepository {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
                 let existing = sqlx::query_scalar::<_, i64>(SELECT_ANY_FACTOR_ID)
                     .bind(user_id)
-                    .fetch_optional(&mut *tx)
+                    .fetch_optional(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 if existing.is_some() {
@@ -538,7 +538,7 @@ impl TwoFaRepository {
                 }
                 let user = sqlx::query_scalar::<_, String>(SELECT_USERNAME)
                     .bind(user_id)
-                    .fetch_optional(&mut *tx)
+                    .fetch_optional(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 if user.is_none() {
@@ -549,7 +549,7 @@ impl TwoFaRepository {
                     .bind(secret)
                     .bind(false)
                     .bind(now)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
@@ -573,33 +573,33 @@ impl TwoFaRepository {
         match &self.database {
             Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let pending = select_factor_id(&mut *tx, user_id, false).await?;
+                let pending = select_factor_id(&mut tx, user_id, false).await?;
                 if pending.is_none() {
                     return Err(TwoFaError::SetupRequired);
                 }
                 sqlx::query(SOFT_DELETE_CODES_SQLITE)
                     .bind(user_id)
                     .bind(now)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
-                insert_backup_codes_sqlite(&mut *tx, user_id, &hashes, now).await?;
+                insert_backup_codes_sqlite(&mut tx, user_id, &hashes, now).await?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
                 Ok(())
             }
             Database::Postgres(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let pending = select_factor_id_locked(&mut *tx, user_id, false).await?;
+                let pending = select_factor_id_locked(&mut tx, user_id, false).await?;
                 if pending.is_none() {
                     return Err(TwoFaError::SetupRequired);
                 }
                 sqlx::query(SOFT_DELETE_CODES_POSTGRES)
                     .bind(user_id)
                     .bind(now)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
-                insert_backup_codes_postgres(&mut *tx, user_id, &hashes, now).await?;
+                insert_backup_codes_postgres(&mut tx, user_id, &hashes, now).await?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
                 Ok(())
             }
@@ -640,17 +640,17 @@ impl TwoFaRepository {
         match &self.database {
             Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id(&mut *tx, user_id, false).await?;
+                let id = select_factor_id(&mut tx, user_id, false).await?;
                 let Some(id) = id else {
                     return Err(TwoFaError::AlreadyEnabled);
                 };
-                let next = bump_auth_version_sqlite(&mut *tx, user_id).await?;
+                let next = bump_auth_version_sqlite(&mut tx, user_id).await?;
                 let affected = sqlx::query(UPDATE_ENABLE_SQLITE)
                     .bind(true)
                     .bind(now)
                     .bind(id)
                     .bind(false)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?
                     .rows_affected();
@@ -662,17 +662,17 @@ impl TwoFaRepository {
             }
             Database::Postgres(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id_locked(&mut *tx, user_id, false).await?;
+                let id = select_factor_id_locked(&mut tx, user_id, false).await?;
                 let Some(id) = id else {
                     return Err(TwoFaError::AlreadyEnabled);
                 };
-                let next = bump_auth_version_postgres(&mut *tx, user_id).await?;
+                let next = bump_auth_version_postgres(&mut tx, user_id).await?;
                 let affected = sqlx::query(UPDATE_ENABLE_POSTGRES)
                     .bind(true)
                     .bind(now)
                     .bind(id)
                     .bind(false)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?
                     .rows_affected();
@@ -698,15 +698,15 @@ impl TwoFaRepository {
         match &self.database {
             Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id(&mut *tx, user_id, true).await?;
+                let id = select_factor_id(&mut tx, user_id, true).await?;
                 let Some(id) = id else {
                     return Err(TwoFaError::NotEnabled);
                 };
-                let next = bump_auth_version_sqlite(&mut *tx, user_id).await?;
-                hard_delete_backup_codes(&mut *tx, user_id).await?;
+                let next = bump_auth_version_sqlite(&mut tx, user_id).await?;
+                hard_delete_backup_codes(&mut tx, user_id).await?;
                 sqlx::query(HARD_DELETE_FACTOR_BY_ID)
                     .bind(id)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
@@ -714,15 +714,15 @@ impl TwoFaRepository {
             }
             Database::Postgres(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id_locked(&mut *tx, user_id, true).await?;
+                let id = select_factor_id_locked(&mut tx, user_id, true).await?;
                 let Some(id) = id else {
                     return Err(TwoFaError::NotEnabled);
                 };
-                let next = bump_auth_version_postgres(&mut *tx, user_id).await?;
-                hard_delete_backup_codes_pg(&mut *tx, user_id).await?;
+                let next = bump_auth_version_postgres(&mut tx, user_id).await?;
+                hard_delete_backup_codes_pg(&mut tx, user_id).await?;
                 sqlx::query(HARD_DELETE_FACTOR_BY_ID)
                     .bind(id)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
@@ -746,35 +746,35 @@ impl TwoFaRepository {
         match &self.database {
             Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id(&mut *tx, user_id, true).await?;
+                let id = select_factor_id(&mut tx, user_id, true).await?;
                 if id.is_none() {
                     return Err(TwoFaError::NotEnabled);
                 }
-                let next = bump_auth_version_sqlite(&mut *tx, user_id).await?;
+                let next = bump_auth_version_sqlite(&mut tx, user_id).await?;
                 sqlx::query(SOFT_DELETE_CODES_SQLITE)
                     .bind(user_id)
                     .bind(now)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
-                insert_backup_codes_sqlite(&mut *tx, user_id, &hashes, now).await?;
+                insert_backup_codes_sqlite(&mut tx, user_id, &hashes, now).await?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
                 Ok(next)
             }
             Database::Postgres(pool) => {
                 let mut tx = pool.begin().await.map_err(|_| TwoFaError::Unavailable)?;
-                let id = select_factor_id_locked(&mut *tx, user_id, true).await?;
+                let id = select_factor_id_locked(&mut tx, user_id, true).await?;
                 if id.is_none() {
                     return Err(TwoFaError::NotEnabled);
                 }
-                let next = bump_auth_version_postgres(&mut *tx, user_id).await?;
+                let next = bump_auth_version_postgres(&mut tx, user_id).await?;
                 sqlx::query(SOFT_DELETE_CODES_POSTGRES)
                     .bind(user_id)
                     .bind(now)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(|_| TwoFaError::Unavailable)?;
-                insert_backup_codes_postgres(&mut *tx, user_id, &hashes, now).await?;
+                insert_backup_codes_postgres(&mut tx, user_id, &hashes, now).await?;
                 tx.commit().await.map_err(|_| TwoFaError::Unavailable)?;
                 Ok(next)
             }
@@ -811,12 +811,9 @@ impl TwoFaRepository {
             if let Some(until) = two_fa.locked_until.filter(|until| now < *until) {
                 return Err(TwoFaError::Locked { until });
             }
-            match self.validate_backup_code(user_id, code, now).await? {
-                true => verified = true,
-                false => {
-                    let _ = self.increment_failed_attempts(&mut two_fa, now).await;
-                    return Err(TwoFaError::Incorrect);
-                }
+            if !self.validate_backup_code(user_id, code, now).await? {
+                let _ = self.increment_failed_attempts(&mut two_fa, now).await;
+                return Err(TwoFaError::Incorrect);
             }
         }
 
@@ -976,7 +973,7 @@ async fn select_factor_id(
     sqlx::query_scalar::<_, i64>(SELECT_FACTOR_ID)
         .bind(user_id)
         .bind(is_enabled)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut tx)
         .await
         .map_err(|_| TwoFaError::Unavailable)
 }
@@ -989,7 +986,7 @@ async fn select_factor_id_locked(
     sqlx::query_scalar::<_, i64>(SELECT_FACTOR_ID_LOCKED)
         .bind(user_id)
         .bind(is_enabled)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut tx)
         .await
         .map_err(|_| TwoFaError::Unavailable)
 }
@@ -1000,7 +997,7 @@ async fn hard_delete_backup_codes(
 ) -> Result<(), TwoFaError> {
     sqlx::query(HARD_DELETE_BACKUP_CODES)
         .bind(user_id)
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map(|_| ())
         .map_err(|_| TwoFaError::Unavailable)
@@ -1012,7 +1009,7 @@ async fn hard_delete_backup_codes_pg(
 ) -> Result<(), TwoFaError> {
     sqlx::query(HARD_DELETE_BACKUP_CODES)
         .bind(user_id)
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map(|_| ())
         .map_err(|_| TwoFaError::Unavailable)
@@ -1030,7 +1027,7 @@ async fn insert_backup_codes_sqlite(
             .bind(hash)
             .bind(false)
             .bind(now)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(|_| TwoFaError::Unavailable)?;
     }
@@ -1049,7 +1046,7 @@ async fn insert_backup_codes_postgres(
             .bind(hash)
             .bind(false)
             .bind(now)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(|_| TwoFaError::Unavailable)?;
     }
@@ -1064,7 +1061,7 @@ async fn bump_auth_version_sqlite(
 ) -> Result<i64, TwoFaError> {
     let affected = sqlx::query(BUMP_AUTH_VERSION)
         .bind(user_id)
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map_err(|_| TwoFaError::Unavailable)?
         .rows_affected();
@@ -1073,7 +1070,7 @@ async fn bump_auth_version_sqlite(
     }
     sqlx::query_scalar::<_, i64>(SELECT_AUTH_VERSION_UNSCOPED)
         .bind(user_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut tx)
         .await
         .map_err(|_| TwoFaError::Unavailable)
 }
@@ -1084,7 +1081,7 @@ async fn bump_auth_version_postgres(
 ) -> Result<i64, TwoFaError> {
     let affected = sqlx::query(BUMP_AUTH_VERSION)
         .bind(user_id)
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map_err(|_| TwoFaError::Unavailable)?
         .rows_affected();
@@ -1093,7 +1090,7 @@ async fn bump_auth_version_postgres(
     }
     sqlx::query_scalar::<_, i64>(SELECT_AUTH_VERSION_UNSCOPED)
         .bind(user_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut tx)
         .await
         .map_err(|_| TwoFaError::Unavailable)
 }

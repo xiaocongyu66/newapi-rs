@@ -170,11 +170,11 @@ impl newapi_server::turnstile::Verifier for FixedVerifier {
 
 fn register_request_with_verdict(query: &str, verdict: bool) -> Request<Body> {
     let mut request = register_request_with_query(query);
-    request.extensions_mut().insert(
-        newapi_server::turnstile::InjectedVerifier(std::sync::Arc::new(FixedVerifier(
-            verdict,
-        ))),
-    );
+    request
+        .extensions_mut()
+        .insert(newapi_server::turnstile::InjectedVerifier(
+            std::sync::Arc::new(FixedVerifier(verdict)),
+        ));
     request
 }
 
@@ -486,13 +486,14 @@ async fn run_contract(db: Database) {
 
     // A rejecting siteverify yields Go's fixed failure, never a pass.
     let body = body_json(
-        send(&app, register_request_with_verdict("turnstile=token", false)).await,
+        send(
+            &app,
+            register_request_with_verdict("turnstile=token", false),
+        )
+        .await,
     )
     .await;
-    assert_eq!(
-        body["message"],
-        json!("Turnstile 校验失败，请刷新重试！")
-    );
+    assert_eq!(body["message"], json!("Turnstile 校验失败，请刷新重试！"));
     set_option(&db, "TurnstileCheckEnabled", "false").await;
 
     // ---- CriticalRateLimit("CT") ----
