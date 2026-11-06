@@ -146,3 +146,15 @@ impl AuthService {
 - 密码从 B`common/crypto.go` 在获批远程Go fixture任务生成，结合 B`identity/store_users_update_test.go:242`无密码账户、`store_users_lifecycle_test.go`重置版本失效；新增bcrypt版本/超长/NUL/Unicode、软删除、同email歧义用例，不能声称现有测试已覆盖这些边界。
 
 远程验收必须实际连接SQLite、PG及Redis，覆盖同一cookie并发刷新、refresh与logout竞争、过宽限replay与并发轮换、fence失败/DB回滚/终态写失败、用户禁用/降权后的旧access、跨用户撤销；断言HTTP JSON/头/cookie和DB最终状态。绑定集成SHA、Actions run ID、退出码、测试/跳过数，独立复核后才PASS。本轮没有任何运行结果，也没有复制真实用户凭据。
+
+## 8. 2026-11-06 登录垂直切片状态（未验收）
+
+**已实现并待远程 CI 验证**：`POST /api/user/login`、`POST /api/user/login/2fa` 编排（密码/2FA pending/2FA 校验/会话签发/最后登录/登录审计/SelfUser 装配）、额度展示快照、`UserProfile.auth_version`、关键路径滑动窗口限流（内存）、可信代理客户端 IP、匿名体上限与 DisableCache 三头、Accept-Language 语言解析、登录/2FA 文案 key。
+
+**明确未完成，不得视为本切片通过**：
+- Turnstile 目前只有纯决策层；工作区没有 HTTP client 依赖，**未实现向 Cloudflare 的 `siteverify` 请求**。开关启用时登录返回 503 `turnstile.unavailable`，不会静默放行；补齐传输层前不得宣称 Turnstile 可用。
+- 限流仅有进程内实现；配置 Redis 时 Go 走 Redis 固定窗口，Rust 尚未实现，多实例下限流不共享。
+- `/api/user/auth/refresh|logout`、`/api/user/sessions*` 仍不在生产 router 注册（既有切片遗留）。
+- 注册、验证码、密码重置、初始化、API Key、`/api/status` 等 P2 项未在本切片。
+
+**验收前置**：远程 Actions 的 fmt/check/clippy/test 全绿且实际连接 SQLite、PostgreSQL 与 Redis；登录 HTTP 契约测试覆盖成功、2FA pending、非法参数、禁用账号、存储故障、限流 429、体上限 413、DisableCache/Cookie 头；独立 verification 复核后更新本节。

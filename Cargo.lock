@@ -1070,6 +1070,7 @@ name = "newapi-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "newapi-billing",
  "newapi-catalog",
  "newapi-config",
  "newapi-i18n",
@@ -1077,6 +1078,7 @@ dependencies = [
  "newapi-security",
  "newapi-storage",
  "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tower",

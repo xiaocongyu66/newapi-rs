@@ -15,6 +15,7 @@ tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "
 tower = { version = "=0.5.3", features = ["util", "timeout", "limit"] }
 tower-http = { version = "=0.7.1", features = ["trace", "cors", "request-id", "limit"] }
 serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
 serde_yaml = "0.9.34"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
@@ -25,3 +26,4 @@ newapi-catalog = { path = "crates/catalog" }
 newapi-security = { path = "crates/security" }
 newapi-identity = { path = "crates/identity" }
 newapi-i18n = { path = "crates/i18n" }
+newapi-billing = { path = "crates/billing" }

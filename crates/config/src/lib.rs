@@ -16,6 +16,11 @@ pub struct Config {
     pub critical_rate_limit_enabled: bool,
     pub critical_rate_limit_requests: i64,
     pub critical_rate_limit_duration_seconds: i64,
+    /// 原样保留 `TRUSTED_PROXIES`；解析（默认 CIDR 与 `none`）在
+    /// `newapi_security::client_ip`，解析失败必须终止启动。
+    pub trusted_proxies: Option<String>,
+    /// `ANONYMOUS_REQUEST_BODY_LIMIT_KB`；负数回退默认 512KB。
+    pub anonymous_request_body_limit_kb: i64,
 }
 
 /// `secure` 对应原 `SESSION_COOKIE_SECURE`；启用时来源列表非空。
@@ -133,6 +138,9 @@ impl Config {
             1_200,
             i64::MAX as u64,
         )? as i64;
+        // Go `GetEnvOrDefault`：未设置或空值用默认，非法数值同样回退默认并告警。
+        let anonymous_request_body_limit_kb =
+            integer_with_default(lookup("ANONYMOUS_REQUEST_BODY_LIMIT_KB")?, 512);
         Ok(Self {
             dsn,
             session_secret,
@@ -143,6 +151,8 @@ impl Config {
             critical_rate_limit_enabled,
             critical_rate_limit_requests,
             critical_rate_limit_duration_seconds,
+            trusted_proxies: lookup("TRUSTED_PROXIES")?,
+            anonymous_request_body_limit_kb,
         })
     }
 
@@ -226,6 +236,15 @@ fn bool_with_default(value: Option<String>, default: bool) -> bool {
         Some(raw) if TRUE_TOKENS.contains(&raw) => true,
         Some(raw) if FALSE_TOKENS.contains(&raw) => false,
         Some(_) => default,
+    }
+}
+
+/// 对齐 Go `GetEnvOrDefault`（int）：空值/非法值都回退默认，负数原样保留
+/// （业务层再按各自规则处理，例如请求体上限的负数回退）。
+fn integer_with_default(value: Option<String>, default: i64) -> i64 {
+    match value {
+        Some(raw) if !raw.is_empty() => raw.parse().unwrap_or(default),
+        _ => default,
     }
 }
 
@@ -464,6 +483,54 @@ mod tests {
             let error = config(&[(name, value)]).err().unwrap();
             assert_eq!(error.to_string(), format!("invalid {name} configuration"));
         }
+    }
+
+    #[test]
+    fn anonymous_body_limit_follows_go_get_env_or_default() {
+        assert_eq!(config(&[]).unwrap().anonymous_request_body_limit_kb, 512);
+        assert_eq!(
+            config(&[("ANONYMOUS_REQUEST_BODY_LIMIT_KB", "64")])
+                .unwrap()
+                .anonymous_request_body_limit_kb,
+            64
+        );
+        // Go keeps negatives; the byte-limit helper falls back to 512KB.
+        assert_eq!(
+            config(&[("ANONYMOUS_REQUEST_BODY_LIMIT_KB", "-1")])
+                .unwrap()
+                .anonymous_request_body_limit_kb,
+            -1
+        );
+        // Empty and unparseable values both take the default, never fail startup.
+        for value in ["", "abc", "1.5", " 64"] {
+            assert_eq!(
+                config(&[("ANONYMOUS_REQUEST_BODY_LIMIT_KB", value)])
+                    .unwrap()
+                    .anonymous_request_body_limit_kb,
+                512,
+                "value {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trusted_proxies_are_preserved_for_security_parsing() {
+        assert_eq!(config(&[]).unwrap().trusted_proxies, None);
+        assert_eq!(
+            config(&[("TRUSTED_PROXIES", "none")])
+                .unwrap()
+                .trusted_proxies
+                .as_deref(),
+            Some("none")
+        );
+        // An empty value is retained here; the parser maps it to the default list.
+        assert_eq!(
+            config(&[("TRUSTED_PROXIES", "")])
+                .unwrap()
+                .trusted_proxies
+                .as_deref(),
+            Some("")
+        );
     }
 
     #[test]

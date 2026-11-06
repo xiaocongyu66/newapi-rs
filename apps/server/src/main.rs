@@ -84,8 +84,33 @@ async fn run() -> Result<(), ()> {
         },
         None => AuthFence::Disabled(NoCache::explicitly_disabled()),
     };
+    // 可信代理配置非法时必须终止启动，与 Go 一致；空值使用默认内网列表。
+    let proxy_policy = match newapi_security::client_ip::ProxyPolicy::parse_trusted_proxies(
+        config.trusted_proxies.as_deref(),
+    ) {
+        Ok(policy) => policy,
+        Err(_) => {
+            tracing::error!(
+                variable = "TRUSTED_PROXIES",
+                "invalid trusted proxy configuration"
+            );
+            db.close().await;
+            return Err(());
+        }
+    };
     let auth = SessionAuth::with_fence(db.clone(), AuthKeys::new(&secret), fence);
-    let state = initial.bind_auth(Arc::new(auth), config.session_cookie.clone());
+    let state = initial
+        .bind_auth(Arc::new(auth), config.session_cookie.clone())
+        .bind_runtime(db.clone(), &secret)
+        .bind_transport(
+            proxy_policy,
+            newapi_server::limit::RateLimitSettings {
+                enabled: config.critical_rate_limit_enabled,
+                requests: config.critical_rate_limit_requests,
+                window_seconds: config.critical_rate_limit_duration_seconds,
+            },
+            config.anonymous_request_body_limit_kb,
+        );
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {
         Ok(listener) => listener,
         Err(_) => {
@@ -105,7 +130,11 @@ async fn run() -> Result<(), ()> {
     let signal_tx = shutdown_tx.clone();
     let signal_state = state.clone();
     tracing::info!(port = config.port, "server listening");
-    let result = axum::serve(listener, router(state.clone()))
+    // ConnectInfo 提供 peer 地址；可信代理链据此决定真实客户端 IP。
+    let result = axum::serve(
+        listener,
+        router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             signal_state.mark_not_ready();

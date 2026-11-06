@@ -74,6 +74,13 @@ fn build_router(state: AppState, session_routes: bool) -> Router {
         .route("/api/privacy-policy", get(privacy_policy))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready));
+    // 登录路由：Go 顺序 CriticalRateLimit → DisableCache → 匿名体上限 → handler。
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/login", post(crate::login_http::login))
+            .route("/api/user/login/2fa", post(crate::login_http::login_two_fa))
+            .route_layer(middleware::from_fn(crate::login_http::login_guard)),
+    );
     // 完整响应与保护链尚未就绪；生产入口不会注册会话路由。
     let app = if session_routes {
         app.route("/api/user/auth/refresh", post(refresh))
@@ -126,7 +133,7 @@ async fn ready(State(state): State<AppState>) -> Response {
 }
 
 #[derive(Serialize)]
-struct SessionBody {
+pub(crate) struct SessionBody {
     sid: String,
     current: bool,
     login_method: String,
@@ -214,7 +221,7 @@ fn auth_failure(status: StatusCode, code: &'static str) -> Response {
         .into_response()
 }
 
-fn now_seconds() -> i64 {
+pub(crate) fn now_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_secs() as i64)
@@ -283,7 +290,7 @@ fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
     .is_ok()
 }
 
-fn set_cookie(response: &mut Response, value: &str, max_age: i64, secure: bool) {
+pub(crate) fn set_cookie(response: &mut Response, value: &str, max_age: i64, secure: bool) {
     let mut cookie = format!(
         "{REFRESH_COOKIE}={value}; Path={REFRESH_COOKIE_PATH}; Max-Age={}; HttpOnly; SameSite=Strict",
         max_age.max(1)
@@ -654,20 +661,47 @@ async fn method_not_allowed() -> Response {
 /// Do not use the default TraceLayer span: it records the URI, including query
 /// credentials. Never trust or log an incoming request-id/header/body either.
 async fn boundary(request: Request, next: Next) -> Response {
-    boundary_with_timeout(request, next, Duration::from_secs(30)).await
+    // 登录路由的体上限由 login_guard 按 Go 顺序处理（并带 no-cache 头），
+    // 这里不预缓冲，否则会先按 64KB 截断。
+    if is_login_path(request.uri().path()) {
+        return boundary_inner(request, next, Duration::from_secs(30), None).await;
+    }
+    boundary_inner(
+        request,
+        next,
+        Duration::from_secs(30),
+        Some(MAX_BODY_BYTES),
+    )
+    .await
+}
+
+fn is_login_path(path: &str) -> bool {
+    matches!(path, "/api/user/login" | "/api/user/login/2fa")
 }
 
 // 测试可注入短超时，无需等待生产环境的三十秒期限。
 async fn boundary_with_timeout(request: Request, next: Next, timeout: Duration) -> Response {
+    boundary_inner(request, next, timeout, Some(MAX_BODY_BYTES)).await
+}
+
+async fn boundary_inner(
+    request: Request,
+    next: Next,
+    timeout: Duration,
+    buffer_limit: Option<usize>,
+) -> Response {
     let is_head = request.method() == Method::HEAD;
     let id = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     // A Tokio task boundary catches unwinding handler panics without an extra
     // dependency. main installs a hook that never emits the panic payload.
     let mut task = tokio::spawn(async move {
+        let Some(limit) = buffer_limit else {
+            return next.run(request).await;
+        };
         let (parts, body) = request.into_parts();
         // Read a bounded body even for GET and fallbacks: extractor-only limits
         // otherwise do not protect endpoints that never extract their body.
-        match to_bytes(body, MAX_BODY_BYTES).await {
+        match to_bytes(body, limit).await {
             Ok(bytes) => {
                 next.run(Request::from_parts(parts, Body::from(bytes)))
                     .await
