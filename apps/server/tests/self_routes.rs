@@ -410,11 +410,17 @@ async fn run_contract(db: Database) {
     // Invalid, tampered and expired dashboard tokens are all 401.
     let response = send(&app, "/api/user/self", Some("Bearer not-a-jwt")).await;
     assert_auth_failure(response, StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED").await;
-    // Flip the final signature character deterministically while keeping the
-    // three-segment dashboard marker so this exercises the internal JWT path.
+    // Flip the first signature character. The last base64url character can
+    // carry only padding bits, so changing it may decode to the same bytes and
+    // leave the signature valid; the first signature character always changes
+    // the message MAC.
     let mut tampered = token;
-    let last = tampered.pop().expect("non-empty JWT");
-    tampered.push(if last == 'A' { 'B' } else { 'A' });
+    let signature_start = tampered.rfind('.').expect("three-segment JWT") + 1;
+    let original = tampered.as_bytes()[signature_start] as char;
+    tampered.replace_range(
+        signature_start..signature_start + 1,
+        &(if original == 'A' { 'B' } else { 'A' }).to_string(),
+    );
     let response = send(&app, "/api/user/self", Some(&format!("Bearer {tampered}"))).await;
     assert_auth_failure(response, StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED").await;
     let expired = jwt("sid-expired", 1, 1, issued_at - 2_000);
