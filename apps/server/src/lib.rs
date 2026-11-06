@@ -3,6 +3,7 @@ pub mod auth;
 pub mod boundary_mw;
 mod http;
 pub mod limit;
+pub mod limit_redis;
 mod login_http;
 pub mod request_lang;
 mod state;

@@ -20,6 +20,7 @@ newapi-catalog.workspace = true
 newapi-identity.workspace = true
 newapi-i18n.workspace = true
 newapi-security.workspace = true
+redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp", "script"] }
 
 [dev-dependencies]
 tower.workspace = true
