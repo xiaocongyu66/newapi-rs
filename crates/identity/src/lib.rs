@@ -6,6 +6,7 @@ pub mod auth_flow;
 pub mod auth_session;
 pub mod crypto;
 pub mod login;
+pub mod password_reset;
 pub mod policy;
 pub mod registration;
 pub mod self_user;
