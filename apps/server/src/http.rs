@@ -95,7 +95,10 @@ fn build_router(state: AppState) -> Router {
         Router::new()
             .route("/api/user/auth/refresh", post(refresh))
             .route("/api/user/auth/logout", post(logout))
-            .route_layer(middleware::from_fn_with_state(mutation_state, session_mutation_guard)),
+            .route_layer(middleware::from_fn_with_state(
+                mutation_state,
+                session_mutation_guard,
+            )),
     );
     // sessions 读端点：Go 顺序 UserAuth → DisableCache，不参与关键路径限流。
     let read_state = state.clone();
@@ -107,7 +110,10 @@ fn build_router(state: AppState) -> Router {
                 "/api/user/sessions/revoke-others",
                 post(revoke_other_sessions),
             )
-            .route_layer(middleware::from_fn_with_state(read_state, session_read_guard)),
+            .route_layer(middleware::from_fn_with_state(
+                read_state,
+                session_read_guard,
+            )),
     );
     app.fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -936,10 +942,7 @@ mod tests {
                     HeaderValue::from_static("https://console.example"),
                 );
             }
-            let response = build_router(state.clone())
-                .oneshot(request)
-                .await
-                .unwrap();
+            let response = build_router(state.clone()).oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
             assert!(

@@ -120,7 +120,10 @@ async fn all_session_routes_are_registered_in_production_router() {
         let status = response.status();
         assert_ne!(status, StatusCode::NOT_FOUND, "{path}");
         assert!(
-            matches!(status, StatusCode::UNAUTHORIZED | StatusCode::SERVICE_UNAVAILABLE),
+            matches!(
+                status,
+                StatusCode::UNAUTHORIZED | StatusCode::SERVICE_UNAVAILABLE
+            ),
             "{path} -> {status}"
         );
     }
