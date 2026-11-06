@@ -542,12 +542,21 @@ fn validate_numeric_code(code: &str) -> Result<String, NumericCodeError> {
     Ok(cleaned)
 }
 
-/// Go `BindJSON` + `binding:"required"` on `code`: any parse failure, missing
-/// field, wrong type or empty string is the fixed "参数错误" branch.
+/// Go `BindJSON` into the request struct: a missing, `null` or empty `code`
+/// deserializes to the zero value and state checks run first; only a
+/// non-object top level or a non-string `code` is the fixed "参数错误" branch.
+/// An entirely empty body still fails JSON decoding.
 fn parse_code(body: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(body).ok()?;
-    let code = value.get("code")?.as_str()?.to_owned();
-    (!code.is_empty()).then_some(code)
+    if value.is_null() {
+        return Some(String::new());
+    }
+    let object = value.as_object()?;
+    match object.get("code") {
+        None | Some(Value::Null) => Some(String::new()),
+        Some(Value::String(code)) => Some(code.clone()),
+        Some(_) => None,
+    }
 }
 
 fn two_fa_error_response(headers: &HeaderMap, error: TwoFaError) -> Response {
@@ -613,10 +622,13 @@ mod tests {
             parse_code(br#"{"code":"123456","flow_token":"x"}"#).as_deref(),
             Some("123456")
         );
-        assert_eq!(parse_code(br#"{"code":""}"#), None);
+        assert_eq!(parse_code(br#"{"code":""}"#), Some(String::new()));
         assert_eq!(parse_code(br#"{"code":123456}"#), None);
-        assert_eq!(parse_code(br#"{"flow_token":"x"}"#), None);
-        assert_eq!(parse_code(b"null"), None);
+        assert_eq!(
+            parse_code(br#"{"flow_token":"x"}"#),
+            Some(String::new())
+        );
+        assert_eq!(parse_code(b"null"), Some(String::new()));
         assert_eq!(parse_code(b"[]"), None);
         assert_eq!(parse_code(b""), None);
     }
