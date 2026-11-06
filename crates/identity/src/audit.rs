@@ -160,7 +160,7 @@ mod tests {
         // Go: 14 位 UTC 时间 + 9 位纳秒 + 8 hex 前缀 + 8 随机 = 39 字符。
         let id = new_request_id(1_700_000_000_123_456_789);
         assert_eq!(id.len(), 39);
-        assert!(id.starts_with("20231114222640"));
+        assert!(id.starts_with("20231114221320"));
         assert!(id[23..31].chars().all(|c| c.is_ascii_hexdigit()));
         // 前缀在进程内稳定。
         assert_eq!(
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn utc_civil_boundaries() {
         assert_eq!(utc_civil(0), (1970, 1, 1, 0, 0, 0));
-        assert_eq!(utc_civil(1_700_000_000), (2023, 11, 14, 22, 26, 40));
+        assert_eq!(utc_civil(1_700_000_000), (2023, 11, 14, 22, 13, 20));
         assert_eq!(utc_civil(-1), (1969, 12, 31, 23, 59, 59));
     }
 }
