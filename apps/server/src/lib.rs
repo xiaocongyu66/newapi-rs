@@ -11,6 +11,7 @@ pub mod limit;
 pub mod limit_redis;
 mod login_http;
 pub mod request_lang;
+pub mod self_http;
 mod state;
 pub mod status;
 pub mod turnstile;
