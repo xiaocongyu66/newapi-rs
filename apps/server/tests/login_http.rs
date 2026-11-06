@@ -9,6 +9,7 @@ use axum::{
     response::Response,
 };
 use newapi_security::client_ip::ProxyPolicy;
+use newapi_server::turnstile::{InjectedVerifier, Verifier, VerifyFuture};
 use newapi_server::{AppState, RateLimiter, limit::RateLimitSettings, router};
 use newapi_storage::Database;
 use tower::ServiceExt;
@@ -66,6 +67,20 @@ async fn body_bytes(response: Response) -> Vec<u8> {
 
 async fn body_text(response: Response) -> String {
     String::from_utf8(body_bytes(response).await).unwrap()
+}
+
+/// Keeps the route-level Turnstile check offline and deterministic.
+struct RejectingVerifier;
+
+impl Verifier for RejectingVerifier {
+    fn verify<'a>(
+        &'a self,
+        _secret: &'a str,
+        _token: &'a str,
+        _remote_ip: Option<&'a str>,
+    ) -> VerifyFuture<'a> {
+        Box::pin(async { Ok(false) })
+    }
 }
 
 fn assert_disable_cache(headers: &HeaderMap) {
@@ -218,17 +233,16 @@ async fn turnstile_enabled_gates_the_login_route_only() {
     assert!(body.contains("\"success\":false"));
     assert!(body.contains("\"message\":\"Turnstile token 为空\""));
 
-    let response = send(
-        &state,
-        addr,
-        post_with_language("/api/user/login?turnstile=opaque-token", "zh-CN"),
-    )
-    .await;
+    let mut token_request = post_with_language("/api/user/login?turnstile=opaque-token", "zh-CN");
+    token_request
+        .extensions_mut()
+        .insert(InjectedVerifier(std::sync::Arc::new(RejectingVerifier)));
+    let response = send(&state, addr, token_request).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_disable_cache(response.headers());
     let body = body_text(response).await;
     assert!(body.contains("\"success\":false"));
-    assert!(body.contains("Turnstile 校验暂不可用"));
+    assert!(body.contains("Turnstile 校验失败，请刷新重试！"));
     assert!(!body.contains("opaque-token"));
 
     let response = send(
