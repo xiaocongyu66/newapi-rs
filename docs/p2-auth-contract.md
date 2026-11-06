@@ -160,3 +160,32 @@ impl AuthService {
 - 注册、验证码、密码重置、初始化、API Key、`/api/status` 等 P2 项未在本切片。
 
 **验收前置**：上述 SHA 的 fmt/check/clippy/test 已全绿且实际连接 SQLite、PostgreSQL 14/17 与 Redis；仍需独立 verification 按精确 SHA 复核后才可标记通过，届时更新本节。
+
+### 8.1 2026-11-06 全局限流、`/api/status` 与验证者修复 @ `6fe70b2`
+
+**证据绑定（普通 push）**
+- Rust SHA：`6fe70b2d633808bda88efbef25cc9e627c410243`（`migration/p2`，`xiaocongyu66/newapi-rs`）
+- P1 Rust workspace run `42181685244`，attempt `1`，conclusion `success`
+  - https://github.com/xiaocongyu66/newapi-rs/actions/runs/42181685244/attempts/1
+  - jobs 全 success：`prepare`、`P2 fixed upstream crypto and Origin oracles`、`Fixed Go oracle and Rust process differential`、`verify (pg14, postgres@sha256:85297aa…, 14)`、`verify (pg17, postgres@sha256:748a18a…, 17)`
+- Go upstream oracle SHA：`ec542e7050932b82a2c087004ce54131ea67a836`
+- pg14：PostgreSQL 14.24 policy_ok、Redis 7.2.17 policy_ok；fmt/check/clippy exit 0；workspace-tests **302 passed / 0 failed**；`session_cache` 9/0；`origin_matches_go_oracle` 1/0
+- pg17：PostgreSQL 17.11 policy_ok；fmt/check/clippy exit 0；workspace-tests **302 passed / 0 failed**；`session_cache` 9/0
+- 实际执行的关键用例（pg14 `workspace-tests.log`）：`policy_storage_failure_degrades_to_denied_permissions`、`status_route_serves_the_envelope_over_http`、`global_limit_precedes_critical_limit`、`default_state_without_global_limiter_never_misreports_429`、`format_http_date_matches_go_rfc1123_vectors`、`successful_password_login_creates_session_and_audit_log`
+- `P0 inventory consistency` 仍是既有非验收项（exit 2 / undetermined scope items），不计入本切片通过证据。
+
+**本切片新增/修复**
+- 全局 API 限流 `GlobalAPIRateLimit`（mark `GA`，默认 `GLOBAL_API_RATE_LIMIT_ENABLE=true` / `360` / `180s`）：`apps/server/src/global_limit.rs` 覆盖 `/api` 与 `/api/*`（含 fallback），先于路由级 `CriticalRateLimit`/会话守卫；超限裸 `429` + `Retry-After`（>0），后端故障裸 `500`，均位于 DisableCache 之前；`AppState::default()` 未绑定限流器时直通，避免误报 429。`apps/server/tests/global_rate_limit.rs` 覆盖 GA 先于 CT、无缓存头、按 IP 隔离、禁用不拒绝。
+- `GET /api/status`：`apps/server/src/status.rs` + `apps/server/tests/status_routes.rs`，Go 封套 `{success,message,data}`；AuthSettings/PublicConfig/QuotaDisplay 真实快照透传；未移植子系统输出经逐字段核对 Go 源码的运行时默认值并注释来源/补齐阶段，不把未实现功能标为启用；该路由不挂 DisableCache。
+- 验证者 Medium 修复：`crates/identity/src/login/orchestrate.rs` 的 `complete()` 在策略加载失败时降级为 `denied_permissions()` 并记录 `permissions_load_failed`，会话照常签发——对齐 Go `policy.Capabilities()` 从不返回错误的语义（`apps/api/internal/identity/policy/resolver.go:38+`）；刷新 Cookie 补 `Expires`（RFC1123 GMT）并让清除 Cookie 使用 `Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=-1`，对齐 Go `WriteRefreshCookie`/`ClearRefreshCookie`（`apps/api/internal/identity/authenticate.go:290+`）；登录成功缓存头改为精确断言 `Cache-Control=no-store`、`Pragma=no-cache`、`Expires=0`（此前仅 `contains("no-store")`）。
+
+**仍然明确未完成**
+- Turnstile 仍只有决策层，**未实现 `siteverify` 传输层**；开关启用时不静默放行。
+- 注册、验证码、密码重置、初始化、API Key 等 P2 其余项未移植；全局 Web 限流（`GW`）未移植。
+- GA 在生产组装中使用独立 Redis 连接（Go 共享 RDB），行为等价但连接数 +1，列入后续优化。
+- `/api/status` 的 `version` 无 Go ldflags 注入的 `v` 前缀；部分字段为诚实默认值，待 P3/P7 子系统补齐。
+
+**上游基线漂移**
+- Go `origin/main` 已从 `ec542e705` 前进到 `a508a866c`（含 #659 Fiber v3 迁移、#668 只读 API 响应缓存、#660 计费截断修复等）。本切片引用的基线文件（`limit_rate.go`、`init.go`、`register_api.go`、`authenticate.go`、`policy/resolver.go`、`handle_misc.go`、`configure_perf.go`、`fetch_url.go`）在该区间未变更；后续切片需按新基线重新审计。
+
+**复核状态**：上述 CI 证据已绑定精确 SHA；独立 `verification` 子代理因运行环境工具调用异常未能给出有效 verdict，本节仅记录 CI 与人工源码审计结果，不宣称独立复核 PASS。
