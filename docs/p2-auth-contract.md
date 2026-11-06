@@ -189,3 +189,27 @@ impl AuthService {
 - Go `origin/main` 已从 `ec542e705` 前进到 `a508a866c`（含 #659 Fiber v3 迁移、#668 只读 API 响应缓存、#660 计费截断修复等）。本切片引用的基线文件中，`limit_rate.go`、`init.go`、`authenticate.go`、`policy/resolver.go`、`configure_perf.go`、`fetch_url.go` 未变更；`register_api.go` 为 `/models`、`/log/stat`、`/data`、`/rankings` 新增 `ReadOnlyCache` 挂载（GA 行与 `/status` 注册行未变），新增中间件文件 `middleware/cache_readonly.go`（相关路由尚未移植）；`handle_misc.go` 除 gofmt 对齐外**新增 `/api/status` 字段 `truncated_response_multiplier`（Go 默认 0.3）**，已在 `1cc35fe` 补齐（`apps/server/src/status.rs`，含默认值断言）。后续切片需按新基线重新审计。
 
 **复核状态**：上述 CI 证据已绑定精确 SHA；独立 `verification` 子代理因运行环境工具调用异常未能给出有效 verdict，本节仅记录 CI 与人工源码审计结果，不宣称独立复核 PASS。
+
+### 8.2 2026-11-06 setup 向导、UserAuth/self/token 与降级形状对齐 @ `57f6947`
+
+**证据绑定（普通 push）**
+- Rust SHA：`57f6947d8d…`（`migration/p2`），P1 Rust workspace run `42198229885`，attempt `1`，**success**
+- pg14：PostgreSQL 14.24、fmt/check/clippy exit 0、workspace-tests **319 passed / 0 failed**、session_cache 9/0、catalog 契约 2/2（sqlite+postgres）
+- pg17：PostgreSQL 17.11、fmt/check/clippy exit 0、workspace-tests **319 passed / 0 failed**、session_cache 9/0、catalog 契约 2/2
+- `P0 inventory consistency` 仍是既有非验收项。
+
+**本切片交付**
+- `GET/POST /api/setup`（`apps/server/src/setup_http.rs`）：GET 无中间件、POST 仅匿名体上限（Go `register_api.go:27-28`）；业务结果 200 + `{success,message}`，schema/DB 门禁 503 `setup.schema_not_ready`；复用 `SetupRepository` 事务；成功后重载配置快照。
+- 运行模式：`PublicConfig` 新增 `self_use_mode_enabled`/`demo_site_enabled`（严格 `value == "true"`，对齐 Go `applyOperationSetting`），`/api/status` 改为读快照。
+- 通用 `UserAuth`（`apps/server/src/auth.rs`）：dashboard JWT → PAT；失败映射固定（401 `AUTH_UNAUTHORIZED` / 401 `AUTH_SESSION_REVOKED` / 401 `AUTH_USER_DISABLED` / 403 `AUTH_INSUFFICIENT_PRIVILEGE` / 500 `AUTH_INTERNAL_ERROR`）。
+- `GET /api/user/self`（`self_http.rs`）：复用 `assemble_self_user`，字段对齐 Go `buildSelfUserData`；策略读取失败降级。
+- `GET /api/user/token`：轮换 `users.access_token`（唯一性检查），DisableCache 三头；接线顺序 `UserAuth → CriticalRateLimit → handler`。
+- 降级权限形状对齐 Go 空 enforcer：`denied_permissions(role)` 返回完整资源/动作矩阵（全 false），侧栏按角色（root 无侧栏；admin `{"admin":{"setting":false}}`；普通用户 `{"admin":false}`）。
+- 清除 Cookie 字节对齐：Go `net/http` 对 `MaxAge<0` 写 `Max-Age=0`，Rust 同步。
+
+**契约差分（须保留记录）**
+- 模式写入与 root/setup **同事务**（Go 在事务外），失败全回滚；因此两条模式失败文案合并为 `setup.mode_save_failed`，且无法区分是 SelfUse 还是 Demo 写失败。
+- `UserCriticalRateLimit("access-token")` 未移植（用户维度限流），当前仅 CT 关键路径限流。
+- 过期 JWT 返回 `AUTH_UNAUTHORIZED`（Go 为 `AUTH_TOKEN_EXPIRED`）；`Auth-Version` 响应头未复刻；PAT token 形态为 32 位字母数字（Go 为变长 Base64）。
+- `/api/user/self/groups`、`/api/user/groups`、`/api/user/models` 未移植（依赖 group ratio 设置）。
+- 注册 `POST /api/user/register` 正在并行实现；Turnstile `siteverify` 传输层仍缺。
