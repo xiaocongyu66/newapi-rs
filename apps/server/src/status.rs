@@ -213,6 +213,9 @@ pub fn status_body(state: &AppState) -> Value {
         // Go billing.GetQuotaSetting().EmptyResponseMultiplier 默认 0.1
         // （consume_quota_setting.go:13）。until P7。
         "empty_response_multiplier": 0.1,
+        // Go billing.GetQuotaSetting().TruncatedResponseMultiplier 默认 0.3
+        // （consume_quota_setting.go:16，上游 a508a866c 新增）。until P7。
+        "truncated_response_multiplier": 0.3,
     });
 
     // Go 按 enabled 才注入可选内容（handle_misc.go:131-139）。启用位为 Go 默认
@@ -368,6 +371,7 @@ mod tests {
         assert_eq!(data["enable_task"], Value::Bool(true));
         assert_eq!(data["enable_data_export"], Value::Bool(true));
         assert_eq!(data["empty_response_multiplier"], 0.1);
+        assert_eq!(data["truncated_response_multiplier"], 0.3);
         assert_eq!(data["chats"], default_chats());
         // Go 仅在自定义 provider 非空时注入该 key；此处必须缺席。
         assert!(data.get("custom_oauth_providers").is_none());
