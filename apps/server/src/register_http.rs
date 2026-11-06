@@ -36,6 +36,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::AppState;
+use crate::login_http::ClientIp;
 
 /// Go `UserNameMaxLength = 20`（validator `max` 按字符/符文计数）。
 const MAX_USERNAME_CHARS: usize = 20;
@@ -229,12 +230,34 @@ pub async fn register_guard(
     }
     match read_limited_body(state.anonymous_body_limit(), request).await {
         Err(status) => status.into_response(),
-        Ok(request) => {
-            // 工作区尚无 siteverify 传输层：开关开启时决策层返回固定
-            // rejection，不会静默放行。注册路由不设置任何缓存头。
-            let enabled = state.auth_settings().turnstile_check_enabled;
+        Ok(mut request) => {
+            // Go 的 `TurnstileCheck` 位于体限制之后：关闭检查或空 token 时
+            // 不构造/调用传输层；开启且有 token 时使用共享 HTTP 客户端。
+            let auth = state.auth_settings();
+            let enabled = auth.turnstile_check_enabled;
             let token = crate::turnstile::query_token(request.uri().query());
-            let decision = crate::turnstile::decide(enabled, token.as_deref(), None);
+            let decision = if !enabled || token.is_none() {
+                crate::turnstile::decide(enabled, token.as_deref(), "", None, None).await
+            } else {
+                let injected = request
+                    .extensions()
+                    .get::<crate::turnstile::InjectedVerifier>()
+                    .cloned();
+                let http = crate::turnstile::HttpVerifier;
+                let verifier: &dyn crate::turnstile::Verifier = match injected.as_ref() {
+                    Some(injected) => injected.0.as_ref(),
+                    None => &http,
+                };
+                crate::turnstile::decide(
+                    true,
+                    token.as_deref(),
+                    &auth.turnstile_secret_key,
+                    Some(ip.as_str()),
+                    Some(verifier),
+                )
+                .await
+            };
+            request.extensions_mut().insert(ClientIp(ip));
             match decision.rejection_key() {
                 Some(key) => rejected(translate(request.headers(), key)),
                 None => next.run(request).await,

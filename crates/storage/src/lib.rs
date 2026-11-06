@@ -19,19 +19,21 @@ impl Database {
     /// 表是否存在；用于安装向导的就绪判定，不创建任何对象、不跑迁移。
     pub async fn table_exists(&self, table: &str) -> Result<bool, sqlx::Error> {
         match self {
-            Self::Sqlite(pool) => sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master \
-                 WHERE type = 'table' AND name = ?1)",
-            )
-            .bind(table)
-            .fetch_one(pool)
-            .await,
-            Self::Postgres(pool) => sqlx::query_scalar::<_, bool>(
-                "SELECT to_regclass($1) IS NOT NULL",
-            )
-            .bind(table)
-            .fetch_one(pool)
-            .await,
+            Self::Sqlite(pool) => {
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master \
+                     WHERE type = 'table' AND name = ?1)",
+                )
+                .bind(table)
+                .fetch_one(pool)
+                .await
+            }
+            Self::Postgres(pool) => {
+                sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+                    .bind(table)
+                    .fetch_one(pool)
+                    .await
+            }
         }
     }
 
@@ -42,16 +44,16 @@ impl Database {
             return Ok(false);
         }
         match self {
-            Self::Sqlite(pool) => sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM setups)",
-            )
-            .fetch_one(pool)
-            .await,
-            Self::Postgres(pool) => sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM setups)",
-            )
-            .fetch_one(pool)
-            .await,
+            Self::Sqlite(pool) => {
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM setups)")
+                    .fetch_one(pool)
+                    .await
+            }
+            Self::Postgres(pool) => {
+                sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM setups)")
+                    .fetch_one(pool)
+                    .await
+            }
         }
     }
 
