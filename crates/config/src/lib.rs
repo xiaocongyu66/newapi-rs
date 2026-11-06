@@ -16,6 +16,10 @@ pub struct Config {
     pub critical_rate_limit_enabled: bool,
     pub critical_rate_limit_requests: i64,
     pub critical_rate_limit_duration_seconds: i64,
+    /// 全局 API 限流；对应 Go `GlobalAPIRateLimit` 的三个环境变量。
+    pub global_api_rate_limit_enabled: bool,
+    pub global_api_rate_limit_requests: i64,
+    pub global_api_rate_limit_duration_seconds: i64,
     /// 原样保留 `TRUSTED_PROXIES`；解析（默认 CIDR 与 `none`）在
     /// `newapi_security::client_ip`，解析失败必须终止启动。
     pub trusted_proxies: Option<String>,
@@ -138,6 +142,21 @@ impl Config {
             1_200,
             i64::MAX as u64,
         )? as i64;
+        // Go `initRateLimitVariables` 的 GlobalApiRateLimit*：默认 360/180。
+        let global_api_rate_limit_enabled =
+            bool_with_default(lookup("GLOBAL_API_RATE_LIMIT_ENABLE")?, true);
+        let global_api_rate_limit_requests = positive_integer(
+            lookup("GLOBAL_API_RATE_LIMIT")?,
+            "GLOBAL_API_RATE_LIMIT",
+            360,
+            i64::MAX as u64,
+        )? as i64;
+        let global_api_rate_limit_duration_seconds = positive_integer(
+            lookup("GLOBAL_API_RATE_LIMIT_DURATION")?,
+            "GLOBAL_API_RATE_LIMIT_DURATION",
+            180,
+            i64::MAX as u64,
+        )? as i64;
         // Go `GetEnvOrDefault`：未设置或空值用默认，非法数值同样回退默认并告警。
         let anonymous_request_body_limit_kb =
             integer_with_default(lookup("ANONYMOUS_REQUEST_BODY_LIMIT_KB")?, 512);
@@ -151,6 +170,9 @@ impl Config {
             critical_rate_limit_enabled,
             critical_rate_limit_requests,
             critical_rate_limit_duration_seconds,
+            global_api_rate_limit_enabled,
+            global_api_rate_limit_requests,
+            global_api_rate_limit_duration_seconds,
             trusted_proxies: lookup("TRUSTED_PROXIES")?,
             anonymous_request_body_limit_kb,
         })
@@ -479,6 +501,82 @@ mod tests {
             ("CRITICAL_RATE_LIMIT", "1.5"),
             ("CRITICAL_RATE_LIMIT_DURATION", "0"),
             ("CRITICAL_RATE_LIMIT_DURATION", "abc"),
+        ] {
+            let error = config(&[(name, value)]).err().unwrap();
+            assert_eq!(error.to_string(), format!("invalid {name} configuration"));
+        }
+    }
+
+    #[test]
+    fn global_api_rate_limit_defaults_match_go() {
+        let value = config(&[]).unwrap();
+        assert!(value.global_api_rate_limit_enabled);
+        assert_eq!(value.global_api_rate_limit_requests, 360);
+        assert_eq!(value.global_api_rate_limit_duration_seconds, 180);
+    }
+
+    #[test]
+    fn global_api_rate_limit_accepts_explicit_values() {
+        let value = config(&[
+            ("GLOBAL_API_RATE_LIMIT_ENABLE", "false"),
+            ("GLOBAL_API_RATE_LIMIT", "50"),
+            ("GLOBAL_API_RATE_LIMIT_DURATION", "30"),
+        ])
+        .unwrap();
+        assert!(!value.global_api_rate_limit_enabled);
+        assert_eq!(value.global_api_rate_limit_requests, 50);
+        assert_eq!(value.global_api_rate_limit_duration_seconds, 30);
+        // Go's strconv.ParseBool accepts these exact tokens.
+        for (token, expected) in [
+            ("true", true),
+            ("TRUE", true),
+            ("True", true),
+            ("t", true),
+            ("T", true),
+            ("1", true),
+            ("false", false),
+            ("FALSE", false),
+            ("False", false),
+            ("f", false),
+            ("F", false),
+            ("0", false),
+        ] {
+            assert_eq!(
+                config(&[("GLOBAL_API_RATE_LIMIT_ENABLE", token)])
+                    .unwrap()
+                    .global_api_rate_limit_enabled,
+                expected,
+                "token {token}"
+            );
+        }
+    }
+
+    #[test]
+    fn global_api_rate_limit_falls_back_or_rejects_invalid_values() {
+        // Go's GetEnvOrDefaultBool keeps the default on unparseable values.
+        for token in ["yes", "True r", "2", "  true", "true "] {
+            assert!(
+                config(&[("GLOBAL_API_RATE_LIMIT_ENABLE", token)])
+                    .unwrap()
+                    .global_api_rate_limit_enabled,
+                "token {token} should keep the true default"
+            );
+        }
+        // An empty enable value is unset, like os.Getenv() == "".
+        assert!(
+            config(&[("GLOBAL_API_RATE_LIMIT_ENABLE", "")])
+                .unwrap()
+                .global_api_rate_limit_enabled
+        );
+        // Numbers use this repo's strict positive_integer, not Go's lenient
+        // Atoi: empty, zero, negatives and non-numerics all reject startup.
+        for (name, value) in [
+            ("GLOBAL_API_RATE_LIMIT", ""),
+            ("GLOBAL_API_RATE_LIMIT", "0"),
+            ("GLOBAL_API_RATE_LIMIT", "-1"),
+            ("GLOBAL_API_RATE_LIMIT", "1.5"),
+            ("GLOBAL_API_RATE_LIMIT_DURATION", "0"),
+            ("GLOBAL_API_RATE_LIMIT_DURATION", "abc"),
         ] {
             let error = config(&[(name, value)]).err().unwrap();
             assert_eq!(error.to_string(), format!("invalid {name} configuration"));
