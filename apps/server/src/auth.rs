@@ -248,8 +248,11 @@ fn request_language(request: &Request) -> String {
 }
 
 fn render_auth_failure(failure: AuthFailure, language: &str) -> Response {
-    let message =
-        newapi_i18n::translate(language, failure.message, std::iter::empty::<(&str, &str)>());
+    let message = newapi_i18n::translate(
+        language,
+        failure.message,
+        std::iter::empty::<(&str, &str)>(),
+    );
     (
         failure.status,
         Json(json!({

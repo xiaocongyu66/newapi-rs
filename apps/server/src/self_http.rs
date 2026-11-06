@@ -51,10 +51,7 @@ pub async fn self_user(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let user_id = auth_user.0.user_id;
-    let profile = match UserProfileRepository::new(db.clone())
-        .by_id(user_id)
-        .await
-    {
+    let profile = match UserProfileRepository::new(db.clone()).by_id(user_id).await {
         Ok(Some(profile)) => profile,
         Ok(None) => return api_error(&headers, MSG_DATABASE_ERROR),
         Err(error) => {
@@ -161,17 +158,14 @@ async fn rotate_access_token(db: &Database, user_id: i64) -> Result<String, Toke
     let token = generate_access_token().ok_or(TokenError::Generate)?;
     // Go checks uniqueness before updating and returns the duplicate message
     // without retrying.
-    if access_token_exists(db, &token)
-        .await
-        .map_err(|error| {
-            tracing::warn!(
-                event = "access_token_duplicate_check_failed",
-                category = crate::database_error_class(&error),
-                "access token uniqueness check failed"
-            );
-            TokenError::Storage
-        })?
-    {
+    if access_token_exists(db, &token).await.map_err(|error| {
+        tracing::warn!(
+            event = "access_token_duplicate_check_failed",
+            category = crate::database_error_class(&error),
+            "access token uniqueness check failed"
+        );
+        TokenError::Storage
+    })? {
         return Err(TokenError::Duplicate);
     }
     let affected = update_access_token(db, user_id, &token)
@@ -195,11 +189,7 @@ async fn rotate_access_token(db: &Database, user_id: i64) -> Result<String, Toke
 
 fn generate_access_token() -> Option<String> {
     let credential = RefreshCredential::generate().ok()?;
-    let token: String = credential
-        .secret()
-        .chars()
-        .take(ACCESS_TOKEN_LEN)
-        .collect();
+    let token: String = credential.secret().chars().take(ACCESS_TOKEN_LEN).collect();
     (token.len() == ACCESS_TOKEN_LEN).then_some(token)
 }
 
@@ -221,28 +211,20 @@ async fn access_token_exists(db: &Database, token: &str) -> Result<bool, sqlx::E
     Ok(count != 0)
 }
 
-async fn update_access_token(
-    db: &Database,
-    user_id: i64,
-    token: &str,
-) -> Result<u64, sqlx::Error> {
+async fn update_access_token(db: &Database, user_id: i64, token: &str) -> Result<u64, sqlx::Error> {
     let affected = match db {
-        Database::Sqlite(pool) => {
-            sqlx::query("UPDATE users SET access_token=$1 WHERE id=$2")
-                .bind(token)
-                .bind(user_id)
-                .execute(pool)
-                .await?
-                .rows_affected()
-        }
-        Database::Postgres(pool) => {
-            sqlx::query("UPDATE users SET access_token=$1 WHERE id=$2")
-                .bind(token)
-                .bind(user_id)
-                .execute(pool)
-                .await?
-                .rows_affected()
-        }
+        Database::Sqlite(pool) => sqlx::query("UPDATE users SET access_token=$1 WHERE id=$2")
+            .bind(token)
+            .bind(user_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        Database::Postgres(pool) => sqlx::query("UPDATE users SET access_token=$1 WHERE id=$2")
+            .bind(token)
+            .bind(user_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
     };
     Ok(affected)
 }
@@ -308,14 +290,20 @@ mod tests {
         assert_eq!(body["data"]["id"], json!(7));
         assert_eq!(body["data"]["quota_display"], json!(1.0));
         assert_eq!(body["data"]["sidebar_modules"], json!("personal"));
-        assert_eq!(
-            body["data"]["permissions"],
-            json!({
-                "sidebar_settings": false,
-                "sidebar_modules": {},
-                "admin_permissions": {},
-            })
-        );
+        // Go 普通用户的降级形状：可设置侧栏、管理员区域关闭，权限矩阵
+        // 保持完整但全部为 false。
+        let permissions = &body["data"]["permissions"];
+        assert_eq!(permissions["sidebar_settings"], json!(true));
+        assert_eq!(permissions["sidebar_modules"], json!({"admin": false}));
+        let matrix = permissions["admin_permissions"]
+            .as_object()
+            .expect("resource matrix");
+        assert!(!matrix.is_empty());
+        for (resource, actions) in matrix {
+            for (action, allowed) in actions.as_object().expect("actions") {
+                assert_eq!(allowed, &json!(false), "{resource}.{action}");
+            }
+        }
         for forbidden in ["password", "access_token", "auth_version", "remark"] {
             assert!(body["data"].get(forbidden).is_none(), "{forbidden}");
         }

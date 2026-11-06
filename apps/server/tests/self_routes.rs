@@ -253,7 +253,10 @@ async fn run_contract(db: Database) {
     assert_eq!(body["data"]["quota_display"], json!(0.0));
     assert_eq!(body["data"]["sidebar_modules"], json!(""));
     assert_eq!(body["data"]["permissions"]["sidebar_settings"], json!(true));
-    assert_eq!(body["data"]["permissions"]["sidebar_modules"]["admin"], json!(false));
+    assert_eq!(
+        body["data"]["permissions"]["sidebar_modules"]["admin"],
+        json!(false)
+    );
     assert_eq!(
         body["data"]["permissions"]["admin_permissions"]["system"]["settings"],
         json!(false)
@@ -312,14 +315,24 @@ async fn run_contract(db: Database) {
     )
     .await;
     let deleted_jwt = jwt("sid-deleted", 1, 1, session_at);
-    let response = send(&app, "/api/user/self", Some(&format!("Bearer {deleted_jwt}"))).await;
+    let response = send(
+        &app,
+        "/api/user/self",
+        Some(&format!("Bearer {deleted_jwt}")),
+    )
+    .await;
     assert_auth_failure(response, StatusCode::UNAUTHORIZED, "AUTH_SESSION_REVOKED").await;
 
     // Role below common user: Go authHelper's role gate is 403.
     reset(&db).await;
     seed_user(&db, 0, 1, 1, Some("pat-guest")).await;
     let response = send(&app, "/api/user/self", Some("Bearer pat-guest")).await;
-    assert_auth_failure(response, StatusCode::FORBIDDEN, "AUTH_INSUFFICIENT_PRIVILEGE").await;
+    assert_auth_failure(
+        response,
+        StatusCode::FORBIDDEN,
+        "AUTH_INSUFFICIENT_PRIVILEGE",
+    )
+    .await;
 
     // Token issuance rotates users.access_token and disables caching.
     reset(&db).await;
