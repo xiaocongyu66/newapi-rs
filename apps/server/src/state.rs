@@ -61,8 +61,7 @@ impl RateLimiter {
         }
         match &self.backend {
             RateLimiterBackend::Memory(limiter) => {
-                let (allowed, retry_after) =
-                    limiter.check(&format!("{mark}:user:{user_id}"), now);
+                let (allowed, retry_after) = limiter.check(&format!("{mark}:user:{user_id}"), now);
                 Ok((!allowed).then_some(retry_after))
             }
             RateLimiterBackend::Redis(limiter) => match limiter
@@ -469,28 +468,36 @@ mod tests {
             512,
         );
         let now = 1_000;
-        assert!(state
-            .check_user_rate_limit("UC:access-token", 7, now)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            state
+                .check_user_rate_limit("UC:access-token", 7, now)
+                .await
+                .unwrap()
+                .is_none()
+        );
         // Same user inside the window is rejected; another user is unaffected.
-        assert!(state
-            .check_user_rate_limit("UC:access-token", 7, now)
-            .await
-            .unwrap()
-            .is_some());
-        assert!(state
-            .check_user_rate_limit("UC:access-token", 8, now)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            state
+                .check_user_rate_limit("UC:access-token", 7, now)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            state
+                .check_user_rate_limit("UC:access-token", 8, now)
+                .await
+                .unwrap()
+                .is_none()
+        );
         // The IP-scoped limiter has its own key space.
-        assert!(state
-            .check_rate_limit("CT", "203.0.113.9", now)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            state
+                .check_rate_limit("CT", "203.0.113.9", now)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
