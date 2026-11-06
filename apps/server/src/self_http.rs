@@ -315,7 +315,12 @@ async fn update_password(
         Err(_) => return api_error(headers, MSG_DATABASE_ERROR),
     };
     let next_version = match repository
-        .update_password(user_id, password_hash.expose_secret(), username, display_name)
+        .update_password(
+            user_id,
+            password_hash.expose_secret(),
+            username,
+            display_name,
+        )
         .await
     {
         Ok(version) => version,

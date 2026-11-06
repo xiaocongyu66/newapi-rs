@@ -373,8 +373,7 @@ UPDATE users SET
     auth_version = CASE WHEN COALESCE(auth_version, 0) < 1 THEN 2 ELSE COALESCE(auth_version, 0) + 1 END
 WHERE id = $4 AND deleted_at IS NULL
 ";
-const SELECT_AUTH_VERSION: &str =
-    "SELECT CAST(auth_version AS BIGINT) AS auth_version FROM users WHERE id=$1 AND deleted_at IS NULL";
+const SELECT_AUTH_VERSION: &str = "SELECT CAST(auth_version AS BIGINT) AS auth_version FROM users WHERE id=$1 AND deleted_at IS NULL";
 const ADVANCE_SESSION: &str = r"
 UPDATE user_sessions SET
     version = version + 1,
@@ -453,24 +452,20 @@ impl UserProfileRepository {
         display_name: &str,
     ) -> Result<(), UserMutationError> {
         let affected = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(UPDATE_PROFILE)
-                    .bind(username)
-                    .bind(display_name)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(UPDATE_PROFILE)
-                    .bind(username)
-                    .bind(display_name)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
+            Database::Sqlite(pool) => sqlx::query(UPDATE_PROFILE)
+                .bind(username)
+                .bind(display_name)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(UPDATE_PROFILE)
+                .bind(username)
+                .bind(display_name)
+                .bind(user_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
         };
         if affected == 0 {
             return Err(UserMutationError::NotFound);
@@ -581,12 +576,11 @@ async fn advance_session_sqlite(
     if affected == 0 {
         return Err(UserMutationError::SessionInactive);
     }
-    let row = sqlx::query_as::<_, (String, String, String, String, i64, i64, i64)>(
-        SELECT_SESSION_VIEW,
-    )
-    .bind(input.sid)
-    .fetch_one(&mut *tx)
-    .await?;
+    let row =
+        sqlx::query_as::<_, (String, String, String, String, i64, i64, i64)>(SELECT_SESSION_VIEW)
+            .bind(input.sid)
+            .fetch_one(&mut *tx)
+            .await?;
     tx.commit().await?;
     Ok(SessionProjection {
         sid: row.0,
@@ -617,12 +611,11 @@ async fn advance_session_postgres(
     if affected == 0 {
         return Err(UserMutationError::SessionInactive);
     }
-    let row = sqlx::query_as::<_, (String, String, String, String, i64, i64, i64)>(
-        SELECT_SESSION_VIEW,
-    )
-    .bind(input.sid)
-    .fetch_one(&mut *tx)
-    .await?;
+    let row =
+        sqlx::query_as::<_, (String, String, String, String, i64, i64, i64)>(SELECT_SESSION_VIEW)
+            .bind(input.sid)
+            .fetch_one(&mut *tx)
+            .await?;
     tx.commit().await?;
     Ok(SessionProjection {
         sid: row.0,

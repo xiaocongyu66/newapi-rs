@@ -572,7 +572,10 @@ async fn run_self_update_contract(db: Database) {
     assert_eq!(body["success"], json!(true));
     assert_eq!(body["message"], json!(translated("common.update_success")));
     assert_eq!(body["data"], Value::Null);
-    assert_eq!(stored_setting(&db).await["sidebar_modules"], json!("personal"));
+    assert_eq!(
+        stored_setting(&db).await["sidebar_modules"],
+        json!("personal")
+    );
 
     let response = send_json(
         &app,
@@ -673,7 +676,10 @@ async fn run_self_update_contract(db: Database) {
         body["message"],
         json!(translated("user.original_password_error"))
     );
-    assert_eq!(stored_password(&db).await.as_deref(), Some(old_hash.as_str()));
+    assert_eq!(
+        stored_password(&db).await.as_deref(),
+        Some(old_hash.as_str())
+    );
     assert_eq!(stored_auth_version(&db).await, 1);
 
     // New password outside 8..20 fails validation before touching the row.
@@ -776,9 +782,9 @@ async fn run_self_update_contract(db: Database) {
     let deleted: Option<String> = backend!(&db, pool, {
         sqlx::query_scalar("SELECT CAST(deleted_at AS TEXT) FROM users WHERE id=$1")
             .bind(USER_ID)
-        .fetch_one(pool)
-        .await
-        .expect("deleted_at")
+            .fetch_one(pool)
+            .await
+            .expect("deleted_at")
     });
     assert!(deleted.is_some());
     let response = send(&app, "/api/user/self", Some(&token)).await;

@@ -67,7 +67,7 @@ pub async fn user_models(
     // `SELECT DISTINCT model FROM abilities WHERE "group" = ? AND enabled = ?`
     // once the catalog owns an abilities repository. Go returns an empty list
     // while its resolver hook is unregistered, which this matches.
-    Json(success_body(user_models_body(Vec::new()))).into_response()
+    Json(user_models_body(Vec::new())).into_response()
 }
 
 /// Pure `GetUserGroups` assembly, testable without routing or a database.
