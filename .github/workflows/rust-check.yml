@@ -1,0 +1,54 @@
+name: Rust check (fast feedback, not acceptance)
+
+on:
+  push:
+    paths:
+      - 'Cargo.*'
+      - 'rust-toolchain*'
+      - 'crates/**'
+      - 'apps/**'
+      - '.github/workflows/rust-check.yml'
+  pull_request:
+    paths:
+      - 'Cargo.*'
+      - 'rust-toolchain*'
+      - 'crates/**'
+      - 'apps/**'
+      - '.github/workflows/rust-check.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: '1.99.1'
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  SQLX_OFFLINE: 'true'
+
+# Fast compile signal only. P1/P2 acceptance stays with p1-rust.yml, which
+# binds evidence to the Go oracle and real SQLite/PostgreSQL/Redis services.
+jobs:
+  check:
+    name: cargo check (locked, not acceptance)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install fixed toolchain
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+          key: p1-${{ runner.os }}-${{ runner.arch }}-1.99.1-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: p1-${{ runner.os }}-${{ runner.arch }}-1.99.1-
+      - name: cargo check
+        run: cargo +"$RUST_TOOLCHAIN" check --locked --workspace --all-targets
