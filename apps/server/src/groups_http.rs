@@ -46,7 +46,7 @@ pub async fn user_groups(
         .unwrap_or("");
     let settings = match load_settings(&state).await {
         Ok(settings) => settings,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     Json(success_body(user_groups_body(&settings, user_group))).into_response()
 }
@@ -110,9 +110,9 @@ pub fn success_body(data: Value) -> Value {
     })
 }
 
-async fn load_settings(state: &AppState) -> Result<GroupSettings, Response> {
+async fn load_settings(state: &AppState) -> Result<GroupSettings, Box<Response>> {
     let Some(db) = state.db() else {
-        return Err(StatusCode::SERVICE_UNAVAILABLE.into_response());
+        return Err(Box::new(StatusCode::SERVICE_UNAVAILABLE.into_response()));
     };
     match GroupSettings::load(&db, &GroupSettings::default()).await {
         Ok(settings) => Ok(settings),
@@ -122,7 +122,7 @@ async fn load_settings(state: &AppState) -> Result<GroupSettings, Response> {
                 category = crate::database_error_class(&error),
                 "group settings load failed"
             );
-            Err(StatusCode::SERVICE_UNAVAILABLE.into_response())
+            Err(Box::new(StatusCode::SERVICE_UNAVAILABLE.into_response()))
         }
     }
 }
@@ -157,7 +157,7 @@ mod tests {
     fn default_settings_produce_no_groups() {
         // Go's GroupRatio default is empty, so the default response has no
         // group entries even though UserUsableGroups has defaults.
-        let body = user_groups_body(&GroupSettings::default(), "");
+        let body = success_body(user_groups_body(&GroupSettings::default(), ""));
         assert_eq!(body["success"], json!(true));
         assert_eq!(body["message"], json!(""));
         assert_eq!(body["data"], json!({}));
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn groups_keep_only_usable_ratio_keys_and_append_auto() {
-        let body = user_groups_body(&settings(), "");
+        let body = success_body(user_groups_body(&settings(), ""));
         let data = body["data"].as_object().unwrap();
         assert_eq!(data.len(), 3);
         assert_eq!(data["default"]["ratio"].as_f64(), Some(1.0));
@@ -180,14 +180,14 @@ mod tests {
 
     #[test]
     fn user_specific_ratio_and_group_are_applied() {
-        let body = user_groups_body(&settings(), "vip");
+        let body = success_body(user_groups_body(&settings(), "vip"));
         assert_eq!(body["data"]["default"]["ratio"].as_f64(), Some(0.25));
 
         // `custom` is in GroupRatio but not UserUsableGroups; Go adds the user
         // group itself with the literal description.
         let mut settings = settings();
         settings.group_ratio.insert("custom".to_owned(), 3.0);
-        let body = user_groups_body(&settings, "custom");
+        let body = success_body(user_groups_body(&settings, "custom"));
         assert_eq!(body["data"]["custom"]["ratio"].as_f64(), Some(3.0));
         assert_eq!(body["data"]["custom"]["desc"], json!("用户分组"));
     }
