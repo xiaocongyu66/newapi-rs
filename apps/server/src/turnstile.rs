@@ -119,8 +119,6 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-const MAX_JSON_DEPTH: usize = 64;
-
 #[cfg(test)]
 mod tests {
     use super::*;
