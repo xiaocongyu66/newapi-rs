@@ -40,6 +40,18 @@ pub fn anonymous_body_limit_bytes(limit_kb: i64) -> usize {
     (effective as usize).saturating_mul(1024)
 }
 
+/// 中间件在响应返回后补齐 DisableCache 头，语义等同 Go 的“先 SetHeader 再
+/// Next”：handler 已显式设置的 `Cache-Control`（例如成功登录的 `no-store`）
+/// 必须保留，其余两个头总是补上。
+pub fn fill_disable_cache_headers(response: &mut Response) {
+    let headers = response.headers_mut();
+    headers
+        .entry(header::CACHE_CONTROL)
+        .or_insert_with(|| HeaderValue::from_static(CACHE_CONTROL_NO_STORE));
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    headers.insert(header::EXPIRES, HeaderValue::from_static("0"));
+}
+
 /// Adds the three no-cache response headers with `insert`, overwriting any
 /// prior value the same way Go's `SetHeader` does.
 pub fn disable_cache_headers(response: &mut Response) {

@@ -98,6 +98,14 @@ fn assert_no_disable_cache(headers: &HeaderMap) {
     assert!(!headers.contains_key(header::EXPIRES));
 }
 
+/// refresh/logout 的 handler 调用 `setAuthNoStore`，覆盖 DisableCache 的
+/// Cache-Control；Pragma/Expires 仍由 DisableCache 补齐。
+fn assert_auth_no_store(headers: &HeaderMap) {
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(headers[header::PRAGMA], "no-cache");
+    assert_eq!(headers[header::EXPIRES], "0");
+}
+
 #[tokio::test]
 async fn all_session_routes_are_registered_in_production_router() {
     let state = AppState::default();
@@ -125,22 +133,23 @@ async fn refresh_and_logout_business_responses_disable_cache() {
     // 缺少刷新 Cookie 的业务拒绝：401。
     let response = send(&state, post("/api/user/auth/refresh")).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_disable_cache(response.headers());
+    assert_auth_no_store(response.headers());
 
     // 无 Cookie 的登出按 Go 语义成功并清 Cookie。
     let response = send(&state, post("/api/user/auth/logout")).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_disable_cache(response.headers());
+    assert_auth_no_store(response.headers());
 }
 
 #[tokio::test]
-async fn secure_origin_rejection_disables_cache() {
-    // secure 模式下缺少 Origin/Referer 即被来源守卫拒绝。
+async fn secure_origin_rejection_precedes_disable_cache() {
+    // secure 模式下缺少 Origin/Referer 即被来源守卫拒绝；该守卫在
+    // DisableCache 之前中止，因此没有缓存头。
     let state = auth_state(true);
     for path in ["/api/user/auth/refresh", "/api/user/auth/logout"] {
         let response = send(&state, post(path)).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_disable_cache(response.headers());
+        assert_no_disable_cache(response.headers());
         assert!(
             body_text(response).await.contains("AUTH_ORIGIN_FORBIDDEN"),
             "{path}"

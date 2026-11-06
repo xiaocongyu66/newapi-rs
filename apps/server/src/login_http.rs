@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::AppState;
-use crate::boundary_mw::disable_cache_headers;
+use crate::boundary_mw::{disable_cache_headers, fill_disable_cache_headers};
 
 /// Go `common.BindJSON`：Content-Type 非 JSON（且非空）时跳过解析，目标保持
 /// 零值，handler 随后以“参数错误”拒绝。空 Content-Type 按 JSON 处理。
@@ -169,7 +169,8 @@ pub async fn login_guard(
             }
         }
     };
-    disable_cache_headers(&mut response);
+    // 与 Go 的“先 SetHeader 再 Next”一致：成功响应的 `no-store` 不被覆盖。
+    fill_disable_cache_headers(&mut response);
     response
 }
 

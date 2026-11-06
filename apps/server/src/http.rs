@@ -16,7 +16,7 @@ use newapi_security::{OriginRequest, check_session_origin};
 use serde::Serialize;
 
 use crate::AppState;
-use crate::boundary_mw::disable_cache_headers;
+use crate::boundary_mw::{disable_cache_headers, fill_disable_cache_headers};
 
 const REFRESH_COOKIE: &str = "new_api_refresh";
 const REFRESH_COOKIE_PATH: &str = "/api/user/auth";
@@ -345,10 +345,8 @@ async fn session_mutation_guard(
         .map(|info| info.0);
     let ip = request_ip(&state, request.headers(), peer);
     if !origin_allowed(&state, request.headers()) {
-        // 来源拒绝属于业务错误，仍需带 no-cache 头。
-        let mut response = auth_failure(StatusCode::FORBIDDEN, "AUTH_ORIGIN_FORBIDDEN");
-        disable_cache_headers(&mut response);
-        return response;
+        // Go 的来源守卫在 DisableCache 之前中止，因此拒绝响应不带缓存头。
+        return auth_failure(StatusCode::FORBIDDEN, "AUTH_ORIGIN_FORBIDDEN");
     }
     let now = now_seconds();
     // Go `mark` 为 "CT"：内存键是 mark + ClientIP，Redis 键由 limiter 组装。
@@ -364,10 +362,11 @@ async fn session_mutation_guard(
             return response;
         }
         // Go 的 Redis 故障分支：500 空体，位于 DisableCache 之前。
-        Err(()) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
     let mut response = next.run(request).await;
-    disable_cache_headers(&mut response);
+    // handler 显式设置的 `Cache-Control: no-store` 必须保留（Go 的 setAuthNoStore）。
+    fill_disable_cache_headers(&mut response);
     response
 }
 
