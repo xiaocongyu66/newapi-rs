@@ -304,7 +304,10 @@ pub fn denied_permissions(system_role: i32) -> crate::self_user::Permissions {
             let mut setting = BTreeMap::new();
             setting.insert("setting".to_owned(), false);
             let mut modules = BTreeMap::new();
-            modules.insert("admin".to_owned(), SidebarModulePermission::Actions(setting));
+            modules.insert(
+                "admin".to_owned(),
+                SidebarModulePermission::Actions(setting),
+            );
             (true, modules)
         }
         _ => {

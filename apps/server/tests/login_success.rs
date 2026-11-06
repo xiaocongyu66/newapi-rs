@@ -436,7 +436,10 @@ async fn policy_storage_failure_degrades_to_denied_permissions() {
     // 角色输出（`calculateUserPermissions` 不依赖策略读取）。
     let permissions = &body["data"]["user"]["permissions"];
     assert_eq!(permissions["sidebar_settings"], true);
-    assert_eq!(permissions["sidebar_modules"], json!({"admin": {"setting": false}}));
+    assert_eq!(
+        permissions["sidebar_modules"],
+        json!({"admin": {"setting": false}})
+    );
     let matrix = permissions["admin_permissions"]
         .as_object()
         .expect("admin_permissions must stay a resource map");
