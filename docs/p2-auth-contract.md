@@ -186,6 +186,6 @@ impl AuthService {
 - `/api/status` 的 `version` 无 Go ldflags 注入的 `v` 前缀；部分字段为诚实默认值，待 P3/P7 子系统补齐。
 
 **上游基线漂移**
-- Go `origin/main` 已从 `ec542e705` 前进到 `a508a866c`（含 #659 Fiber v3 迁移、#668 只读 API 响应缓存、#660 计费截断修复等）。本切片引用的基线文件（`limit_rate.go`、`init.go`、`register_api.go`、`authenticate.go`、`policy/resolver.go`、`handle_misc.go`、`configure_perf.go`、`fetch_url.go`）在该区间未变更；后续切片需按新基线重新审计。
+- Go `origin/main` 已从 `ec542e705` 前进到 `a508a866c`（含 #659 Fiber v3 迁移、#668 只读 API 响应缓存、#660 计费截断修复等）。本切片引用的基线文件中，`limit_rate.go`、`init.go`、`authenticate.go`、`policy/resolver.go`、`configure_perf.go`、`fetch_url.go` 未变更；`register_api.go` 新增了 `/models`、`/log/stat`、`/data`、`/rankings` 的 `ReadOnlyCache` 挂载（GA 与 `/status` 行未变），`handle_misc.go` 仅为字段对齐的 gofmt 变更。对本切片契约无影响；后续切片需按新基线重新审计。
 
 **复核状态**：上述 CI 证据已绑定精确 SHA；独立 `verification` 子代理因运行环境工具调用异常未能给出有效 verdict，本节仅记录 CI 与人工源码审计结果，不宣称独立复核 PASS。
