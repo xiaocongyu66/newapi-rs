@@ -8,11 +8,9 @@ use std::sync::Arc;
 use newapi_storage::Database;
 use serde_json::{Value, json};
 
-use crate::auth_flow::{
-    AuthFlowMatch, AuthFlowRepository, CreateAuthFlow, PURPOSE_TWO_FA_LOGIN,
-};
-use crate::auth_session::{AuthFence, LoginInput, RefreshResult, SessionAuth, SessionAuthError};
 use crate::audit::record_login_log;
+use crate::auth_flow::{AuthFlowMatch, AuthFlowRepository, CreateAuthFlow, PURPOSE_TWO_FA_LOGIN};
+use crate::auth_session::{AuthFence, LoginInput, RefreshResult, SessionAuth, SessionAuthError};
 use crate::login::{LoginCredentialError, LoginCredentialRepository, validate_and_fill};
 use crate::policy::{CasbinRuleRepository, self_user_permissions};
 use crate::self_user::{Permissions, QuotaDisplaySettings, SelfUser, SelfUserInput, assemble};
@@ -64,9 +62,14 @@ pub enum LoginResponse {
         expires_at: i64,
     },
     /// HTTP 200 `{success:false,message}`（Go `CtxApiError*` 形状）。
-    Rejected { message: String },
+    Rejected {
+        message: String,
+    },
     /// Go `writeAuthSessionError`：`{success:false,code,message:StatusText}`。
-    Session { status: u16, code: &'static str },
+    Session {
+        status: u16,
+        code: &'static str,
+    },
 }
 
 /// Go `AuthSessionErrorCode` 中登录路径可达的 code；登录没有 SID/refresh
@@ -199,7 +202,10 @@ impl LoginService {
                 Ok(created) => created,
                 // Go `CtxApiError(err)` 返回 err.Error()；Rust 不转述错误文本。
                 Err(_) => {
-                    tracing::warn!(event = "login_auth_flow_storage_error", "pending flow create failed");
+                    tracing::warn!(
+                        event = "login_auth_flow_storage_error",
+                        "pending flow create failed"
+                    );
                     return Err(LoginFailure::Storage);
                 }
             };
@@ -283,7 +289,12 @@ impl LoginService {
             user_id: profile.id,
             session_id: "",
         };
-        if self.flow.consume(flow_token, consume_match, now).await.is_err() {
+        if self
+            .flow
+            .consume(flow_token, consume_match, now)
+            .await
+            .is_err()
+        {
             return Ok(rejected(MSG_2FA_FLOW_EXPIRED, lang));
         }
         self.respond(
@@ -300,7 +311,11 @@ impl LoginService {
         )
     }
 
-    fn respond(&self, outcome: Result<LoginSuccess, LoginFailure>, lang: &str) -> Result<LoginResponse, LoginFailure> {
+    fn respond(
+        &self,
+        outcome: Result<LoginSuccess, LoginFailure>,
+        lang: &str,
+    ) -> Result<LoginResponse, LoginFailure> {
         Ok(match outcome {
             Ok(success) => LoginResponse::Success(Box::new(success)),
             Err(LoginFailure::Message(key)) => rejected(key, lang),
@@ -394,9 +409,7 @@ pub async fn update_last_login(db: &Database, user_id: i64, now: i64) {
     let sql = "UPDATE users SET last_login_at=$1 WHERE id=$2";
     let result = match db {
         Database::Sqlite(pool) => sqlx::query(sql).bind(now).bind(user_id).execute(pool).await,
-        Database::Postgres(pool) => {
-            sqlx::query(sql).bind(now).bind(user_id).execute(pool).await
-        }
+        Database::Postgres(pool) => sqlx::query(sql).bind(now).bind(user_id).execute(pool).await,
     };
     if result.is_err() {
         tracing::warn!(
@@ -409,11 +422,11 @@ pub async fn update_last_login(db: &Database, user_id: i64, now: i64) {
 /// Go `recordLoginAudit` + `buildOpField` 的 `other` JSON 形状。
 pub fn login_audit_other(method: &str, user_agent: &str) -> serde_json::Map<String, Value> {
     let mut other = serde_json::Map::new();
+    other.insert("login_method".to_owned(), Value::String(method.to_owned()));
     other.insert(
-        "login_method".to_owned(),
-        Value::String(method.to_owned()),
+        "user_agent".to_owned(),
+        Value::String(user_agent.to_owned()),
     );
-    other.insert("user_agent".to_owned(), Value::String(user_agent.to_owned()));
     let mut params = serde_json::Map::new();
     params.insert("method".to_owned(), Value::String(method.to_owned()));
     let mut op = serde_json::Map::new();

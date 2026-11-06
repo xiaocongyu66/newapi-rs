@@ -127,7 +127,8 @@ pub async fn anonymous_body_limit(limit_bytes: usize, request: Request, next: Ne
     if let Some(status) = reject_oversized(declared, bytes.len(), limit_bytes) {
         return status.into_response();
     }
-    next.run(Request::from_parts(parts, Body::from(bytes))).await
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
 }
 
 #[cfg(test)]
@@ -195,9 +196,10 @@ mod tests {
     fn disable_cache_headers_match_go_verbatim_and_overwrite() {
         let mut response = StatusCode::OK.into_response();
         // insert must overwrite, mirroring Go SetHeader semantics.
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=600"));
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("max-age=600"),
+        );
         disable_cache_headers(&mut response);
         let headers = &response.headers();
         assert_eq!(

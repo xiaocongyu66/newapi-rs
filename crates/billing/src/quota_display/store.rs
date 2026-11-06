@@ -8,38 +8,37 @@ pub(super) const QUOTA_PER_UNIT: &str = "QuotaPerUnit";
 pub(super) const USD_EXCHANGE_RATE: &str = "USDExchangeRate";
 pub(super) const DISPLAY_TYPE: &str = "general_setting.quota_display_type";
 pub(super) const CUSTOM_RATE: &str = "general_setting.custom_currency_exchange_rate";
-pub(super) const KEYS: [&str; 4] = [
-    QUOTA_PER_UNIT,
-    USD_EXCHANGE_RATE,
-    DISPLAY_TYPE,
-    CUSTOM_RATE,
-];
+pub(super) const KEYS: [&str; 4] = [QUOTA_PER_UNIT, USD_EXCHANGE_RATE, DISPLAY_TYPE, CUSTOM_RATE];
 
 pub(super) async fn load(
     db: &Database,
     previous: &QuotaDisplay,
 ) -> Result<QuotaDisplay, sqlx::Error> {
     let rows: Vec<(String, Option<String>)> = match db {
-        Database::Sqlite(pool) => sqlx::query_as(
-            "SELECT \"key\", \"value\" FROM \"options\" \
+        Database::Sqlite(pool) => {
+            sqlx::query_as(
+                "SELECT \"key\", \"value\" FROM \"options\" \
              WHERE \"key\" IN (?, ?, ?, ?)",
-        )
-        .bind(KEYS[0])
-        .bind(KEYS[1])
-        .bind(KEYS[2])
-        .bind(KEYS[3])
-        .fetch_all(pool)
-        .await?,
-        Database::Postgres(pool) => sqlx::query_as(
-            "SELECT \"key\", \"value\" FROM \"options\" \
+            )
+            .bind(KEYS[0])
+            .bind(KEYS[1])
+            .bind(KEYS[2])
+            .bind(KEYS[3])
+            .fetch_all(pool)
+            .await?
+        }
+        Database::Postgres(pool) => {
+            sqlx::query_as(
+                "SELECT \"key\", \"value\" FROM \"options\" \
              WHERE \"key\" IN ($1, $2, $3, $4)",
-        )
-        .bind(KEYS[0])
-        .bind(KEYS[1])
-        .bind(KEYS[2])
-        .bind(KEYS[3])
-        .fetch_all(pool)
-        .await?,
+            )
+            .bind(KEYS[0])
+            .bind(KEYS[1])
+            .bind(KEYS[2])
+            .bind(KEYS[3])
+            .fetch_all(pool)
+            .await?
+        }
     };
     // Go 的选项应用对 SQL NULL 按空字符串处理；NULL 不是这里的错误分支。
     let values: BTreeMap<&'static str, String> = rows
@@ -55,7 +54,10 @@ pub(super) async fn load(
 
 /// 纯解析：行存在但无法解析时保留旧值（Go `ParseFloat` 忽略错误）；
 /// 行不存在时保留快照既有值（初始即默认值）。
-pub(super) fn apply(values: &BTreeMap<&'static str, String>, previous: &QuotaDisplay) -> QuotaDisplay {
+pub(super) fn apply(
+    values: &BTreeMap<&'static str, String>,
+    previous: &QuotaDisplay,
+) -> QuotaDisplay {
     let mut next = *previous;
     if let Some(value) = parse_float(values, QUOTA_PER_UNIT) {
         next.quota_per_unit = value;

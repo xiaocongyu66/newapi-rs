@@ -114,7 +114,9 @@ macro_rules! profile {
             stripe_customer: row
                 .try_get::<Option<String>, _>("stripe_customer")?
                 .unwrap_or_default(),
-            auth_version: row.try_get::<Option<i64>, _>("auth_version")?.unwrap_or_default(),
+            auth_version: row
+                .try_get::<Option<i64>, _>("auth_version")?
+                .unwrap_or_default(),
         }
     }};
 }

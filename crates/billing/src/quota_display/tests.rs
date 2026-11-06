@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use super::store::{CUSTOM_RATE, DISPLAY_TYPE, QUOTA_PER_UNIT, USD_EXCHANGE_RATE, apply};
 use super::QuotaDisplay;
+use super::store::{CUSTOM_RATE, DISPLAY_TYPE, QUOTA_PER_UNIT, USD_EXCHANGE_RATE, apply};
 
 fn values(pairs: &[(&'static str, &str)]) -> BTreeMap<&'static str, String> {
     pairs

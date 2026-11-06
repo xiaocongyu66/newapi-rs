@@ -139,7 +139,9 @@ pub async fn login_guard(
     // Go `mark` 为 "CT"，键为 mark + ClientIP（无分隔符）。
     if let Some(retry_after) = state.check_rate_limit(&format!("CT{ip}"), now) {
         let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
-        if retry_after > 0 && let Ok(value) = HeaderValue::from_str(&retry_after.to_string()) {
+        if retry_after > 0
+            && let Ok(value) = HeaderValue::from_str(&retry_after.to_string())
+        {
             response.headers_mut().insert(header::RETRY_AFTER, value);
         }
         return response;
@@ -173,7 +175,8 @@ async fn anonymous_body_limit(limit: usize, request: Request, next: Next) -> Res
     let (parts, body) = request.into_parts();
     match to_bytes(body, limit.saturating_add(1)).await {
         Ok(bytes) if bytes.len() <= limit => {
-            next.run(Request::from_parts(parts, Body::from(bytes))).await
+            next.run(Request::from_parts(parts, Body::from(bytes)))
+                .await
         }
         Ok(_) | Err(_) => StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     }

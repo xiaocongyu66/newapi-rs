@@ -118,7 +118,10 @@ impl SlidingWindowLimiter {
 
     #[cfg(test)]
     fn tracked_keys(&self) -> usize {
-        self.windows.lock().unwrap_or_else(PoisonError::into_inner).len()
+        self.windows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 }
 
@@ -151,11 +154,11 @@ mod tests {
         let limiter = limiter(3, 10);
         let cases = [
             // (now, expected allowed, expected retry-after)
-            (0, true, 0), // first request creates the queue
-            (1, true, 0), // below max
-            (2, true, 0),           // exactly max
-            (5, false, 10),         // max+1-th inside window: rejected
-            (9, false, 10),         // now - oldest == 9 < 10: still rejected
+            (0, true, 0),   // first request creates the queue
+            (1, true, 0),   // below max
+            (2, true, 0),   // exactly max
+            (5, false, 10), // max+1-th inside window: rejected
+            (9, false, 10), // now - oldest == 9 < 10: still rejected
         ];
         for (now, allowed, retry_after) in cases {
             assert_eq!(

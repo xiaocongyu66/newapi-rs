@@ -135,12 +135,12 @@ async fn run() -> Result<(), ()> {
         listener,
         router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            signal_state.mark_not_ready();
-            let _ = signal_tx.send(true);
-        })
-        .await;
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        signal_state.mark_not_ready();
+        let _ = signal_tx.send(true);
+    })
+    .await;
     // 即使服务异常返回，也先通知并等待同步任务退出，再关闭连接池。
     let _ = shutdown_tx.send(true);
     let worker_failed = reload.await.is_err();

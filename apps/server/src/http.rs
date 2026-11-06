@@ -666,13 +666,7 @@ async fn boundary(request: Request, next: Next) -> Response {
     if is_login_path(request.uri().path()) {
         return boundary_inner(request, next, Duration::from_secs(30), None).await;
     }
-    boundary_inner(
-        request,
-        next,
-        Duration::from_secs(30),
-        Some(MAX_BODY_BYTES),
-    )
-    .await
+    boundary_inner(request, next, Duration::from_secs(30), Some(MAX_BODY_BYTES)).await
 }
 
 fn is_login_path(path: &str) -> bool {

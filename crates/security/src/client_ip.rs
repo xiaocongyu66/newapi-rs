@@ -116,9 +116,7 @@ impl Network {
                     }
                 } else {
                     match candidate {
-                        IpAddr::V6(ip) => {
-                            u128::from(ip) & mask128(u32::from(*prefix)) == *masked
-                        }
+                        IpAddr::V6(ip) => u128::from(ip) & mask128(u32::from(*prefix)) == *masked,
                         IpAddr::V4(_) => false,
                     }
                 }

@@ -164,11 +164,9 @@ impl AppState {
             newapi_billing::quota_display::QuotaDisplayType::Cny => QuotaDisplayKind::Cny {
                 usd_exchange_rate: display.usd_exchange_rate,
             },
-            newapi_billing::quota_display::QuotaDisplayType::Custom => {
-                QuotaDisplayKind::Custom {
-                    rate: display.custom_rate,
-                }
-            }
+            newapi_billing::quota_display::QuotaDisplayType::Custom => QuotaDisplayKind::Custom {
+                rate: display.custom_rate,
+            },
             newapi_billing::quota_display::QuotaDisplayType::Tokens => QuotaDisplayKind::Tokens,
             newapi_billing::quota_display::QuotaDisplayType::Usd => QuotaDisplayKind::Usd,
         };

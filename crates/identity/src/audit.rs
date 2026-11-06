@@ -162,7 +162,10 @@ mod tests {
         assert!(id.starts_with("20231114222640"));
         assert!(id[23..31].chars().all(|c| c.is_ascii_hexdigit()));
         // 前缀在进程内稳定。
-        assert_eq!(new_request_id(1_700_000_000_000_000_001)[23..31], id[23..31]);
+        assert_eq!(
+            new_request_id(1_700_000_000_000_000_001)[23..31],
+            id[23..31]
+        );
     }
 
     #[test]

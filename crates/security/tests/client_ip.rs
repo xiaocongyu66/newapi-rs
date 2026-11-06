@@ -109,8 +109,8 @@ fn invalid_entries_are_rejected() {
 
 #[test]
 fn explicit_list_with_blank_segments_parses() {
-    let policy = parse(Some(" 10.0.0.0/8 , 1.2.3.4 , , ::1 "))
-        .expect("trim 后空段应跳过，合法条目照常编译");
+    let policy =
+        parse(Some(" 10.0.0.0/8 , 1.2.3.4 , , ::1 ")).expect("trim 后空段应跳过，合法条目照常编译");
     assert!(policy.trusts(ip("10.9.9.9")));
     assert!(policy.trusts(ip("1.2.3.4")));
     // Go 将裸地址当作 /128 网段，非规范写法同样命中。
@@ -130,7 +130,9 @@ fn error_display_never_leaks_input_values() {
     assert!(!text.contains("1.2.3.4"));
     assert!(!text.contains("999"));
     assert_eq!(
-        parse(Some("1.2.3.4, none")).expect_err("必须失败").to_string(),
+        parse(Some("1.2.3.4, none"))
+            .expect_err("必须失败")
+            .to_string(),
         "TRUSTED_PROXIES=none must be used alone"
     );
     assert_eq!(
@@ -193,12 +195,7 @@ fn trusted_peer_walks_chain_right_to_left() {
     );
     // 单项头即最左项，trim 后原文返回。
     assert_eq!(
-        resolve_client_ip(
-            Some(ip("127.0.0.1")),
-            Some(" 203.0.113.5 "),
-            None,
-            &policy
-        ),
+        resolve_client_ip(Some(ip("127.0.0.1")), Some(" 203.0.113.5 "), None, &policy),
         "203.0.113.5"
     );
 }
@@ -228,7 +225,12 @@ fn malformed_entry_abandons_header_for_next_header() {
     );
     // 两个头都不可用 → 回落 peer。
     assert_eq!(
-        resolve_client_ip(Some(ip("127.0.0.1")), Some("evil"), Some("also evil"), &policy),
+        resolve_client_ip(
+            Some(ip("127.0.0.1")),
+            Some("evil"),
+            Some("also evil"),
+            &policy
+        ),
         "127.0.0.1"
     );
 }
@@ -238,7 +240,12 @@ fn empty_headers_are_skipped() {
     let policy = default_policy();
     // 空串头与缺失头等价（Go 的 c.Get 对缺失头返回空串）。
     assert_eq!(
-        resolve_client_ip(Some(ip("127.0.0.1")), Some(""), Some("198.51.100.9"), &policy),
+        resolve_client_ip(
+            Some(ip("127.0.0.1")),
+            Some(""),
+            Some("198.51.100.9"),
+            &policy
+        ),
         "198.51.100.9"
     );
     // 头全缺失 → 回落 peer。
