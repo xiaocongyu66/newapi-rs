@@ -16,9 +16,8 @@
 //! 且会话撤销属于另一个仓储；本实现只做密码与 `auth_version`。
 
 use newapi_storage::Database;
-use uuid::Uuid;
 
-use crate::crypto::hash_password;
+use crate::crypto::{hash_password, random_uuid};
 
 /// Go `common.GenerateVerificationCode(12)` 生成的新密码长度；字母表为
 /// UUIDv4 去掉连字符后的十六进制字符（长度 0 时返回完整的 32 位）。
@@ -36,12 +35,13 @@ pub enum PasswordResetError {
 
 /// Go `common.GenerateVerificationCode`：UUIDv4 去掉 `-`，按请求长度截断。
 /// 生产密码固定 12 位；长度超过 32 时与 Go 一样是调用方错误。
-pub fn generate_verification_code(length: usize) -> String {
-    let code = Uuid::new_v4().simple().to_string();
+/// `None` 仅当操作系统随机源失败（Go 的 `uuid.New()` 在此处会 panic）。
+pub fn generate_verification_code(length: usize) -> Option<String> {
+    let dashless = random_uuid().ok()?.replace('-', "");
     if length == 0 {
-        return code;
+        return Some(dashless);
     }
-    code[..length].to_owned()
+    Some(dashless[..length].to_owned())
 }
 
 /// Go `NormalizeEmail`：`strings.ToLower(strings.TrimSpace(email))`。
@@ -168,7 +168,8 @@ mod tests {
     #[test]
     fn generated_passwords_are_twelve_lowercase_hex_characters() {
         for _ in 0..64 {
-            let password = generate_verification_code(GENERATED_PASSWORD_LENGTH);
+            let password = generate_verification_code(GENERATED_PASSWORD_LENGTH)
+                .expect("OS randomness in tests");
             assert_eq!(password.len(), GENERATED_PASSWORD_LENGTH);
             assert!(
                 password
@@ -180,7 +181,12 @@ mod tests {
 
     #[test]
     fn zero_length_returns_the_full_dashless_uuid() {
-        assert_eq!(generate_verification_code(0).len(), 32);
+        assert_eq!(
+            generate_verification_code(0)
+                .expect("OS randomness in tests")
+                .len(),
+            32
+        );
     }
 
     #[test]

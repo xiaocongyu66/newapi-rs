@@ -63,7 +63,9 @@ pub async fn reset_password(
         return rejected(translate(&headers, "user.password_reset_link_invalid"));
     }
 
-    let password = generate_verification_code(GENERATED_PASSWORD_LENGTH);
+    let Some(password) = generate_verification_code(GENERATED_PASSWORD_LENGTH) else {
+        return rejected(translate(&headers, "common.database_error"));
+    };
     match repository.reset_by_email(&email, &password).await {
         Ok(()) => {
             // Go 仅在成功后 `DeleteKey`，验证码因此是一次性的。
