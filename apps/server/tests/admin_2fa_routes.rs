@@ -280,7 +280,7 @@ async fn soft_delete_user(db: &Database, id: i64) {
                 .bind(id)
                 .execute(pool)
                 .await
-                .expect("soft delete user")
+                .expect("soft delete user");
         }
         Database::Postgres(pool) => {
             sqlx::query("UPDATE users SET deleted_at = to_timestamp($1::BIGINT) WHERE id = $2")
@@ -288,9 +288,9 @@ async fn soft_delete_user(db: &Database, id: i64) {
                 .bind(id)
                 .execute(pool)
                 .await
-                .expect("soft delete user")
+                .expect("soft delete user");
         }
-    };
+    }
 }
 
 async fn seed_session(db: &Database, sid: &str, user_id: i64, uv: i64, sv: i64, at: i64) {
@@ -622,14 +622,16 @@ async fn run_contract(db: Database) {
 
     // ---- disable: target lookup -------------------------------------------
     // 不存在的用户与已软删除用户都看不见（GORM 作用域）。
+    let not_found = translated("twofa.user_not_found");
     assert_business_message(
         send_delete(&app, "/api/user/999/2fa", &admin).await,
-        translated("twofa.user_not_found"),
+        &not_found,
     )
     .await;
+    let not_found = translated("twofa.user_not_found");
     assert_business_message(
         send_delete(&app, "/api/user/7/2fa", &admin).await,
-        translated("twofa.user_not_found"),
+        &not_found,
     )
     .await;
     // 目标存在但没有启用 2FA（无因子 / 仅有待验证因子）。
