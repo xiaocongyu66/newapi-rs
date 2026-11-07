@@ -467,7 +467,7 @@ mod tests {
         // the `default()` compliance state while configuring credentials via
         // struct-update syntax: Rust 2024 forbids assigning fields to a value
         // still typed as `Default::default()`.
-        let mut settings = TopUpSettings {
+        let settings = TopUpSettings {
             stripe_api_secret: "secret".into(),
             stripe_webhook_secret: "hook".into(),
             stripe_price_id: "price".into(),
