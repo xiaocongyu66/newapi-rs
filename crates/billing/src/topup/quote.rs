@@ -292,7 +292,11 @@ pub fn stripe_credited_quota(
     product = mul_div(product, scaled(quota_per_unit), SCALE);
     // Go `QuotaFromDecimalStrict` rounds to an integer (`Round(0)`) before it
     // takes the int, so a ratio with a fractional digit still lands exactly.
-    mul_div_round(product, 1, SCALE) as i64
+    // The Stripe route caps the request at 10000 units, so this cannot overflow
+    // there; clamp rather than wrap so an unreachable huge product still lands
+    // in `validate_credited_quota`'s not-representable branch instead of
+    // producing a garbage in-range number.
+    mul_div_round(product, 1, SCALE).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 /// Go `validateCreditedQuota` (`topup_api.go:254-263`) — the Stripe-only
@@ -585,6 +589,15 @@ fn ceil_to_integer(value: i128) -> i128 {
 /// Go `Decimal.InexactFloat64` (`Rat().Float64()`): the nearest `f64` to the
 /// exact rational. Splitting at the integer boundary keeps the dividend exact
 /// where a bare `value as f64 / SCALE as f64` would double-round.
+///
+/// Assessed residual gap: when the fraction exceeds 2^53 (only reachable from
+/// a `Price`/ratio/discount carrying more than ~15 significant digits, which
+/// the option schema's `ParseFloat` values do not), `fraction as f64` rounds
+/// before the division and the result can sit one ulp from Go's. Every rate
+/// the schema actually stores (7.3, 1.0, 8.0, group ratios) divides into an
+/// exactly representable fraction, so this stays a recorded property rather
+/// than a defect, and the adapters' two-decimal formatting plus the
+/// `payMoney <= 0.01` gate are insensitive to it.
 fn to_float(scaled: i128) -> f64 {
     let whole = scaled.div_euclid(SCALE);
     let fraction = scaled.rem_euclid(SCALE);

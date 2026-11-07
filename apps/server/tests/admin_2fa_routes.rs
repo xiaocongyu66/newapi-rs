@@ -260,9 +260,10 @@ async fn seed_user(db: &Database, id: i64, username: &str, role: i64, pat: Optio
         sqlx::query(
             r#"INSERT INTO users
                 (id,username,display_name,role,status,"group",auth_version,access_token)
-                VALUES ($1,$2,$3,1,1,'default',1,$4)"#,
+                VALUES ($1,$2,$3,$4,1,'default',1,$5)"#,
         )
         .bind(id)
+        .bind(username)
         .bind(username)
         .bind(role)
         .bind(pat)
@@ -335,10 +336,11 @@ async fn seed_backup_code(db: &Database, user_id: i64, code_hash: &str) {
     backend!(db, pool, {
         sqlx::query(
             r#"INSERT INTO two_fa_backup_codes (user_id, code_hash, is_used)
-                VALUES ($1,$2,0)"#,
+                VALUES ($1,$2,$3)"#,
         )
         .bind(user_id)
         .bind(code_hash)
+        .bind(false)
         .execute(pool)
         .await
         .expect("seed backup code");

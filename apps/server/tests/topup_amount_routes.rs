@@ -325,10 +325,14 @@ async fn run_contract(db: Database) {
         "充值数量不能小于 500000",
     )
     .await;
-    // Stripe converts its priced units, so 500000 tokens = 1 unit -> 8.00.
-    assert_quote(
+    // Stripe's own minimum is scaled by `QuotaPerUnit` (1 * 500000), so any
+    // request that clears it is far above the flat `> 10000` ceiling Go
+    // applies to the raw amount (`topup_stripe.go:47-50`). In TOKENS mode a
+    // Stripe quote is therefore unreachable by this route: the one amount
+    // that clears the scaled minimum (500000) trips the ceiling instead.
+    assert_error(
         post_quote(&router, "/api/user/stripe/amount", auth, 500_000).await,
-        "8.00",
+        "充值数量不能大于 10000",
     )
     .await;
     // The Waffo family does **not** scale its minimum.
