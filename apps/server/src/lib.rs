@@ -19,6 +19,7 @@ pub mod setup_http;
 mod state;
 pub mod status;
 pub mod token_http;
+pub mod topup_http;
 pub mod turnstile;
 pub mod twofa_http;
 
