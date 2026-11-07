@@ -1,4 +1,5 @@
-//! Dashboard authentication boundary: reusable `UserAuth` middleware.
+//! Dashboard authentication boundary: reusable `UserAuth` middleware and the
+//! role gate behind Go `AdminAuth`.
 //!
 //! Go reference: `apps/api/internal/security/authenticate.go`
 //! (`classifyDashboardCredential` + `authHelper`). Credential classification
@@ -28,6 +29,10 @@ use crate::AppState;
 
 /// Go `common.RoleCommonUser`.
 pub const ROLE_COMMON_USER: i64 = 1;
+
+/// Go `common.RoleAdminUser`（`common/constants.go:193`）：`AdminAuth` 的
+/// 最低角色（`security.AdminAuth` → `authHelper(c, RoleAdminUser)`）。
+pub const ROLE_ADMIN_USER: i64 = 10;
 
 const MSG_ACCESS_TOKEN_INVALID: &str = "auth.access_token_invalid";
 const MSG_NOT_LOGGED_IN: &str = "auth.not_logged_in";
@@ -75,7 +80,7 @@ pub async fn user_auth(
         Err(_) => return render_auth_failure(invalid_credential(), &language),
     };
     let now = crate::http::now_seconds();
-    match authenticate(&state, &credential, now).await {
+    match authenticate(&state, &credential, ROLE_COMMON_USER, now).await {
         Ok(user) => {
             request.extensions_mut().insert(user);
             next.run(request).await
@@ -94,9 +99,39 @@ pub fn require_role(
     authorize(&user.0, min_role).map_err(map_user_auth_error)
 }
 
+/// Go `security.AdminAuth()`（`security/authenticate.go:97-101`：
+/// `authHelper(c, common.RoleAdminUser)`），挂在 `adminRoute` 上
+/// （`transport/compose/register_api.go:204-205`；`userRoute` 本身没有组级
+/// 中间件，所以 admin 链只有这一道）。
+///
+/// 与 [`user_auth`] 同为完整鉴权（凭据分类 → 账号状态 → 角色 → 用户信息），
+/// 差别只在最低角色：`role < 10` → HTTP 403 `AUTH_INSUFFICIENT_PRIVILEGE`
+/// （Go `authenticate.go:54-57`），因此 guest（role 0）与普通用户（role 1）
+/// 都拿到与 Go 一致的 403，而不是 `UserAuth` 的 401。
+pub async fn admin_auth(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let language = request_language(&request);
+    let credential = match parse_authorization(request.headers()) {
+        Ok(AuthCredential::Bearer(token) | AuthCredential::Raw(token)) => token,
+        Err(_) => return render_auth_failure(invalid_credential(), &language),
+    };
+    let now = crate::http::now_seconds();
+    match authenticate(&state, &credential, ROLE_ADMIN_USER, now).await {
+        Ok(user) => {
+            request.extensions_mut().insert(user);
+            next.run(request).await
+        }
+        Err(failure) => render_auth_failure(failure, &language),
+    }
+}
+
 async fn authenticate(
     state: &AppState,
     credential: &str,
+    min_role: i64,
     now: i64,
 ) -> Result<AuthenticatedUser, AuthFailure> {
     let Some(db) = state.db() else {
@@ -104,9 +139,9 @@ async fn authenticate(
     };
     match classify_dashboard(credential) {
         DashboardCredential::InternalDashboard => {
-            authenticate_dashboard(state, &db, credential, now).await
+            authenticate_dashboard(state, &db, credential, min_role, now).await
         }
-        DashboardCredential::Opaque => authenticate_pat(&db, credential).await,
+        DashboardCredential::Opaque => authenticate_pat(&db, credential, min_role).await,
     }
 }
 
@@ -114,6 +149,7 @@ async fn authenticate_dashboard(
     state: &AppState,
     db: &newapi_storage::Database,
     credential: &str,
+    min_role: i64,
     now: i64,
 ) -> Result<AuthenticatedUser, AuthFailure> {
     let Some(auth) = state.auth() else {
@@ -155,26 +191,30 @@ async fn authenticate_dashboard(
             return Err(internal_failure());
         }
     };
-    authorize_user(UserAuthIdentity {
-        user_id: profile.id,
-        username: profile.username,
-        role: profile.role,
-        status: profile.status,
-        auth_version: profile.auth_version,
-        group: profile.group,
-        credential: CredentialKind::DashboardSession,
-    })
+    authorize_user(
+        UserAuthIdentity {
+            user_id: profile.id,
+            username: profile.username,
+            role: profile.role,
+            status: profile.status,
+            auth_version: profile.auth_version,
+            group: profile.group,
+            credential: CredentialKind::DashboardSession,
+        },
+        min_role,
+    )
 }
 
 async fn authenticate_pat(
     db: &newapi_storage::Database,
     credential: &str,
+    min_role: i64,
 ) -> Result<AuthenticatedUser, AuthFailure> {
     match PersonalAccessTokenRepository::new(db.clone())
         .by_token(credential)
         .await
     {
-        Ok(Some(user)) => authorize_user(user),
+        Ok(Some(user)) => authorize_user(user, min_role),
         // Go `ValidateAccessToken` returning no row (including soft-deleted
         // users) falls through to `ErrAuthTokenInvalid`.
         Ok(None) => Err(invalid_credential()),
@@ -189,8 +229,8 @@ async fn authenticate_pat(
     }
 }
 
-fn authorize_user(user: UserAuthIdentity) -> Result<AuthenticatedUser, AuthFailure> {
-    match authorize(&user, ROLE_COMMON_USER) {
+fn authorize_user(user: UserAuthIdentity, min_role: i64) -> Result<AuthenticatedUser, AuthFailure> {
+    match authorize(&user, min_role) {
         Ok(()) => Ok(AuthenticatedUser(user)),
         Err(error) => Err(user_auth_failure(error)),
     }

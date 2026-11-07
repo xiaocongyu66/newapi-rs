@@ -3,6 +3,7 @@
 // the default macro recursion limit (serde_json expands per element).
 #![recursion_limit = "256"]
 
+pub mod admin_twofa_http;
 pub mod aff_http;
 pub mod amount_http;
 pub mod auth;

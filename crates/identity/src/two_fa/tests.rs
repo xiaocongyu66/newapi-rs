@@ -120,3 +120,38 @@ fn backup_code_normalization_matches_go() {
         Some("ABCD-EFG0".to_owned())
     );
 }
+
+#[test]
+fn admin_stats_rate_matches_go_percent_format() {
+    // Go `fmt.Sprintf("%.1f%%", enabled/total*100)`：字面带 `%` 的字符串。
+    // total == 0 时 Go 以 0.0 起步。
+    let zero = super::repository::TwoFaAdminStats::new(0, 0);
+    assert_eq!(zero.total_users, 0);
+    assert_eq!(zero.enabled_users, 0);
+    assert_eq!(zero.enabled_rate, "0.0%");
+    let half = super::repository::TwoFaAdminStats::new(2, 1);
+    assert_eq!(half.enabled_rate, "50.0%");
+    let third = super::repository::TwoFaAdminStats::new(3, 1);
+    assert_eq!(third.enabled_rate, "33.3%");
+    let seventh = super::repository::TwoFaAdminStats::new(7, 3);
+    assert_eq!(seventh.enabled_rate, "42.9%");
+    // 启用用户数不会超过总数（每个用户最多一个因子）。
+    let full = super::repository::TwoFaAdminStats::new(4, 4);
+    assert_eq!(full.enabled_rate, "100.0%");
+}
+
+#[test]
+fn can_manage_target_role_matches_go_matrix() {
+    // Go `canManageTargetRole(myRole, targetRole)`（manage_users.go:374-376）：
+    // root 一律放行；其他角色仅可管理严格更低角色，同级互斥。
+    assert!(super::repository::can_manage_target_role(100, 100));
+    assert!(super::repository::can_manage_target_role(100, 10));
+    assert!(super::repository::can_manage_target_role(100, 1));
+    assert!(super::repository::can_manage_target_role(10, 1));
+    assert!(super::repository::can_manage_target_role(10, 0));
+    assert!(!super::repository::can_manage_target_role(10, 10));
+    assert!(!super::repository::can_manage_target_role(10, 100));
+    assert!(!super::repository::can_manage_target_role(1, 1));
+    assert!(!super::repository::can_manage_target_role(1, 10));
+    assert!(!super::repository::can_manage_target_role(1, 100));
+}
