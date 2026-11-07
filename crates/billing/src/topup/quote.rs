@@ -933,10 +933,12 @@ mod tests {
         assert_eq!(div_round(SCALE, SCALE), SCALE);
         assert_eq!(div_round(500_000 * SCALE, 500_000 * SCALE), SCALE);
         assert_eq!(div_round(3 * SCALE, 2 * SCALE), 3 * SCALE / 2);
-        // 10 / 3 rounded to 16 fractional digits, half away from zero.
+        // 10 / 3 rounded to 16 fractional digits, half away from zero:
+        // 3.3333333333333333, which is 33_333_333_333_333_333 / 10^16, so the
+        // SCALE-scaled form is that 17-digit value times 100.
         assert_eq!(
             div_round(10 * SCALE, 3 * SCALE),
-            3_333_333_333_333_333_3 * 100
+            33_333_333_333_333_333 * 100
         );
         // 1 / 500000 is exact well inside 16 digits, so nothing rounds.
         assert_eq!(div_round(SCALE, 500_000 * SCALE), 2 * SCALE / 1_000_000);
