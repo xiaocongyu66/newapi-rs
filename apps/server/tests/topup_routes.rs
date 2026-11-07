@@ -241,6 +241,11 @@ async fn run_contract(db: Database) {
     assert_eq!(products[0]["quota_display"], json!(10.0));
     assert!(products[1].get("quota_display").is_none());
 
+    // `GET /api/user/topup/self` on an empty table: zero total, empty items.
+    let body = assert_success(send(&app, "/api/user/topup/self", Some(auth)).await).await;
+    assert_eq!(body["data"]["total"], json!(0));
+    assert_eq!(body["data"]["items"], json!([]));
+
     // `GET /api/user/topup/self`: user filter, 30-day window, ordering.
     let now = now();
     seed_topup(&db, 1, 7, "USR7NOnew", now - 3600).await;
@@ -290,6 +295,20 @@ async fn run_contract(db: Database) {
     let body =
         assert_success(send(&app, "/api/user/topup/self?page_size=500", Some(auth)).await).await;
     assert_eq!(body["data"]["page_size"], json!(100));
+    // Go treats `page_size=0` as unset: the compat aliases then the default.
+    let body =
+        assert_success(send(&app, "/api/user/topup/self?page_size=0", Some(auth)).await).await;
+    assert_eq!(body["data"]["page_size"], json!(10));
+    let body =
+        assert_success(send(&app, "/api/user/topup/self?page_size=0&ps=3", Some(auth)).await).await;
+    assert_eq!(body["data"]["page_size"], json!(3));
+
+    // A page past the last row: the OFFSET lands beyond the count, so no
+    // items render while the total stays the full window count.
+    let body =
+        assert_success(send(&app, "/api/user/topup/self?page_size=2&p=99", Some(auth)).await).await;
+    assert_eq!(body["data"]["total"], json!(3));
+    assert_eq!(body["data"]["items"], json!([]));
 
     // Search: exact `trade_no` match — Go does not add % wildcards.
     let body =
