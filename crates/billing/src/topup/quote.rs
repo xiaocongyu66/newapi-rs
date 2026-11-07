@@ -43,7 +43,7 @@ use super::TopUpSettings;
 const SCALE: i128 = 1_000_000_000_000_000_000;
 
 /// Go `common.MaxQuota` = `math.MaxInt32` (`common/quota_math.go:15`).
-const MAX_QUOTA: i64 = i64::from(i32::MAX);
+const MAX_QUOTA: i64 = 2_147_483_647;
 
 /// Go `common.GetTopupGroupRatio`: a missing group is a server misconfiguration
 /// (Go logs `SysError`), and the Go fallback is 1.
@@ -77,7 +77,7 @@ pub fn amount_discount(settings: &TopUpSettings, amount: i64) -> f64 {
 /// so the credited quota is a whole multiple of `quota_per_unit`. `USD/CNY`
 /// multiplies directly.
 pub fn top_up_quota(
-    settings: &TopUpSettings,
+    _settings: &TopUpSettings,
     amount: i64,
     tokens: bool,
     quota_per_unit: f64,
@@ -107,7 +107,7 @@ pub fn top_up_quota(
 /// `USD/CNY` returns `floor((MaxQuota - 1) / QuotaPerUnit)` — the whole units
 /// that fit. `TOKENS` returns `((max + 1) * QuotaPerUnit).Ceil() - 1`, i.e.
 /// the largest token count that still floors to at most `max` whole units.
-pub fn max_top_up_amount(settings: &TopUpSettings, tokens: bool, quota_per_unit: f64) -> i64 {
+pub fn max_top_up_amount(_settings: &TopUpSettings, tokens: bool, quota_per_unit: f64) -> i64 {
     if !(quota_per_unit > 0.0) {
         // Go `common.QuotaPerUnit <= 0` → 0 (no limit applies).
         return 0;
