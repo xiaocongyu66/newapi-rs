@@ -463,10 +463,16 @@ mod tests {
 
     #[test]
     fn compliance_gate_empties_every_method() {
-        let mut settings = TopUpSettings::default();
-        settings.stripe_api_secret = "secret".into();
-        settings.stripe_webhook_secret = "hook".into();
-        settings.stripe_price_id = "price".into();
+        // The compliance gate must stay closed here, so this fixture keeps
+        // the `default()` compliance state while configuring credentials via
+        // struct-update syntax: Rust 2024 forbids assigning fields to a value
+        // still typed as `Default::default()`.
+        let mut settings = TopUpSettings {
+            stripe_api_secret: "secret".into(),
+            stripe_webhook_secret: "hook".into(),
+            stripe_price_id: "price".into(),
+            ..TopUpSettings::default()
+        };
         assert!(settings.effective_pay_methods().is_empty());
         assert!(!settings.is_stripe_topup_enabled());
         assert!(settings.waffo_pay_methods_value().is_null());
