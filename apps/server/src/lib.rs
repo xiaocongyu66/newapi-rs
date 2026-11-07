@@ -8,6 +8,7 @@ pub mod aff_http;
 pub mod amount_http;
 pub mod auth;
 pub mod boundary_mw;
+pub mod checkin_http;
 mod global_limit;
 pub mod groups_http;
 mod http;
