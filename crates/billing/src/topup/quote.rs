@@ -92,7 +92,7 @@ pub fn top_up_quota(
         if quota_per_unit == 0 {
             return 0;
         }
-        let units = (amount * SCALE / quota_per_unit) as i128;
+        let units = amount * SCALE / quota_per_unit;
         // Guard the product: `units * quota_per_unit` can reach 10^36, still
         // inside i128 (10^38) for any amount Go accepts as a request.
         (units * quota_per_unit / SCALE) as i64
@@ -108,14 +108,16 @@ pub fn top_up_quota(
 /// that fit. `TOKENS` returns `((max + 1) * QuotaPerUnit).Ceil() - 1`, i.e.
 /// the largest token count that still floors to at most `max` whole units.
 pub fn max_top_up_amount(_settings: &TopUpSettings, tokens: bool, quota_per_unit: f64) -> i64 {
-    if !(quota_per_unit > 0.0) {
-        // Go `common.QuotaPerUnit <= 0` → 0 (no limit applies).
+    if !quota_per_unit.is_finite() || quota_per_unit <= 0.0 {
+        // Go `common.QuotaPerUnit <= 0` → 0 (no limit applies); a non-finite
+        // `QuotaPerUnit` cannot arise from `ParseFloat` of a real config and is
+        // folded into the same "no limit" branch so the division below is safe.
         return 0;
     }
     let unit = scaled_finite(quota_per_unit);
     // `max_units` = floor((MaxQuota - 1) / QuotaPerUnit), a plain integer:
     // dividing the scaled numerator by the scaled divisor cancels the scales.
-    let max_units = (i128::from(MAX_QUOTA - 1) * SCALE / unit) as i128;
+    let max_units = i128::from(MAX_QUOTA - 1) * SCALE / unit;
     if !tokens {
         return max_units as i64;
     }
