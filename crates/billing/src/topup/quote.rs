@@ -295,34 +295,36 @@ pub fn stripe_credited_quota(
     mul_div_round(product, 1, SCALE) as i64
 }
 
-/// Go `topUpQuotaMaxCurrent` (`store_topup.go:63-70`): `creditedQuota <= 0`
-/// or `>= MaxQuota` is `ErrInvalidTopUpQuota`; otherwise the largest wallet
-/// balance that can still absorb the credit is `MaxQuota - 1 - creditedQuota`.
+/// Go `validateCreditedQuota` (`topup_api.go:254-263`) — the Stripe-only
+/// range check: `QuotaFromDecimalStrict` rejecting an out-of-range product
+/// surfaces as `充值额度超出系统可表示范围`, and a non-positive one as
+/// `充值额度必须大于 0`.
 ///
-/// Go's `validateCreditedQuota` maps the same conditions onto its two
-/// messages (`充值额度超出系统可表示范围` for the not-representable case,
-/// `充值额度必须大于 0` for zero) before the capacity check runs; the adapter
-/// renders those two verbatim, and this function returns which one applies.
-pub fn validate_credited_quota(credited_quota: i64) -> Result<i64, CreditedQuotaRejection> {
-    if credited_quota <= 0 {
-        return Err(CreditedQuotaRejection::MustBePositive);
-    }
+/// This is *not* the capacity check: Go runs `ValidateTopUpQuotaCapacity`
+/// afterwards, separately, and `topUpQuotaMaxCurrent` reports its own
+/// `ErrInvalidTopUpQuota` for the same range condition. Merging the two made
+/// a `MaxQuota - 1` product report the range literal instead of Go's stored
+/// error, and made an empty wallet fail where Go accepts it.
+pub fn validate_credited_quota(credited_quota: i64) -> Result<(), CreditedQuotaRejection> {
     if credited_quota >= MAX_QUOTA {
         return Err(CreditedQuotaRejection::NotRepresentable);
     }
-    let max_current = (MAX_QUOTA - 1).saturating_sub(credited_quota);
-    if max_current <= 0 {
-        return Err(CreditedQuotaRejection::NotRepresentable);
+    if credited_quota <= 0 {
+        return Err(CreditedQuotaRejection::MustBePositive);
     }
-    Ok(max_current)
+    Ok(())
 }
 
-/// Go `ValidateTopUpQuotaCapacity`: the caller supplies the wallet balance
-/// because reading it is an adapter concern. Returns the stored rejection when
-/// the credited quota itself is out of range, mirroring Go's
-/// `topUpQuotaMaxCurrent` pre-check.
+/// Go `ValidateTopUpQuotaCapacity` (`store_topup.go:75-89`) plus its
+/// `topUpQuotaMaxCurrent` pre-check (`store_topup.go:65-70`): an out-of-range
+/// credited quota is the stored `ErrInvalidTopUpQuota`, and a wallet that
+/// cannot absorb the credit is `ErrTopUpQuotaLimitExceeded`. The wallet balance
+/// comes from the caller because reading it is an adapter concern.
 pub fn check_capacity(credited_quota: i64, user_quota: i64) -> Result<(), CreditedQuotaRejection> {
-    let max_current = validate_credited_quota(credited_quota)?;
+    if credited_quota <= 0 || credited_quota >= MAX_QUOTA {
+        return Err(CreditedQuotaRejection::InvalidTopUpQuota);
+    }
+    let max_current = (MAX_QUOTA - 1).saturating_sub(credited_quota);
     if user_quota > max_current {
         return Err(CreditedQuotaRejection::LimitExceeded);
     }
@@ -835,6 +837,12 @@ mod tests {
 
     #[test]
     fn credited_quota_boundaries_match_go() {
+        // Go `validateCreditedQuota`: `QuotaFromDecimalStrict`'s clamp is the
+        // not-representable literal, a non-positive value is the other one.
+        assert_eq!(
+            validate_credited_quota(i32::MAX as i64),
+            Err(CreditedQuotaRejection::NotRepresentable)
+        );
         assert_eq!(
             validate_credited_quota(0),
             Err(CreditedQuotaRejection::MustBePositive)
@@ -843,18 +851,43 @@ mod tests {
             validate_credited_quota(-5),
             Err(CreditedQuotaRejection::MustBePositive)
         );
-        assert_eq!(
-            validate_credited_quota(i32::MAX as i64),
-            Err(CreditedQuotaRejection::NotRepresentable)
-        );
-        assert_eq!(validate_credited_quota(1), Ok(i32::MAX as i64 - 2));
+        assert_eq!(validate_credited_quota(1), Ok(()));
+        // `MaxQuota - 1` is still representable — `topUpQuotaMaxCurrent` is what
+        // refuses it, with the stored error, not this literal.
+        assert_eq!(validate_credited_quota(MAX_QUOTA - 1), Ok(()));
     }
 
     #[test]
-    fn capacity_rejects_a_wallet_that_would_overflow() {
+    fn capacity_uses_the_stored_errors_for_a_range_or_overflow() {
+        // Go `topUpQuotaMaxCurrent` (`store_topup.go:65-70`): the same range
+        // condition that `validateCreditedQuota` rejects is reported as
+        // `ErrInvalidTopUpQuota` here, and only the wallet comparison produces
+        // `ErrTopUpQuotaLimitExceeded`.
+        assert_eq!(
+            check_capacity(0, 0),
+            Err(CreditedQuotaRejection::InvalidTopUpQuota)
+        );
+        assert_eq!(
+            check_capacity(MAX_QUOTA, 0),
+            Err(CreditedQuotaRejection::InvalidTopUpQuota)
+        );
         assert_eq!(check_capacity(100, 0), Ok(()));
+        // The largest wallet that still absorbs the credit is
+        // `MaxQuota - 1 - creditedQuota`, and one more unit is refused.
+        assert_eq!(check_capacity(100, MAX_QUOTA - 1 - 100), Ok(()));
+        assert_eq!(
+            check_capacity(100, MAX_QUOTA - 1 - 100 + 1),
+            Err(CreditedQuotaRejection::LimitExceeded)
+        );
         assert_eq!(
             check_capacity(100, i32::MAX as i64),
+            Err(CreditedQuotaRejection::LimitExceeded)
+        );
+        // A `MaxQuota - 1` product leaves no room, so only an empty wallet fits —
+        // Go accepts it, which is why this is `Ok(())` and not the range literal.
+        assert_eq!(check_capacity(MAX_QUOTA - 1, 0), Ok(()));
+        assert_eq!(
+            check_capacity(MAX_QUOTA - 1, 1),
             Err(CreditedQuotaRejection::LimitExceeded)
         );
     }

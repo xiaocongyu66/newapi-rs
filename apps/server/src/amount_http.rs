@@ -245,12 +245,10 @@ async fn quote(state: &AppState, user_id: i64, request: &AmountRequest, kind: Ki
     // ---- 2. quota validation -------------------------------------------
     // Go `rejectInvalidTopUpQuota(c, id, amount)` runs *before* the group
     // lookup, so a request with an invalid quota never reads the user row.
-    // Stripe validates the *credited* quota (amount x ratio x quota-per-unit)
-    // and never calls `ValidateTopUpQuotaCapacity` on the wallet; the other
+    // Stripe instead reads the group first (`topup_stripe.go:52`) and validates
+    // the *credited* quota (amount x ratio x quota-per-unit); the non-Stripe
     // three share `validateTopUpQuota` + the capacity check.
     if kind == Kind::Stripe {
-        // Stripe reads the group first (`topup_stripe.go:52`), so the group
-        // ratio has to be resolved before the quota product can be formed.
         let profile = match load_profile(&db, user_id).await {
             Ok(Some(profile)) => profile,
             Ok(None) => return lookup_failure(),
@@ -258,10 +256,14 @@ async fn quote(state: &AppState, user_id: i64, request: &AmountRequest, kind: Ki
         };
         let credited =
             stripe_credited_quota(&settings, request.amount, &profile.group, quota_per_unit);
-        // Go's Stripe path validates this product through `validateCreditedQuota`
-        // and reports it with the same two literals, then skips the wallet
-        // capacity check entirely.
+        // Go's Stripe path validates the product through `validateCreditedQuota`
+        // and then, only if that passes, runs `ValidateTopUpQuotaCapacity`
+        // against the same wallet the other three paths read
+        // (`topup_api.go:277-284`).
         if let Err(rejection) = validate_credited_quota(credited) {
+            return quote_error_static(rejection.message());
+        }
+        if let Err(rejection) = check_capacity(credited, profile.quota) {
             return quote_error_static(rejection.message());
         }
         return finish(&settings, &profile, request, kind, tokens, quota_per_unit);
