@@ -78,37 +78,33 @@ impl TopUpSettings {
     }
 }
 
+/// The placeholder list is built per backend, so the statement is dynamic;
+/// the text itself is a fixed template over `OPTION_KEYS` with every key
+/// bound as a parameter. `Executor` is not implemented across database
+/// kinds, so each backend instantiates this with its own pool.
+macro_rules! load_options {
+    ($pool:expr, $postgres:expr) => {{
+        let sql = format!(
+            "SELECT \"key\", \"value\" FROM \"options\" WHERE \"key\" IN ({})",
+            placeholders(OPTION_KEYS.len(), $postgres)
+        );
+        let mut query = sqlx::query_as::<_, (String, Option<String>)>(sqlx::AssertSqlSafe(sql));
+        for key in OPTION_KEYS {
+            query = query.bind(key);
+        }
+        query.fetch_all($pool).await?
+    }};
+}
+
 async fn load_option_rows(db: &Database) -> Result<BTreeMap<String, String>, sqlx::Error> {
     let rows = match db {
-        Database::Sqlite(pool) => load_options(pool, false).await?,
-        Database::Postgres(pool) => load_options(pool, true).await?,
+        Database::Sqlite(pool) => load_options!(pool, false),
+        Database::Postgres(pool) => load_options!(pool, true),
     };
     Ok(rows
         .into_iter()
         .map(|(key, value)| (key, value.unwrap_or_default()))
         .collect())
-}
-
-/// The placeholder list is built per backend, so the statement is dynamic;
-/// the text itself is a fixed template over `OPTION_KEYS` with every key
-/// bound as a parameter. `Executor` is not implemented across database
-/// kinds, so each backend calls this with its own pool.
-async fn load_options<DB>(
-    pool: &sqlx::Pool<DB>,
-    postgres: bool,
-) -> Result<Vec<(String, Option<String>)>, sqlx::Error>
-where
-    DB: sqlx::Database,
-    (String, Option<String>): for<'row> sqlx::FromRow<'row, DB::Row>,
-{
-    let placeholders = placeholders(OPTION_KEYS.len(), postgres);
-    let sql =
-        format!("SELECT \"key\", \"value\" FROM \"options\" WHERE \"key\" IN ({placeholders})");
-    let mut query = sqlx::query_as::<_, (String, Option<String>)>(sqlx::AssertSqlSafe(sql));
-    for key in OPTION_KEYS {
-        query = query.bind(key);
-    }
-    query.fetch_all(pool).await
 }
 
 fn placeholders(count: usize, postgres: bool) -> String {
