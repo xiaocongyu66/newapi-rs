@@ -23,14 +23,17 @@ pub enum QuotaDisplayType {
     Tokens,
 }
 
-/// 渲染额度展示值所需的三项配置；缺失行保留 `previous`，与其余快照一致。
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// 渲染额度展示值所需的配置；缺失行保留 `previous`，与其余快照一致。
+#[derive(Clone, Debug, PartialEq)]
 pub struct QuotaDisplay {
     pub quota_per_unit: f64,
     pub usd_exchange_rate: f64,
     pub display_type: QuotaDisplayType,
     /// general_setting.custom_currency_exchange_rate（默认 1.0）。
     pub custom_rate: f64,
+    /// general_setting.custom_currency_symbol；`formatQuota` falls back to
+    /// "¤" when the option row is present but empty.
+    pub custom_currency_symbol: String,
 }
 
 impl Default for QuotaDisplay {
@@ -40,12 +43,13 @@ impl Default for QuotaDisplay {
             usd_exchange_rate: DEFAULT_USD_EXCHANGE_RATE,
             display_type: QuotaDisplayType::Usd,
             custom_rate: 1.0,
+            custom_currency_symbol: String::new(),
         }
     }
 }
 
 impl QuotaDisplay {
-    /// 读取三项选项并返回完整替换；NULL 行是错误而不是静默默认。
+    /// 读取选项并返回完整替换；NULL 行是错误而不是静默默认。
     pub async fn load(db: &Database, previous: &Self) -> Result<Self, sqlx::Error> {
         store::load(db, previous).await
     }

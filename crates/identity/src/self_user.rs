@@ -53,15 +53,15 @@ fn serialize_finite<S: serde::Serializer>(value: &f64, serializer: S) -> Result<
 }
 
 /// 额度展示类型；汇率等运行时配置必须由调用方提供，不在此设默认值。
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum QuotaDisplayKind {
     Usd,
     Cny { usd_exchange_rate: f64 },
-    Custom { rate: f64 },
+    Custom { rate: f64, symbol: String },
     Tokens,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct QuotaDisplaySettings {
     pub quota_per_unit: f64,
     pub kind: QuotaDisplayKind,
@@ -76,11 +76,39 @@ impl QuotaDisplaySettings {
             QuotaDisplayKind::Cny { usd_exchange_rate } => {
                 value / self.quota_per_unit * usd_exchange_rate
             }
-            QuotaDisplayKind::Custom { rate } => {
+            QuotaDisplayKind::Custom { rate, .. } => {
                 let rate = if rate <= 0.0 { 1.0 } else { rate };
                 value / self.quota_per_unit * rate
             }
             QuotaDisplayKind::Tokens => value,
+        }
+    }
+
+    /// Go `billing.formatQuota` (`register_option_hooks.go:258-281`), the
+    /// registered `logger.LogQuota` hook: the site's display amount wrapped in
+    /// its currency symbol and, for user-facing log text, the " 额度" suffix.
+    ///
+    /// `with_unit_suffix` corresponds to Go's second parameter: `LogQuota`
+    /// passes `true` (the " 额度" suffix) and `FormatQuota` passes `false`.
+    /// The TOKENS branch prints the raw internal quota with "%d" rather than
+    /// the display amount, and an empty custom symbol falls back to "¤".
+    pub fn format_quota(self, quota: i64, with_unit_suffix: bool) -> String {
+        let suffix = if with_unit_suffix { " 额度" } else { "" };
+        let amount = self.to_display(quota);
+        match self.kind {
+            QuotaDisplayKind::Usd => format!("＄{amount:.6}{suffix}"),
+            QuotaDisplayKind::Cny { .. } => format!("¥{amount:.6}{suffix}"),
+            QuotaDisplayKind::Custom { symbol, .. } => {
+                let symbol = if symbol.is_empty() { "¤" } else { symbol.as_str() };
+                format!("{symbol}{amount:.6}{suffix}")
+            }
+            QuotaDisplayKind::Tokens => {
+                if with_unit_suffix {
+                    format!("{quota} 点额度")
+                } else {
+                    format!("{quota}")
+                }
+            }
         }
     }
 }

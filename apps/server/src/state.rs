@@ -329,16 +329,18 @@ impl AppState {
 
     /// SelfUser 组装用的额度展示设置（billing 快照 → identity 算术设置）。
     pub fn quota_display(&self) -> QuotaDisplaySettings {
-        let display = *self
+        let display = self
             .quota_display
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let kind = match display.display_type {
             newapi_billing::quota_display::QuotaDisplayType::Cny => QuotaDisplayKind::Cny {
                 usd_exchange_rate: display.usd_exchange_rate,
             },
             newapi_billing::quota_display::QuotaDisplayType::Custom => QuotaDisplayKind::Custom {
                 rate: display.custom_rate,
+                symbol: display.custom_currency_symbol.clone(),
             },
             newapi_billing::quota_display::QuotaDisplayType::Tokens => QuotaDisplayKind::Tokens,
             newapi_billing::quota_display::QuotaDisplayType::Usd => QuotaDisplayKind::Usd,

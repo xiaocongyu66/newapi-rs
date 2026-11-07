@@ -8,7 +8,14 @@ pub(super) const QUOTA_PER_UNIT: &str = "QuotaPerUnit";
 pub(super) const USD_EXCHANGE_RATE: &str = "USDExchangeRate";
 pub(super) const DISPLAY_TYPE: &str = "general_setting.quota_display_type";
 pub(super) const CUSTOM_RATE: &str = "general_setting.custom_currency_exchange_rate";
-pub(super) const KEYS: [&str; 4] = [QUOTA_PER_UNIT, USD_EXCHANGE_RATE, DISPLAY_TYPE, CUSTOM_RATE];
+pub(super) const CUSTOM_SYMBOL: &str = "general_setting.custom_currency_symbol";
+pub(super) const KEYS: [&str; 5] = [
+    QUOTA_PER_UNIT,
+    USD_EXCHANGE_RATE,
+    DISPLAY_TYPE,
+    CUSTOM_RATE,
+    CUSTOM_SYMBOL,
+];
 
 pub(super) async fn load(
     db: &Database,
@@ -18,24 +25,26 @@ pub(super) async fn load(
         Database::Sqlite(pool) => {
             sqlx::query_as(
                 "SELECT \"key\", \"value\" FROM \"options\" \
-             WHERE \"key\" IN (?, ?, ?, ?)",
+             WHERE \"key\" IN (?, ?, ?, ?, ?)",
             )
             .bind(KEYS[0])
             .bind(KEYS[1])
             .bind(KEYS[2])
             .bind(KEYS[3])
+            .bind(KEYS[4])
             .fetch_all(pool)
             .await?
         }
         Database::Postgres(pool) => {
             sqlx::query_as(
                 "SELECT \"key\", \"value\" FROM \"options\" \
-             WHERE \"key\" IN ($1, $2, $3, $4)",
+             WHERE \"key\" IN ($1, $2, $3, $4, $5)",
             )
             .bind(KEYS[0])
             .bind(KEYS[1])
             .bind(KEYS[2])
             .bind(KEYS[3])
+            .bind(KEYS[4])
             .fetch_all(pool)
             .await?
         }
@@ -76,6 +85,11 @@ pub(super) fn apply(
     }
     if let Some(value) = parse_float(values, CUSTOM_RATE) {
         next.custom_rate = value;
+    }
+    if let Some(value) = values.get(CUSTOM_SYMBOL) {
+        // Go applies the option verbatim; an empty string is a real value that
+        // `formatQuota` falls back to "¤" for.
+        next.custom_currency_symbol = value.clone();
     }
     next
 }
