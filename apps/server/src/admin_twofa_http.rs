@@ -137,7 +137,9 @@ pub async fn admin_disable(
         .disable_with_auth_version(user_id, now)
         .await
     {
-        Ok(()) => {}
+        // The returned auth version is only needed by the session-rotation
+        // path; the admin response does not expose it.
+        Ok(_next_auth_version) => {}
         Err(TwoFaError::NotEnabled) => return api_error_literal(MSG_NOT_ENABLED),
         Err(error) => return two_fa_error_response(&headers, error),
     }

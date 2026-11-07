@@ -82,8 +82,8 @@ fn quote_error_static(message: &str) -> Response {
 pub async fn request_amount(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    body: Bytes,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
@@ -103,8 +103,8 @@ pub async fn request_amount(
 pub async fn request_stripe_amount(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    body: Bytes,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
@@ -123,8 +123,8 @@ pub async fn request_stripe_amount(
 pub async fn request_waffo_amount(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    body: Bytes,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
@@ -137,8 +137,8 @@ pub async fn request_waffo_amount(
 pub async fn request_waffo_pancake_amount(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    body: Bytes,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
