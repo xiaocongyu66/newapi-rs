@@ -14,39 +14,52 @@
 //! - `apps/api/internal/billing/store_topup.go`
 //!   (`ValidateTopUpQuotaCapacity`)
 //!
-//! ## Decimal equivalence
+//! ## Two arithmetic dialects
 //!
-//! Go computes with `shopspring/decimal` (`NewFromInt` for the integer amount,
-//! `NewFromFloat` for the configured rates, `Mul` for products, `Div` for the
-//! `TOKENS` display conversion, then `InexactFloat64`). The stored decimals
-//! are exact: a `float64` is converted to its *shortest round-trip* decimal
-//! (≤17 significant digits), products of such decimals stay exact as long as
-//! the significant-digit sum stays below the package's 18-digit workspace
-//! (`decimal` reports a precision error outside it), and the final
-//! `InexactFloat64` is the nearest `f64` to that exact rational.
+//! Go computes the quote in **two different ways**, and matching it means
+//! matching each one:
 //!
-//! Both multipliers below have at most 4 significant digits (`Price` 7.3,
-//! unit prices 1.0/8.0, ratios, discounts), so every product here needs
-//! ≤ 17 + 4 = 21 significant digits — exact in `i128` scaled by
-//! [`SCALE`] = 10^18 (the `TOKENS` division alone is rounded, to Go's
-//! `DivRound` half-up at `DivisionPrecision` = 16). Working in i128 and
-//! converting at the very end therefore reproduces the Go float bit-for-bit
-//! for every realistic option value, and a product that would exceed the
-//! scale saturates rather than wrapping.
+//! * **`shopspring/decimal`** — `getPayMoney`, `getWaffoPancakePayMoney`,
+//!   `getTopUpQuota`, `getMaxTopUpAmount` and `getStripeCreditedQuota`. `NewFromInt`
+//!   for the integer amount, `NewFromFloat` (the *shortest round-trip* decimal)
+//!   for the configured rates, exact `Mul`, `Div` = `DivRound(16)` for the
+//!   `TOKENS` display conversion, then `InexactFloat64` (the nearest `f64` to
+//!   the exact rational). Reproduced here with `i128` fixed point at
+//!   [`SCALE`] = 10^18: a scaled value always represents `value / 10^18`, and
+//!   both operands of every product carry the scale, so a chain of three
+//!   multipliers needs a 256-bit intermediate to avoid overflow — see
+//!   [`mul_div_rem`].
+//!
+//! * **plain `float64`** — `stripePayUnits`, `getStripePayMoney` and
+//!   `getWaffoPayMoney` do their arithmetic in `float64` with `math.Ceil`
+//!   (`topup_stripe.go:475`, `topup_waffo.go:85`). Those are reproduced
+//!   *directly in `f64`*: an `i128` decimal answer would differ from Go by an
+//!   ulp in exactly the cases where Go's own float rounding decides the
+//!   `ceil`, which is what the Checkout `Quantity` is derived from.
+//!
+//! The two dialects are not interchangeable, which is why the float-based
+//! ones are not fed through the fixed-point helpers.
 
 use super::TopUpSettings;
 
-/// 10^18: the fixed-point scale. Products of an ≤18-significant-digit value
-/// and a ≤4-significant-digit multiplier need ≤22 digits, but `QuotaPerUnit`
-/// conversions cap the input, so `i128` (≤38 digits) never overflows and a
-/// division rounds to this scale.
+/// 10^18: the fixed-point scale. A scaled `i128` represents its value divided
+/// by this, and every multiplier enters the product already scaled, so
+/// `product = mul_div(accumulator, factor, SCALE)`. `i128` (≤38 digits)
+/// holds both operands of such a product but not their product, hence the
+/// 256-bit intermediate.
 const SCALE: i128 = 1_000_000_000_000_000_000;
+
+/// Go `decimal.DivisionPrecision` = 16: `Div` = `DivRound(d2, 16)`, so the
+/// quotient carries 16 fractional digits and then rounds half away from zero.
+const DIVISION_PRECISION: i128 = 10_000_000_000_000_000;
 
 /// Go `common.MaxQuota` = `math.MaxInt32` (`common/quota_math.go:15`).
 const MAX_QUOTA: i64 = 2_147_483_647;
 
 /// Go `common.GetTopupGroupRatio`: a missing group is a server misconfiguration
-/// (Go logs `SysError`), and the Go fallback is 1.
+/// (Go logs `SysError`), and the Go fallback is 1. A stored ratio of exactly
+/// 0 is *not* replaced here — every caller applies its own
+/// `if topupGroupRatio == 0 { 1 }` guard (see [`group_ratio`]).
 pub fn topup_group_ratio(settings: &TopUpSettings, group: &str) -> f64 {
     match settings
         .topup_group_ratio
@@ -56,6 +69,14 @@ pub fn topup_group_ratio(settings: &TopUpSettings, group: &str) -> f64 {
         Some(&ratio) => ratio,
         None => 1.0,
     }
+}
+
+/// Go's `GetTopupGroupRatio` followed by the callers' `ratio == 0 → 1` guard
+/// (`topup_api.go:194`, `topup_stripe.go:440`, `topup_waffo.go:90`,
+/// `topup_waffo_pancake.go:58`).
+fn group_ratio(settings: &TopUpSettings, group: &str) -> f64 {
+    let ratio = topup_group_ratio(settings, group);
+    if ratio == 0.0 { 1.0 } else { ratio }
 }
 
 /// Go `GetPaymentSetting().AmountDiscount[amount]`: preset discounts keyed by
@@ -72,33 +93,33 @@ pub fn amount_discount(settings: &TopUpSettings, amount: i64) -> f64 {
 
 /// Go `getTopUpQuota(amount)`.
 ///
-/// `TOKENS` display divides first and floors (Go `Decimal.Div(...).IntPart()`
-/// truncates toward zero — the amount is positive here), then multiplies back
-/// so the credited quota is a whole multiple of `quota_per_unit`. `USD/CNY`
-/// multiplies directly.
+/// `TOKENS` display divides first (Go `Decimal.Div(...).IntPart()` truncates
+/// toward zero — the amount is positive here) and then multiplies back, so the
+/// credited quota is a whole multiple of `quota_per_unit`; `USD/CNY`
+/// multiplies directly. The product runs through Go's
+/// `QuotaFromDecimalStrict` (`quota_math.go:152`): round to an integer, then
+/// reject anything at or above `MaxQuota`, which is why `None` means "not
+/// representable" rather than a saturated number.
 pub fn top_up_quota(
     _settings: &TopUpSettings,
     amount: i64,
     tokens: bool,
     quota_per_unit: f64,
-) -> i64 {
-    let amount = i128::from(amount);
-    let quota_per_unit = scaled_finite(quota_per_unit);
-    if tokens {
-        // Go `floor(amount / quota_per_unit).IntPart() * quota_per_unit`: the
-        // division yields a whole unit count, which is multiplied back. The
-        // unit count is `amount / quota_per_unit` truncated, so it never
-        // exceeds `amount`, keeping the follow-up product inside `i128`.
-        if quota_per_unit == 0 {
-            return 0;
-        }
-        let units = amount * SCALE / quota_per_unit;
-        // Guard the product: `units * quota_per_unit` can reach 10^36, still
-        // inside i128 (10^38) for any amount Go accepts as a request.
-        (units * quota_per_unit / SCALE) as i64
-    } else {
-        (amount * quota_per_unit / SCALE) as i64
+) -> Option<i64> {
+    let unit = scaled(quota_per_unit);
+    if unit == 0 {
+        // Go divides by zero here (`QuoRem` panics); the amount is unusable
+        // either way, and Go's caller turns a panic into an invalid quote.
+        return None;
     }
+    let mut product = i128::from(amount) * SCALE;
+    if tokens {
+        // Go `NewFromInt(amount).Div(QuotaPerUnit).IntPart()`: 16-digit
+        // rounded quotient, then truncated to the whole unit count.
+        product = (div_round(product, unit) / SCALE) * SCALE;
+    }
+    product = mul_div(product, unit, SCALE);
+    quota_from_scaled(product)
 }
 
 /// Go `getMaxTopUpAmount()`: the largest request amount whose credited quota
@@ -108,38 +129,38 @@ pub fn top_up_quota(
 /// that fit. `TOKENS` returns `((max + 1) * QuotaPerUnit).Ceil() - 1`, i.e.
 /// the largest token count that still floors to at most `max` whole units.
 pub fn max_top_up_amount(_settings: &TopUpSettings, tokens: bool, quota_per_unit: f64) -> i64 {
-    if !quota_per_unit.is_finite() || quota_per_unit <= 0.0 {
-        // Go `common.QuotaPerUnit <= 0` → 0 (no limit applies); a non-finite
-        // `QuotaPerUnit` cannot arise from `ParseFloat` of a real config and is
-        // folded into the same "no limit" branch so the division below is safe.
+    let unit = scaled(quota_per_unit);
+    if unit <= 0 {
+        // Go `common.QuotaPerUnit <= 0` → 0 (no limit applies).
         return 0;
     }
-    let unit = scaled_finite(quota_per_unit);
-    // `max_units` = floor((MaxQuota - 1) / QuotaPerUnit), a plain integer:
-    // dividing the scaled numerator by the scaled divisor cancels the scales.
-    let max_units = i128::from(MAX_QUOTA - 1) * SCALE / unit;
+    // Go `NewFromInt(MaxQuota - 1).Div(QuotaPerUnit).Floor().IntPart()`: the
+    // division rounds to 16 digits first, so the floor sees Go's rounded
+    // quotient — reproducing that order is what keeps the boundary exact.
+    let whole = div_round(i128::from(MAX_QUOTA - 1) * SCALE, unit) / SCALE;
     if !tokens {
-        return max_units as i64;
+        return whole as i64;
     }
-    // Go `((max_units + 1) * QuotaPerUnit).Ceil() - 1`: one more whole unit of
-    // quota, rounded up to a whole token count, minus one token.
-    let next = max_units + 1;
-    let product = next * unit;
-    let ceiling = product / SCALE + i128::from(product % SCALE != 0);
-    (ceiling - 1) as i64
+    // Go `(whole + 1).Mul(QuotaPerUnit).Ceil().Sub(1).IntPart()`: one more whole
+    // unit of quota, rounded up to a whole token count, minus one token.
+    let product = mul_div((whole + 1) * SCALE, unit, SCALE);
+    (ceil_to_integer(product) - 1) as i64
 }
 
 /// Go `validateTopUpQuota`: returns the credited quota, or the rejection the
-/// adapter renders verbatim.
+/// adapter renders verbatim. A quota Go's `QuotaFromDecimalStrict` rejects
+/// behaves exactly like a zero one (`err != nil`), so both fall through to the
+/// maximum-amount branch.
 pub fn validate_top_up_quota(
     settings: &TopUpSettings,
     amount: i64,
     tokens: bool,
     quota_per_unit: f64,
 ) -> Result<i64, TopUpQuotaRejection> {
-    let quota = top_up_quota(settings, amount, tokens, quota_per_unit);
-    if quota > 0 {
-        return Ok(quota);
+    if let Some(quota) = top_up_quota(settings, amount, tokens, quota_per_unit) {
+        if quota > 0 {
+            return Ok(quota);
+        }
     }
     let max_amount = max_top_up_amount(settings, tokens, quota_per_unit);
     if max_amount > 0 && amount > max_amount {
@@ -149,7 +170,8 @@ pub fn validate_top_up_quota(
 }
 
 /// Go `getPayMoney`：`amount × Price × groupRatio × discount`，`TOKENS` 模式
-/// 下输入先按 `QuotaPerUnit` 折成 USD。
+/// 下输入先按 `QuotaPerUnit` 折成 USD。此处是 **decimal** 口径，折扣查表用
+/// **原始请求金额**（换算前的 `amount`）。
 pub fn pay_money(
     settings: &TopUpSettings,
     original_amount: i64,
@@ -157,34 +179,41 @@ pub fn pay_money(
     tokens: bool,
     quota_per_unit: f64,
 ) -> f64 {
-    let mut amount = i128::from(original_amount);
-    // Go's discount lookup uses the *original* request amount (the function
-    // parameter), not the TOKENS-converted value below.
-    let discount = amount_discount(settings, original_amount);
-    let quota_per_unit = scaled_finite(quota_per_unit);
+    let mut amount = i128::from(original_amount) * SCALE;
+    let unit = scaled(quota_per_unit);
     if tokens {
-        amount = div_round(amount * SCALE, quota_per_unit);
+        amount = div_round(amount, unit);
     }
-    let price = scaled_finite(settings.price);
-    let ratio = scaled_finite(topup_group_ratio(settings, group));
-    let product = amount * price / SCALE * ratio / SCALE * scaled_finite(discount) / SCALE;
+    let mut product = amount;
+    product = mul_div(product, scaled(settings.price), SCALE);
+    product = mul_div(product, scaled(group_ratio(settings, group)), SCALE);
+    // Go reads `AmountDiscount[int(amount)]` from the *function parameter*,
+    // before the TOKENS division, so the original request amount is the key.
+    product = mul_div(
+        product,
+        scaled(amount_discount(settings, original_amount)),
+        SCALE,
+    );
     to_float(product)
 }
 
 /// Go `stripePayUnits`：Checkout 计价的 `Quantity` =
 /// `ceil(amount × ratio × discount)`，下限 1。
+///
+/// Go 用 **float64**（`topup_stripe.go:475`），`math.Ceil(float64(amount) *
+/// (ratio * discount) - 1e-9)`：倍率与折扣先在 f64 里相乘，再乘金额。这里必须
+/// 照搬同一顺序，改用 decimal 会在 `ceil` 边界上差一个 ulp。
 pub fn stripe_pay_units(settings: &TopUpSettings, amount: i64, group: &str) -> i64 {
-    let ratio = scaled_finite(topup_group_ratio(settings, group));
-    let discount = scaled_finite(amount_discount(settings, amount));
-    let product = i128::from(amount) * ratio / SCALE * discount / SCALE;
+    let product =
+        amount as f64 * (group_ratio(settings, group) * amount_discount(settings, amount));
     // Go `math.Ceil(x - 1e-9)`: the epsilon makes an exactly integral product
     // round down instead of up (e.g. 3.0 → 3, not 4).
-    let ceil = ceil_with_epsilon(product);
-    ceil.max(1)
+    let units = (product - 1e-9).ceil();
+    (if units < 1.0 { 1.0 } else { units }) as i64
 }
 
 /// Go `getStripePayMoney(amount, group)`：不在 `TOKENS` 模式换算输入，
-/// 而是把已含倍率/折扣的 `units` 折成 USD。
+/// 而是把已含倍率/折扣的 `units` 折成 USD。同样是 **float64** 口径。
 pub fn stripe_pay_money(
     settings: &TopUpSettings,
     amount: i64,
@@ -192,18 +221,17 @@ pub fn stripe_pay_money(
     tokens: bool,
     quota_per_unit: f64,
 ) -> f64 {
-    let units = i128::from(stripe_pay_units(settings, amount, group));
-    let quota_per_unit = scaled_finite(quota_per_unit);
-    let units = if tokens {
-        div_round(units * SCALE, quota_per_unit)
-    } else {
-        units
-    };
-    to_float(units * scaled_finite(settings.stripe_unit_price) / SCALE)
+    let mut units = stripe_pay_units(settings, amount, group) as f64;
+    if tokens {
+        units = units / quota_per_unit;
+    }
+    units * settings.stripe_unit_price
 }
 
-/// Go `getWaffoPayMoney`：与 `getPayMoney` 同构，但单价是 `WaffoUnitPrice`
-/// 且折扣用**原始请求金额**查表（换算前的 `originalAmount`）。
+/// Go `getWaffoPayMoney`：与 `getPayMoney` 同构，但单价是 `WaffoUnitPrice`，
+/// 且整条表达式都是 **float64**（`topup_waffo.go:100`）：
+/// `amount × WaffoUnitPrice × ratio × discount`。折扣查表仍用**原始请求金额**
+/// （换算前的 `originalAmount`）。
 pub fn waffo_pay_money(
     settings: &TopUpSettings,
     amount: i64,
@@ -211,21 +239,22 @@ pub fn waffo_pay_money(
     tokens: bool,
     quota_per_unit: f64,
 ) -> f64 {
-    let mut units = i128::from(amount);
-    let quota_per_unit = scaled_finite(quota_per_unit);
+    let mut value = amount as f64;
     if tokens {
-        units = div_round(units * SCALE, quota_per_unit);
+        value = value / quota_per_unit;
     }
-    let ratio = scaled_finite(topup_group_ratio(settings, group));
-    let discount = scaled_finite(amount_discount(settings, amount));
-    to_float(
-        units * scaled_finite(settings.waffo_unit_price) / SCALE * ratio / SCALE * discount / SCALE,
-    )
+    // Go's left-to-right order matters for bit equality; the discount is keyed
+    // by the original request amount, before the TOKENS conversion.
+    value
+        * settings.waffo_unit_price
+        * group_ratio(settings, group)
+        * amount_discount(settings, amount)
 }
 
-/// Go `getWaffoPancakePayMoney`：同 `getWaffoPayMoney`，单价换成
-/// `WaffoPancakeUnitPrice`（折扣查表条件 `ok && ds > 0` 与
-/// `amount_discount` 的 `filter(> 0)` 等价）。
+/// Go `getWaffoPancakePayMoney`：同 `getPayMoney` 的 **decimal** 口径
+/// （`topup_waffo_pancake.go:68`），单价换成 `WaffoPancakeUnitPrice`（折扣查表
+/// 条件 `ok && ds > 0` 与 `amount_discount` 的 `filter(> 0)` 等价，且同样按
+/// 原始请求金额查表）。
 pub fn waffo_pancake_pay_money(
     settings: &TopUpSettings,
     amount: i64,
@@ -233,30 +262,33 @@ pub fn waffo_pancake_pay_money(
     tokens: bool,
     quota_per_unit: f64,
 ) -> f64 {
-    let mut units = i128::from(amount);
-    let quota_per_unit = scaled_finite(quota_per_unit);
+    let mut units = i128::from(amount) * SCALE;
+    let unit = scaled(quota_per_unit);
     if tokens {
-        units = div_round(units * SCALE, quota_per_unit);
+        units = div_round(units, unit);
     }
-    let ratio = scaled_finite(topup_group_ratio(settings, group));
-    let discount = scaled_finite(amount_discount(settings, amount));
-    to_float(
-        units * scaled_finite(settings.waffo_pancake_unit_price) / SCALE * ratio / SCALE * discount
-            / SCALE,
-    )
+    let mut product = units;
+    product = mul_div(product, scaled(settings.waffo_pancake_unit_price), SCALE);
+    product = mul_div(product, scaled(group_ratio(settings, group)), SCALE);
+    product = mul_div(product, scaled(amount_discount(settings, amount)), SCALE);
+    to_float(product)
 }
 
 /// Go `getStripeCreditedQuota`：`amount × ratio × QuotaPerUnit`，不做
-/// `TOKENS` 换算（Checkout 的 `Money` 记账口径）。
+/// `TOKENS` 换算（Checkout 的 `Money` 记账口径）。decimal 口径；调用方
+/// `validateCreditedQuota` 再按 `QuotaFromDecimalStrict` 取整。
 pub fn stripe_credited_quota(
     settings: &TopUpSettings,
     amount: i64,
     group: &str,
     quota_per_unit: f64,
 ) -> i64 {
-    let ratio = scaled_finite(topup_group_ratio(settings, group));
-    let product = i128::from(amount) * ratio / SCALE * scaled_finite(quota_per_unit) / SCALE;
-    product as i64
+    let mut product = i128::from(amount) * SCALE;
+    product = mul_div(product, scaled(group_ratio(settings, group)), SCALE);
+    product = mul_div(product, scaled(quota_per_unit), SCALE);
+    // Go `QuotaFromDecimalStrict` rounds to an integer (`Round(0)`) before it
+    // takes the int, so a ratio with a fractional digit still lands exactly.
+    mul_div_round(product, 1, SCALE) as i64
 }
 
 /// Go `topUpQuotaMaxCurrent` (`store_topup.go:63-70`): `creditedQuota <= 0`
@@ -332,60 +364,225 @@ impl CreditedQuotaRejection {
 
 // ---- fixed-point helpers ------------------------------------------------
 
-/// `QuotaPerUnit`-style scaling: non-finite or out-of-range values become 0
-/// so the arithmetic below stays well-defined (Go's `NewFromFloat` panics on
-/// NaN/Inf, so no Go behaviour is being approximated here).
-fn scaled_finite(value: f64) -> i128 {
-    if !value.is_finite() || value.abs() >= 1e18 {
+/// Go `decimal.NewFromFloat`: the shortest decimal that round-trips back to
+/// the same `f64` (`roundShortest`, up to 17 significant digits).
+///
+/// Rust's `{}` formats an `f64` with the same shortest round-trip digits, so
+/// parsing those digits back gives the exact decimal rather than the
+/// `f64`-rounded `value * SCALE`. Non-finite input and values whose digits do
+/// not fit the scale become 0, which is also what Go's `NewFromFloat` cannot
+/// represent (it panics on NaN/Inf, so no Go behaviour is approximated).
+fn scaled(value: f64) -> i128 {
+    if !value.is_finite() {
         return 0;
     }
-    (value * SCALE as f64).round() as i128
+    let text = format!("{value}");
+    let negative = text.starts_with('-');
+    let digits = text.trim_start_matches('-');
+    let mut mantissa: i128 = 0;
+    let mut fraction_digits: u32 = 0;
+    let mut seen_point = false;
+    for character in digits.chars() {
+        if character == '.' {
+            seen_point = true;
+            continue;
+        }
+        let digit = match character.to_digit(10) {
+            Some(digit) => digit,
+            // `{}` never emits an exponent for a finite f64; anything else is
+            // unusable (NaN/Inf are already rejected above).
+            None => return 0,
+        };
+        mantissa = match mantissa
+            .checked_mul(10)
+            .and_then(|m| m.checked_add(i128::from(digit)))
+        {
+            Some(mantissa) => mantissa,
+            None => return 0,
+        };
+        if seen_point {
+            fraction_digits += 1;
+        }
+    }
+    if fraction_digits > 18 {
+        // More than the scale can hold: the value is far below any amount the
+        // caller can reach, so it collapses to 0.
+        return 0;
+    }
+    // `value = mantissa / 10^fraction_digits`, so
+    // `value * SCALE = mantissa * 10^(18 - fraction_digits)`.
+    match mantissa.checked_mul(10i128.pow(18 - fraction_digits)) {
+        Some(result) if negative => -result,
+        Some(result) => result,
+        None => 0,
+    }
 }
 
-/// Go `Decimal.Div` / `DivRound` at `DivisionPrecision` = 16: truncate toward
-/// zero, then round half-up on the discarded remainder.
+/// `(a * b) / c` and its remainder, computed exactly through a 256-bit
+/// intermediate: `a * b = c * q + r` with `|r| < |c|`.
 ///
-/// Both arguments arrive already scaled by [`SCALE`], but a quotient of two
-/// equally-scaled values carries no scale at all (`10/5 = 2`, not `2e18`), so
-/// the numerator is scaled up once more here and the returned quotient keeps
-/// [`SCALE`]. The remainder therefore holds far more precision than Go's 16
-/// significant digits need, which makes the half-up decision exact.
-fn div_round(numerator: i128, denominator: i128) -> i128 {
-    debug_assert!(
-        denominator != 0,
-        "callers reject a non-positive QuotaPerUnit"
-    );
-    if denominator == 0 {
-        return 0;
+/// Both operands of a product arrive scaled by [`SCALE`], so their product
+/// needs up to 76 digits and a bare `a * b` would wrap `i128`. A `i128`
+/// quotient that does not fit saturates instead of wrapping, which keeps the
+/// result defined for misconfigured rates (Go would carry an exact `big.Int`).
+fn mul_div_rem(a: i128, b: i128, c: i128) -> (i128, i128) {
+    debug_assert!(c != 0, "callers reject a zero divisor");
+    if a == 0 || b == 0 || c == 0 {
+        return (0, 0);
     }
-    let numerator = numerator * SCALE;
-    let mut quotient = numerator / denominator;
-    let remainder = numerator - quotient * denominator;
-    // Go compares `2 * |remainder|` against the divisor, rounding away from
-    // zero on a tie (the sign of both operands never matters here: the
-    // quota per unit is positive and the amounts are non-negative).
-    if remainder.abs() * 2 >= denominator.abs() {
-        quotient += if (numerator >= 0) == (denominator >= 0) {
-            1
+    // The quotient flips sign against the divisor, but the remainder keeps the
+    // sign of the product: `a * b = c * q + r` with `|r| < |c|` and truncation
+    // toward zero, so `r` carries whichever side `a * b` is on.
+    let product_negative = (a < 0) != (b < 0);
+    let (high, low) = mul_wide(a.unsigned_abs(), b.unsigned_abs());
+    let (quotient, remainder) = div_wide(high, low, c.unsigned_abs());
+    (
+        saturate(quotient, product_negative != (c < 0)),
+        saturate(remainder, product_negative),
+    )
+}
+
+/// `(a * b) / c` truncated toward zero, exact for every operand whose product
+/// overflows `i128`.
+fn mul_div(a: i128, b: i128, c: i128) -> i128 {
+    mul_div_rem(a, b, c).0
+}
+
+/// `(a * b) / c` rounded half away from zero, the decision Go's `DivRound`
+/// makes by comparing `2 * |remainder|` with the divisor
+/// (`decimal.go:648-670`).
+fn mul_div_round(a: i128, b: i128, c: i128) -> i128 {
+    let (quotient, remainder) = mul_div_rem(a, b, c);
+    if remainder != 0 && remainder.unsigned_abs() * 2 >= c.unsigned_abs() {
+        return if quotient >= 0 {
+            quotient + 1
         } else {
-            -1
+            quotient - 1
         };
     }
     quotient
 }
 
-/// Go `math.Ceil(x - 1e-9)` on a scaled value: subtract one scaled epsilon,
-/// then round up. An exactly integral product must not become the next
-/// integer (e.g. 3.0 -> 3), which is what the epsilon buys.
-fn ceil_with_epsilon(value: i128) -> i64 {
-    let epsilon = SCALE / 1_000_000_000; // 1e-9 in the value's own scale
-    let shifted = value - epsilon;
-    shifted.div_euclid(SCALE) as i64 + i64::from(shifted.rem_euclid(SCALE) != 0)
+/// Re-applies a sign to a magnitude, saturating instead of wrapping.
+fn saturate(magnitude: u128, negative: bool) -> i128 {
+    match magnitude.cmp(&(i128::MAX as u128)) {
+        std::cmp::Ordering::Greater => {
+            if negative {
+                i128::MIN
+            } else {
+                i128::MAX
+            }
+        }
+        _ => {
+            let magnitude = magnitude as i128;
+            if negative { -magnitude } else { magnitude }
+        }
+    }
 }
 
-/// Nearest `f64` of a scaled value, matching Go's `InexactFloat64`.
+/// 128 x 128 → 256, returned as `(high, low)` so `value = high * 2^128 + low`.
+fn mul_wide(a: u128, b: u128) -> (u128, u128) {
+    const LOW_MASK: u128 = u64::MAX as u128;
+    const HALF: usize = 64;
+    let (a_low, a_high) = (a & LOW_MASK, a >> HALF);
+    let (b_low, b_high) = (b & LOW_MASK, b >> HALF);
+    let (ll, lh, hl, hh) = (
+        a_low * b_low,
+        a_low * b_high,
+        a_high * b_low,
+        a_high * b_high,
+    );
+    // `mid` accumulates the middle 64 bits and stays below 3 * 2^64, so only its
+    // low half may be shifted into `low`; its high half carries into `high`.
+    let mid = (ll >> HALF) + (lh & LOW_MASK) + (hl & LOW_MASK);
+    let high = hh + (lh >> HALF) + (hl >> HALF) + (mid >> HALF);
+    let low = ((mid & LOW_MASK) << HALF) | (ll & LOW_MASK);
+    (high, low)
+}
+
+/// Bit-wise long division of the 256-bit `(high, low)` by a 128-bit divisor.
+///
+/// The divisor is kept below 2^127 so `remainder * 2` cannot overflow, which
+/// holds for every scaled quantity this module builds (`SCALE` = 10^18 and
+/// `QuotaPerUnit * SCALE` both stay far below 2^120).
+fn div_wide(high: u128, low: u128, divisor: u128) -> (u128, u128) {
+    debug_assert!(divisor < 1u128 << 127, "the remainder must be doublable");
+    let mut quotient: u128 = 0;
+    let mut overflow = false;
+    let mut remainder: u128 = 0;
+    for limb in [high, low] {
+        for bit in (0..128).rev() {
+            let bit = (limb >> bit) & 1;
+            let (doubled, carry) = quotient.overflowing_mul(2);
+            quotient = doubled;
+            overflow |= carry;
+            let shifted = (remainder << 1) | bit;
+            if shifted >= divisor {
+                remainder = shifted - divisor;
+                let (bumped, carry) = quotient.overflowing_add(1);
+                quotient = bumped;
+                overflow |= carry;
+            } else {
+                remainder = shifted;
+            }
+        }
+    }
+    if overflow {
+        return (u128::MAX, 0);
+    }
+    (quotient, remainder)
+}
+
+/// Go `Decimal.Div` = `DivRound(d2, DivisionPrecision = 16)`, expressed in
+/// [`SCALE`] units.
+///
+/// Both arguments arrive SCALE-scaled, and both scales cancel, so the
+/// 16-fractional-digit quotient is `n / d * 10^16` scaled back up by
+/// `10^(18 - 16)`. Forming `n * 10^16` directly would overflow for any
+/// realistic amount, hence [`mul_div_rem`].
+fn div_round(numerator: i128, denominator: i128) -> i128 {
+    if denominator == 0 {
+        // Go's `QuoRem` panics on a zero divisor; the amount is unusable
+        // either way, so the caller's invalid-quota branch applies.
+        return 0;
+    }
+    // 10^16 is the 16-digit quotient's own scale, so scaling it back up to
+    // `SCALE` is exactly `* 10^(18 - 16)`. A saturated quotient (a
+    // misconfigured `QuotaPerUnit` next to an extreme amount) must saturate
+    // again rather than wrap.
+    mul_div_round(numerator, DIVISION_PRECISION, denominator).saturating_mul(100)
+}
+
+/// Go `common.QuotaFromDecimalStrict` (`quota_math.go:152`): round to an
+/// integer, then reject anything at or above `MaxQuota` (Go's `saturateQuota`
+/// clamps there and `strictQuota` turns the clamp into the error the callers
+/// render as `充值额度超出系统可表示范围`).
+fn quota_from_scaled(product: i128) -> Option<i64> {
+    let quota = mul_div_round(product, 1, SCALE);
+    if quota >= i128::from(MAX_QUOTA) || quota < i128::from(i32::MIN) {
+        return None;
+    }
+    Some(quota as i64)
+}
+
+/// Go `Decimal.Ceil()` on a non-negative scaled value: the integer at or
+/// above it.
+fn ceil_to_integer(value: i128) -> i128 {
+    let fraction = value.rem_euclid(SCALE);
+    if fraction == 0 {
+        value.div_euclid(SCALE)
+    } else {
+        value.div_euclid(SCALE) + 1
+    }
+}
+
+/// Go `Decimal.InexactFloat64` (`Rat().Float64()`): the nearest `f64` to the
+/// exact rational. Splitting at the integer boundary keeps the dividend exact
+/// where a bare `value as f64 / SCALE as f64` would double-round.
 fn to_float(scaled: i128) -> f64 {
-    scaled as f64 / SCALE as f64
+    let whole = scaled.div_euclid(SCALE);
+    let fraction = scaled.rem_euclid(SCALE);
+    whole as f64 + fraction as f64 / SCALE as f64
 }
 
 #[cfg(test)]
@@ -398,6 +595,9 @@ mod tests {
     fn settings() -> TopUpSettings {
         TopUpSettings {
             price: 7.3,
+            stripe_unit_price: 8.0,
+            waffo_unit_price: 1.0,
+            waffo_pancake_unit_price: 1.0,
             topup_group_ratio: Some(BTreeMap::from([("vip".to_owned(), 2.0)])),
             ..TopUpSettings::default()
         }
@@ -564,22 +764,41 @@ mod tests {
         // USD: amount * quota_per_unit.
         assert_eq!(
             top_up_quota(&settings, 10, false, QUOTA_PER_UNIT),
-            5_000_000
+            Some(5_000_000)
         );
         // TOKENS: floor(10 / 500000) * 500000 = 0.
-        assert_eq!(top_up_quota(&settings, 10, true, QUOTA_PER_UNIT), 0);
+        assert_eq!(top_up_quota(&settings, 10, true, QUOTA_PER_UNIT), Some(0));
         // TOKENS: floor(1_000_000 / 500000) * 500000 = 1_000_000.
         assert_eq!(
             top_up_quota(&settings, 1_000_000, true, QUOTA_PER_UNIT),
-            1_000_000
+            Some(1_000_000)
         );
         // TOKENS: exactly one unit.
         assert_eq!(
             top_up_quota(&settings, 500_000, true, QUOTA_PER_UNIT),
-            500_000
+            Some(500_000)
         );
         // TOKENS: 499_999 floors to zero units.
-        assert_eq!(top_up_quota(&settings, 499_999, true, QUOTA_PER_UNIT), 0);
+        assert_eq!(
+            top_up_quota(&settings, 499_999, true, QUOTA_PER_UNIT),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn top_up_quota_rejects_a_non_representable_product() {
+        let settings = settings();
+        // Go `QuotaFromDecimalStrict` clamps at MaxQuota and reports an error,
+        // which `validateTopUpQuota` treats like a zero quota.
+        // 4_295 * 500_000 = 2_147_500_000 > MaxQuota - 1.
+        assert_eq!(
+            top_up_quota(&settings, 4_294, false, QUOTA_PER_UNIT),
+            Some(2_147_000_000)
+        );
+        assert_eq!(top_up_quota(&settings, 4_295, false, QUOTA_PER_UNIT), None);
+        // A non-positive `QuotaPerUnit` divides by zero in Go; the amount is
+        // unusable either way.
+        assert_eq!(top_up_quota(&settings, 10, true, 0.0), None);
     }
 
     #[test]
@@ -588,12 +807,14 @@ mod tests {
         // Go `floor((MaxQuota - 1) / 500000)`.
         let max = max_top_up_amount(&settings, false, QUOTA_PER_UNIT);
         assert_eq!(max, 4_294);
-        assert!(top_up_quota(&settings, max, false, QUOTA_PER_UNIT) < MAX_QUOTA);
+        assert!(top_up_quota(&settings, max, false, QUOTA_PER_UNIT) < Some(MAX_QUOTA));
         // TOKENS: Go `((max + 1) * QuotaPerUnit).Ceil() - 1`.
         assert_eq!(
             max_top_up_amount(&settings, true, QUOTA_PER_UNIT),
             2_147_499_999
         );
+        // Go `getMaxTopUpAmount` reports no limit for a non-positive unit.
+        assert_eq!(max_top_up_amount(&settings, false, 0.0), 0);
     }
 
     #[test]
@@ -652,5 +873,87 @@ mod tests {
             CreditedQuotaRejection::LimitExceeded.message(),
             "top-up quota limit exceeded"
         );
+    }
+
+    // ---- fixed-point helpers ---------------------------------------------
+
+    #[test]
+    fn scaled_matches_gos_shortest_round_trip_decimal() {
+        // `NewFromFloat(7.3)` is exactly 7.3, not the f64-rounded product.
+        assert_eq!(scaled(7.3), 7_300_000_000_000_000_000);
+        assert_eq!(scaled(0.5), 500_000_000_000_000_000);
+        assert_eq!(scaled(500_000.0), 500_000_000_000_000_000_000_000);
+        assert_eq!(scaled(-2.0), -2_000_000_000_000_000_000);
+        assert_eq!(scaled(0.0), 0);
+        assert_eq!(scaled(1.0), SCALE);
+        // Unrepresentable: NaN/Inf and a value past the scale.
+        assert_eq!(scaled(f64::NAN), 0);
+        assert_eq!(scaled(f64::INFINITY), 0);
+        assert_eq!(scaled(1e30), 0);
+    }
+
+    #[test]
+    fn mul_div_survives_a_product_that_overflows_i128() {
+        // 10^19 * 10^26 = 10^45, far past `i128::MAX` (1.7e38), so the 256-bit
+        // intermediate is what keeps the quotient exact rather than wrapped.
+        let amount = 10 * SCALE;
+        let rate = 100_000_000 * SCALE;
+        assert_eq!(amount.checked_mul(rate), None, "the product must overflow");
+        assert_eq!(mul_div(amount, rate, SCALE), 1_000_000_000 * SCALE);
+        assert_eq!(mul_div(0, rate, SCALE), 0);
+        // Signs: Go's `QuoRem` keeps the remainder on the same side as the
+        // quotient, so `a * b = c * q + r` holds for negative operands too.
+        assert_eq!(mul_div_rem(-4, 3, 5), (-2, -2));
+        assert_eq!(mul_div_rem(4, -3, -5), (2, -2));
+        assert_eq!(mul_div_rem(7, 5, 2), (17, 1));
+        assert_eq!(mul_div(7, 5, 2), 17);
+    }
+
+    #[test]
+    fn mul_div_round_steps_away_from_zero_on_a_tie() {
+        // Go's `DivRound` compares `2 * |remainder|` with the divisor and steps
+        // away from zero on equality.
+        assert_eq!(mul_div_round(3, 1, 2), 2);
+        assert_eq!(mul_div_round(-3, 1, 2), -2);
+        // 4 / 2 is exact, so the remainder must not step it up to 3.
+        assert_eq!(mul_div_round(4, 1, 2), 2);
+        assert_eq!(mul_div_round(-4, 1, 2), -2);
+        assert_eq!(mul_div_round(9, 1, 2), 5);
+        assert_eq!(mul_div_round(-9, 1, 2), -5);
+        assert_eq!(mul_div_round(4, 1, 3), 1);
+    }
+
+    #[test]
+    fn div_round_matches_gos_divround_at_sixteen_digits() {
+        // Both operands arrive scaled, so the scales cancel.
+        assert_eq!(div_round(SCALE, SCALE), SCALE);
+        assert_eq!(div_round(500_000 * SCALE, 500_000 * SCALE), SCALE);
+        assert_eq!(div_round(3 * SCALE, 2 * SCALE), 3 * SCALE / 2);
+        // 10 / 3 rounded to 16 fractional digits, half away from zero.
+        assert_eq!(
+            div_round(10 * SCALE, 3 * SCALE),
+            3_333_333_333_333_333_3 * 100
+        );
+        // 1 / 500000 is exact well inside 16 digits, so nothing rounds.
+        assert_eq!(div_round(SCALE, 500_000 * SCALE), 2 * SCALE / 1_000_000);
+        // A zero divisor is Go's panic; the caller's invalid path applies.
+        assert_eq!(div_round(SCALE, 0), 0);
+    }
+
+    #[test]
+    fn ceil_to_integer_rounds_up_only_for_a_fraction() {
+        assert_eq!(ceil_to_integer(3 * SCALE), 3);
+        assert_eq!(ceil_to_integer(3 * SCALE + 1), 4);
+        assert_eq!(ceil_to_integer(SCALE - 1), 1);
+        assert_eq!(ceil_to_integer(0), 0);
+    }
+
+    #[test]
+    fn to_float_is_the_nearest_f64_of_the_scaled_value() {
+        assert_eq!(to_float(73 * SCALE), 73.0);
+        assert_eq!(to_float(7_300_000_000_000_000_000), 7.3);
+        assert_eq!(to_float(146 * SCALE), 146.0);
+        assert_eq!(to_float(0), 0.0);
+        assert_eq!(to_float(-73 * SCALE), -73.0);
     }
 }
