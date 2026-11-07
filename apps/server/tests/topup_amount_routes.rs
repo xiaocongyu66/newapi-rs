@@ -285,7 +285,7 @@ async fn run_contract(db: Database) {
     )
     .await;
 
-    // ---- wallet capacity (non-Stripe only) -------------------------------
+    // ---- wallet capacity ------------------------------------------------
     // A wallet that cannot absorb the credit reports Go's English sentinel.
     seed_user(&db, 3, "default", 2_147_483_000, "token-3").await;
     let response = post_quote(&router, "/api/user/amount", Some("Bearer token-3"), 10).await;
@@ -294,18 +294,24 @@ async fn run_contract(db: Database) {
         "top-up quota limit exceeded",
         "capacity rejection is an English sentinel, verbatim from Go"
     );
-    // Stripe never checks the wallet: the same user still gets a price.
-    assert_quote(
-        post_quote(
-            &router,
-            "/api/user/stripe/amount",
-            Some("Bearer token-3"),
-            10,
+    // Stripe's *quote* endpoint runs the same capacity check: Go's
+    // `rejectInvalidCreditedQuota` (`topup_api.go:277-287`) calls
+    // `ValidateTopUpQuotaCapacity` whenever `validateCreditedQuota` accepts
+    // the credited product, so the ceiling wallet is refused here too.
+    assert_eq!(
+        error_data(
+            post_quote(
+                &router,
+                "/api/user/stripe/amount",
+                Some("Bearer token-3"),
+                10
+            )
+            .await
         )
         .await,
-        "80.00",
-    )
-    .await;
+        "top-up quota limit exceeded",
+        "Stripe's quote endpoint validates the wallet, not just the range"
+    );
 
     // ---- TOKENS display -------------------------------------------------
     // `quota_display` is a state snapshot refreshed by `reload`, so the option
