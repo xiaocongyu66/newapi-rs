@@ -31,7 +31,7 @@
 use axum::{
     Json,
     body::Bytes,
-    extract::State,
+    extract::{Extension, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
