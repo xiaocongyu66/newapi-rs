@@ -157,10 +157,10 @@ pub fn validate_top_up_quota(
     tokens: bool,
     quota_per_unit: f64,
 ) -> Result<i64, TopUpQuotaRejection> {
-    if let Some(quota) = top_up_quota(settings, amount, tokens, quota_per_unit) {
-        if quota > 0 {
-            return Ok(quota);
-        }
+    if let Some(quota) = top_up_quota(settings, amount, tokens, quota_per_unit)
+        && quota > 0
+    {
+        return Ok(quota);
     }
     let max_amount = max_top_up_amount(settings, tokens, quota_per_unit);
     if max_amount > 0 && amount > max_amount {
@@ -207,9 +207,13 @@ pub fn stripe_pay_units(settings: &TopUpSettings, amount: i64, group: &str) -> i
     let product =
         amount as f64 * (group_ratio(settings, group) * amount_discount(settings, amount));
     // Go `math.Ceil(x - 1e-9)`: the epsilon makes an exactly integral product
-    // round down instead of up (e.g. 3.0 → 3, not 4).
-    let units = (product - 1e-9).ceil();
-    (if units < 1.0 { 1.0 } else { units }) as i64
+    // round down instead of up (e.g. 3.0 → 3, not 4). `math.Ceil(0 - 1e-9)` is
+    // `-0`, which Go's `int64(-0)` gives as 0 and then clamps to 1.
+    let mut units = (product - 1e-9).ceil();
+    if units < 1.0 {
+        units = 1.0;
+    }
+    units as i64
 }
 
 /// Go `getStripePayMoney(amount, group)`：不在 `TOKENS` 模式换算输入，
@@ -223,7 +227,7 @@ pub fn stripe_pay_money(
 ) -> f64 {
     let mut units = stripe_pay_units(settings, amount, group) as f64;
     if tokens {
-        units = units / quota_per_unit;
+        units /= quota_per_unit;
     }
     units * settings.stripe_unit_price
 }
@@ -241,7 +245,7 @@ pub fn waffo_pay_money(
 ) -> f64 {
     let mut value = amount as f64;
     if tokens {
-        value = value / quota_per_unit;
+        value /= quota_per_unit;
     }
     // Go's left-to-right order matters for bit equality; the discount is keyed
     // by the original request amount, before the TOKENS conversion.
