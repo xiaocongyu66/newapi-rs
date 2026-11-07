@@ -125,6 +125,30 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // 四条报价路由：Go `selfRoute` 组内纯 `UserAuth`（`/api/user/amount` 一线
+    // 同样无限流）。响应是裸 `common.H` 包裹而非 `CtxApiSuccess`，详见
+    // `amount_http` 的模块注释。
+    let amount_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/amount", post(crate::amount_http::request_amount))
+            .route(
+                "/api/user/stripe/amount",
+                post(crate::amount_http::request_stripe_amount),
+            )
+            .route(
+                "/api/user/waffo/amount",
+                post(crate::amount_http::request_waffo_amount),
+            )
+            .route(
+                "/api/user/waffo-pancake/amount",
+                post(crate::amount_http::request_waffo_pancake_amount),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                amount_state,
+                crate::auth::user_auth,
+            )),
+    );
     // `/api/user/2fa/*`：Go `selfRoute` 组内（`UserAuth`）；status 无
     // DisableCache，四个 POST 由 handler 自行写缓存头。
     let twofa_state = state.clone();

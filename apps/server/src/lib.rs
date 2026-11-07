@@ -4,6 +4,7 @@
 #![recursion_limit = "256"]
 
 pub mod aff_http;
+pub mod amount_http;
 pub mod auth;
 pub mod boundary_mw;
 mod global_limit;

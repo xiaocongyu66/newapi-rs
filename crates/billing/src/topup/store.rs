@@ -24,7 +24,7 @@ pub const USER_TOPUP_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 /// Every option read by `GetTopUpInfo`. Missing rows keep
 /// [`TopUpSettings::default`].
-const OPTION_KEYS: [&str; 36] = [
+const OPTION_KEYS: [&str; 40] = [
     "payment_setting.amount_options",
     "payment_setting.amount_discount",
     "payment_setting.compliance_confirmed",
@@ -61,6 +61,10 @@ const OPTION_KEYS: [&str; 36] = [
     "CodePayId",
     "CodePayKey",
     "TopUpLink",
+    "StripeUnitPrice",
+    "WaffoUnitPrice",
+    "WaffoPancakeUnitPrice",
+    "TopupGroupRatio",
 ];
 
 impl TopUpSettings {
@@ -174,6 +178,29 @@ fn apply_option(settings: &mut TopUpSettings, key: &str, value: &str) {
         "CodePayId" => settings.codepay_id = value.to_owned(),
         "CodePayKey" => settings.codepay_key = value.to_owned(),
         "TopUpLink" => settings.topup_link = value.to_owned(),
+        // Go `strconv.ParseFloat`：解析失败保留旧值（`register_option_hooks.go`）。
+        "StripeUnitPrice" => {
+            if let Some(parsed) = parse_float_or_none(value) {
+                settings.stripe_unit_price = parsed;
+            }
+        }
+        "WaffoUnitPrice" => {
+            if let Some(parsed) = parse_float_or_none(value) {
+                settings.waffo_unit_price = parsed;
+            }
+        }
+        "WaffoPancakeUnitPrice" => {
+            if let Some(parsed) = parse_float_or_none(value) {
+                settings.waffo_pancake_unit_price = parsed;
+            }
+        }
+        // Go `common.UpdateTopupGroupRatioByJSONString`：整体替换 map，
+        // 解析失败保留旧 map。
+        "TopupGroupRatio" => {
+            if let Ok(parsed) = serde_json::from_str::<Option<BTreeMap<String, f64>>>(value) {
+                settings.topup_group_ratio = parsed;
+            }
+        }
         _ => {}
     }
 }
@@ -208,6 +235,19 @@ fn pay_method_gateway_is_valid(method: &PayMethod) -> bool {
 
 fn parse_int_or_zero(value: &str) -> i64 {
     value.parse::<i64>().unwrap_or(0)
+}
+
+/// Go `strconv.ParseFloat(value, 64)`：解析失败由调用方保留旧值。
+/// Go 的 `ParseFloat` 额外接受 "Inf"/"NaN" 与十六进制浮点；报价路径不存储
+/// 这两类值（网关单价来自管理面板输入），因此只覆盖十进制形式。
+fn parse_float_or_none(value: &str) -> Option<f64> {
+    if value.is_empty() {
+        return None;
+    }
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|parsed| parsed.is_finite())
 }
 
 /// Go `strconv.ParseBool` accepted spellings.
