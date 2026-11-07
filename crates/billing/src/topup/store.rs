@@ -178,21 +178,12 @@ fn apply_option(settings: &mut TopUpSettings, key: &str, value: &str) {
         "CodePayId" => settings.codepay_id = value.to_owned(),
         "CodePayKey" => settings.codepay_key = value.to_owned(),
         "TopUpLink" => settings.topup_link = value.to_owned(),
-        // Go `strconv.ParseFloat`：解析失败保留旧值（`register_option_hooks.go`）。
-        "StripeUnitPrice" => {
-            if let Some(parsed) = parse_float_or_none(value) {
-                settings.stripe_unit_price = parsed;
-            }
-        }
-        "WaffoUnitPrice" => {
-            if let Some(parsed) = parse_float_or_none(value) {
-                settings.waffo_unit_price = parsed;
-            }
-        }
+        // Go `StripeUnitPrice, _ = strconv.ParseFloat(value, 64)`：解析失败
+        // **覆盖为 0**，不保留旧值（`register_option_hooks.go:90-91`）。
+        "StripeUnitPrice" => settings.stripe_unit_price = value.parse::<f64>().unwrap_or(0.0),
+        "WaffoUnitPrice" => settings.waffo_unit_price = value.parse::<f64>().unwrap_or(0.0),
         "WaffoPancakeUnitPrice" => {
-            if let Some(parsed) = parse_float_or_none(value) {
-                settings.waffo_pancake_unit_price = parsed;
-            }
+            settings.waffo_pancake_unit_price = value.parse::<f64>().unwrap_or(0.0)
         }
         // Go `common.UpdateTopupGroupRatioByJSONString`：整体替换 map，
         // 解析失败保留旧 map。
@@ -235,19 +226,6 @@ fn pay_method_gateway_is_valid(method: &PayMethod) -> bool {
 
 fn parse_int_or_zero(value: &str) -> i64 {
     value.parse::<i64>().unwrap_or(0)
-}
-
-/// Go `strconv.ParseFloat(value, 64)`：解析失败由调用方保留旧值。
-/// Go 的 `ParseFloat` 额外接受 "Inf"/"NaN" 与十六进制浮点；报价路径不存储
-/// 这两类值（网关单价来自管理面板输入），因此只覆盖十进制形式。
-fn parse_float_or_none(value: &str) -> Option<f64> {
-    if value.is_empty() {
-        return None;
-    }
-    value
-        .parse::<f64>()
-        .ok()
-        .filter(|parsed| parsed.is_finite())
 }
 
 /// Go `strconv.ParseBool` accepted spellings.
@@ -438,3 +416,50 @@ const SEARCH_LIST_SQL: &str = concat!(
     "WHERE user_id = $1 AND create_time >= $2 AND trade_no LIKE $3 ESCAPE '!' ",
     "ORDER BY id DESC LIMIT $4 OFFSET $5"
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_prices_parse_like_go_strconv_parsefloat() {
+        let mut settings = TopUpSettings::default();
+        for (key, field) in [
+            ("StripeUnitPrice", 0usize),
+            ("WaffoUnitPrice", 1),
+            ("WaffoPancakeUnitPrice", 2),
+        ] {
+            apply_option(&mut settings, key, "2.5");
+            apply_option(&mut settings, key, "not-a-number");
+            let value = [
+                settings.stripe_unit_price,
+                settings.waffo_unit_price,
+                settings.waffo_pancake_unit_price,
+            ][field];
+            // Go assigns the parse result unconditionally, so a failure
+            // overwrites the previous value with 0.
+            assert_eq!(value, 0.0, "{key} should collapse to 0 on a bad row");
+        }
+    }
+
+    #[test]
+    fn topup_group_ratio_replaces_the_map_or_keeps_it() {
+        let mut settings = TopUpSettings::default();
+        apply_option(&mut settings, "TopupGroupRatio", r#"{"vip":2}"#);
+        assert_eq!(
+            settings.topup_group_ratio.as_ref().unwrap().get("vip"),
+            Some(&2.0)
+        );
+        // Go `UpdateTopupGroupRatioByJSONString` keeps the whole map on a
+        // parse failure, so an unparseable row is a no-op.
+        apply_option(&mut settings, "TopupGroupRatio", "not-json");
+        assert_eq!(
+            settings.topup_group_ratio.as_ref().unwrap().get("vip"),
+            Some(&2.0)
+        );
+        // JSON `null` unmarshals to a nil map in Go, which is the same as
+        // "no ratios configured" for the query path (`None`).
+        apply_option(&mut settings, "TopupGroupRatio", "null");
+        assert_eq!(settings.topup_group_ratio, None);
+    }
+}
