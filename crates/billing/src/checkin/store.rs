@@ -23,8 +23,8 @@ use std::collections::BTreeMap;
 use newapi_storage::Database;
 use sqlx::Row;
 
+use super::CheckinSettings;
 use super::datetime::today;
-use super::{CheckinSettings, CheckinStats};
 
 /// Go `store_checkin.go:26-30` `CheckinRecord` 的原始两列；`quota_awarded_display`
 /// 由 HTTP 适配层换算（billing 不依赖 identity）。
@@ -32,6 +32,18 @@ use super::{CheckinSettings, CheckinStats};
 pub struct CheckinRecord {
     pub checkin_date: String,
     pub quota_awarded: i64,
+}
+
+/// Go `GetUserCheckinStats` 返回的 map 字段（`store_checkin.go:308-315`）；
+/// 展示值不在本层计算。`total_quota` / `total_checkins` 已是全时段求和，
+/// `checkin_count` 是合并后本月记录数。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckinStats {
+    pub total_quota: i64,
+    pub total_checkins: i64,
+    pub checkin_count: i64,
+    pub checked_in_today: bool,
+    pub records: Vec<CheckinRecord>,
 }
 
 pub struct CheckinRepository {
