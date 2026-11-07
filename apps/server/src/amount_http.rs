@@ -254,7 +254,7 @@ async fn quote(state: &AppState, user_id: i64, request: &AmountRequest, kind: Ki
         let profile = match load_profile(&db, user_id).await {
             Ok(Some(profile)) => profile,
             Ok(None) => return lookup_failure(),
-            Err(rejection) => return rejection,
+            Err(error) => return database_failure(&error),
         };
         let credited =
             stripe_credited_quota(&settings, request.amount, &profile.group, quota_per_unit);
@@ -283,7 +283,7 @@ async fn quote(state: &AppState, user_id: i64, request: &AmountRequest, kind: Ki
     let profile = match load_profile(&db, user_id).await {
         Ok(Some(profile)) => profile,
         Ok(None) => return lookup_failure(),
-        Err(rejection) => return rejection,
+        Err(error) => return database_failure(&error),
     };
     if let Err(rejection) = check_capacity(credited, profile.quota) {
         return quote_error_static(rejection.message());
@@ -296,11 +296,8 @@ async fn quote(state: &AppState, user_id: i64, request: &AmountRequest, kind: Ki
 async fn load_profile(
     db: &newapi_storage::Database,
     user_id: i64,
-) -> Result<Option<newapi_identity::users::UserProfile>, Response> {
-    match UserProfileRepository::new(db.clone()).by_id(user_id).await {
-        Ok(profile) => Ok(profile),
-        Err(error) => Err(database_failure(&error)),
-    }
+) -> Result<Option<newapi_identity::users::UserProfile>, sqlx::Error> {
+    UserProfileRepository::new(db.clone()).by_id(user_id).await
 }
 
 /// The shared `payMoney <= 0.01` rejection and the success envelope.
