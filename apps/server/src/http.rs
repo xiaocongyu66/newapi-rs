@@ -102,6 +102,29 @@ fn build_router(state: AppState) -> Router {
                 crate::register_http::register_guard,
             )),
     );
+    // `POST /api/user/reset`：Go `apiRouter` 直接挂载（匿名），顺序
+    // CriticalRateLimit → 匿名体上限 → handler，无 Turnstile、无 UserAuth。
+    let reset_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/reset", post(crate::reset_http::reset_password))
+            .route_layer(middleware::from_fn_with_state(
+                reset_state,
+                crate::reset_http::reset_guard,
+            )),
+    );
+    // `GET /api/user/topup/info` 与 `GET /api/user/topup/self`：Go `selfRoute`
+    // 组内纯 `UserAuth`，无限流、无 DisableCache。
+    let topup_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/topup/info", get(crate::topup_http::topup_info))
+            .route("/api/user/topup/self", get(crate::topup_http::user_topups))
+            .route_layer(middleware::from_fn_with_state(
+                topup_state,
+                crate::auth::user_auth,
+            )),
+    );
     // `/api/user/2fa/*`：Go `selfRoute` 组内（`UserAuth`）；status 无
     // DisableCache，四个 POST 由 handler 自行写缓存头。
     let twofa_state = state.clone();
