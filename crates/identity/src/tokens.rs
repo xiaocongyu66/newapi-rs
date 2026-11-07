@@ -433,8 +433,6 @@ pub struct TokenSearch<'a> {
     pub key: &'a str,
     pub offset: i64,
     pub limit: i64,
-    /// Go `.Limit(maxTokens)` bound on the count query.
-    pub max_tokens: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -672,12 +670,14 @@ const SEARCH_SQL: &str = token_select!(
      ORDER BY id DESC LIMIT $4 OFFSET $5"
 );
 
+// Go `SearchUserTokens` calls `baseQuery.Limit(maxTokens).Count(&total)`, but
+// GORM's `Count` keeps that LIMIT beside the aggregate row and aggregate rows
+// ignore LIMIT, so Go's total is in fact uncapped; this matches that behavior.
 const SEARCH_COUNT_SQL: &str = concat!(
-    "SELECT COUNT(*) FROM (SELECT 1 FROM tokens ",
+    "SELECT COUNT(*) FROM tokens ",
     "WHERE user_id=$1 AND deleted_at IS NULL",
     " AND ($2 = '' OR name LIKE $2 ESCAPE '!')",
-    " AND ($3 = '' OR \"key\" LIKE $3 ESCAPE '!')",
-    " LIMIT $4) AS matching"
+    " AND ($3 = '' OR \"key\" LIKE $3 ESCAPE '!')"
 );
 
 const USER_GROUP_SQL: &str = "SELECT \"group\" FROM users WHERE id=$1 AND deleted_at IS NULL";
@@ -1042,7 +1042,6 @@ impl TokenRepository {
                     .bind(user_id)
                     .bind(search.keyword)
                     .bind(search.key)
-                    .bind(search.max_tokens)
                     .fetch_one(pool)
                     .await?
             }
@@ -1051,7 +1050,6 @@ impl TokenRepository {
                     .bind(user_id)
                     .bind(search.keyword)
                     .bind(search.key)
-                    .bind(search.max_tokens)
                     .fetch_one(pool)
                     .await?
             }

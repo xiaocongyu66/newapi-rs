@@ -54,8 +54,8 @@ const MSG_AUTO_GROUPS_TOO_MANY: &str = "token.auto_groups_too_many";
 const MSG_AUTO_GROUPS_DUPLICATE: &str = "token.auto_groups_duplicate";
 const MSG_AUTO_GROUPS_INVALID: &str = "token.auto_groups_invalid";
 
-// Go returns these as raw (untranslated) strings. Keys do not exist in
-// `crates/i18n/locales` yet; they are listed in the delivery report.
+// Go returns these as raw (untranslated) strings; the port translates them
+// through the same i18n keys stored in `crates/i18n/locales`.
 const MSG_MAX_TOKENS_REACHED: &str = "token.max_tokens_reached";
 const MSG_INVALID_QUOTA_VALUE: &str = "token.invalid_quota_value";
 const MSG_SEARCH_TOO_MANY: &str = "token.search_too_many";
@@ -355,7 +355,6 @@ pub async fn search_tokens(
         key: &key,
         offset,
         limit,
-        max_tokens: runtime.max_user_tokens,
     };
     let (tokens, total) = match repository
         .search_for_user(auth_user.0.user_id, &search)
