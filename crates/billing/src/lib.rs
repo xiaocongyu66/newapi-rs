@@ -5,5 +5,6 @@
 #![forbid(unsafe_code)]
 
 pub mod billing_options;
+pub mod checkin;
 pub mod quota_display;
 pub mod topup;

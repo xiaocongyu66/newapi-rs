@@ -125,6 +125,21 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // `GET /api/user/checkin`：Go `selfRoute` 组内纯 `UserAuth`
+    // （`register_api.go:190`），无限流、无 DisableCache；只读切片，
+    // `POST /api/user/checkin` 由后续切片实现。
+    let checkin_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/checkin",
+                get(crate::checkin_http::checkin_status),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                checkin_state,
+                crate::auth::user_auth,
+            )),
+    );
     // 四条报价路由：Go `selfRoute` 组内纯 `UserAuth`（`/api/user/amount` 一线
     // 同样无限流）。响应是裸 `common.H` 包裹而非 `CtxApiSuccess`，详见
     // `amount_http` 的模块注释。
