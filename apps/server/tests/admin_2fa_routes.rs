@@ -31,6 +31,7 @@ use newapi_identity::{
     auth_session::{AuthFence, SessionAuth},
     crypto::AuthKeys,
     sessions::NoCache,
+    two_fa::TwoFaRepository,
 };
 use newapi_security::client_ip::ProxyPolicy;
 use newapi_server::{
@@ -662,6 +663,15 @@ async fn run_contract(db: Database) {
     .await;
     assert_eq!(factor_rows(&db, 3).await, 1);
     assert_eq!(stored_auth_version(&db, 3).await, 1);
+    // 管理员连自己的 2FA 都不能禁用：目标角色 == 操作者角色命中同级拒绝
+    // （拒绝发生在 `DisableTwoFAWithAuthVersion` 之前，与因子是否启用无关）。
+    // 因此能真正触发"禁用自己的 2FA"审计分支（省略 target_user_id）的
+    // 只有 root——见文末 root 自禁用用例。
+    assert_business_message(
+        send_delete(&app, "/api/user/1/2fa", &admin).await,
+        MSG_ROLE_INSUFFICIENT,
+    )
+    .await;
     assert!(audit_logs(&db).await.is_empty(), "被拒绝的请求不写审计");
 
     // ---- disable: root force-disables an admin ------------------------------
@@ -684,6 +694,19 @@ async fn run_contract(db: Database) {
     // 因子与备用码都被硬删除（Go `DisableTwoFAWithAuthVersion`）。
     assert_eq!(factor_rows(&db, 2).await, 0);
     assert_eq!(backup_code_rows(&db, 2).await, 0);
+    assert_eq!(stored_auth_version(&db, 2).await, 2);
+
+    // ---- disable: idempotent retry on an already-disabled user --------------
+    // Go `DisableTwoFAWithAuthVersion` 第二次调用时 `LockForUpdate` 找不到
+    // `is_enabled = true` 的行，返回 `ErrTwoFANotEnabled`（`store_twofa.go:283-285`）
+    // → "用户未启用2FA"。失败发生在 `IncrementUserAuthVersionWithTx` 之前，
+    // 因此 `auth_version` 不再递增（仍为上一次禁用后的 2），也不写审计。
+    assert_business_message(
+        send_delete(&app, "/api/user/2/2fa", &admin).await,
+        MSG_NOT_ENABLED,
+    )
+    .await;
+    assert_eq!(factor_rows(&db, 2).await, 0);
     assert_eq!(stored_auth_version(&db, 2).await, 2);
 
     // ---- disable: personal access token authenticates as admin --------------
@@ -718,17 +741,157 @@ async fn run_contract(db: Database) {
     assert_eq!(other["op"]["params"]["target_user_id"], json!(8));
     assert_eq!(other["admin_info"]["auth_method"], json!("access_token"));
 
+    // ---- disable: root force-disables another root ---------------------------
+    // Go `canManageTargetRole`（`manage_users.go:374-376`）：
+    // `myRole == RoleRootUser || myRole > targetRole`。root（100）命中首项，
+    // 可管理任何角色，包括同级的另一个 root——角色矩阵中唯一的等价格。
+    seed_user(&db, 10, "root-two", 100, None).await;
+    seed_factor(&db, 10, "SECRETROOTTWO", true).await;
+    let body = assert_success_message(
+        send_delete(&app, "/api/user/10/2fa", &root).await,
+        MSG_ADMIN_DISABLED,
+    )
+    .await;
+    assert!(body.get("data").is_none(), "成功后无 data 字段");
+    assert_eq!(factor_rows(&db, 10).await, 0);
+    assert_eq!(stored_auth_version(&db, 10).await, 2);
+
+    // ---- disable: root force-disables itself ---------------------------------
+    // Go `RecordManageAuditFor`（`write_audit.go:98-105`）：仅当
+    // `targetUserId > 0 && targetUserId != operatorUserId` 才写入
+    // `params["target_user_id"]`；`buildOpField`（`store_log.go:191-199`）
+    // 又仅在 `params` 非空时才输出 `params` 键。root 禁用自己时 target ==
+    // operator，params 保持为空，`other.op` 因此**没有** `params` 键。
+    seed_factor(&db, 4, "SECRETROOTONE", true).await;
+    let body = assert_success_message(
+        send_delete(&app, "/api/user/4/2fa", &root).await,
+        MSG_ADMIN_DISABLED,
+    )
+    .await;
+    assert!(body.get("data").is_none());
+    assert_eq!(factor_rows(&db, 4).await, 0);
+    assert_eq!(stored_auth_version(&db, 4).await, 2);
+
+    // ---- audit: params present for a distinct target, omitted for self --------
+    let logs = audit_logs(&db).await;
+    assert_eq!(logs.len(), 5, "{logs:?}");
+    // logs[3]：root→10，目标与操作者不同，`op.params.target_user_id` 写入。
+    let (operator, _log_type, _content, _username, other) = &logs[3];
+    assert_eq!(*operator, 4);
+    let other: Value = serde_json::from_str(other).expect("other JSON");
+    assert_eq!(other["op"]["action"], json!("user.2fa_disable"));
+    assert_eq!(other["op"]["params"]["target_user_id"], json!(10));
+    // logs[4]：root→4（自己），省略整个 params 键。
+    let (operator, log_type, content, username, other) = &logs[4];
+    assert_eq!(*operator, 4, "root 操作，日志归属 root");
+    assert_eq!(*log_type, 3, "Go LogTypeManage");
+    assert_eq!(content, AUDIT_CONTENT);
+    assert_eq!(username, "root-one");
+    let other: Value = serde_json::from_str(other).expect("other JSON");
+    assert_eq!(other["op"]["action"], json!("user.2fa_disable"));
+    assert!(
+        other.get("op").and_then(|op| op.get("params")).is_none(),
+        "buildOpField 在 params 为空时省略 params 键: {other}"
+    );
+    assert_eq!(other["admin_info"]["admin_id"], json!(4));
+    assert_eq!(other["admin_info"]["admin_username"], json!("root-one"));
+    assert_eq!(other["admin_info"]["admin_role"], json!(100));
+    assert_eq!(other["admin_info"]["auth_method"], json!("session"));
+
     // ---- stats after the disables --------------------------------------------
+    // 新增的 root-two（id=10）使未删除用户数升至 9；所有已启用因子均已删除，
+    // 用户 6 的待验证因子（is_enabled=false）不计入。
     let body =
         body_json(send(&app, Method::GET, "/api/user/2fa/stats", Some(&admin), None).await).await;
     assert_eq!(
         body["data"],
         json!({
-            "total_users": 8,
+            "total_users": 9,
             "enabled_users": 0,
             "enabled_rate": "0.0%",
         })
     );
+}
+
+/// Go `GetTwoFAStats` 的空库分支（`store_twofa.go:400-424`）：`totalUsers > 0`
+/// 保护在空表时不成立，`enabledRate` 停留在 0.0，
+/// `fmt.Sprintf("%.1f%%", 0.0)` → `"0.0%"`。
+///
+/// HTTP 层无法构造"零用户却有管理员凭据"的请求（`UserAuth` 本身需要用户行），
+/// 因此直测仓储层 `TwoFaAdminStats::new` 的 `else` 分支。
+async fn run_admin_2fa_stats_empty(db: Database) {
+    create_schema(&db).await;
+    let stats = TwoFaRepository::new(db)
+        .admin_stats()
+        .await
+        .expect("empty admin stats");
+    assert_eq!(stats.total_users, 0);
+    assert_eq!(stats.enabled_users, 0);
+    assert_eq!(stats.enabled_rate, "0.0%");
+}
+
+#[tokio::test]
+async fn sqlite_admin_2fa_stats_empty_contract() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite fixture");
+    run_admin_2fa_stats_empty(Database::Sqlite(pool)).await;
+}
+
+#[tokio::test]
+async fn postgres_admin_2fa_stats_empty_contract() {
+    let Ok(dsn) = std::env::var("TEST_POSTGRES_DSN") else {
+        return;
+    };
+    let options: PgConnectOptions = dsn
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid PostgreSQL fixture config"));
+    let options = options.disable_statement_logging();
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .expect("connect PostgreSQL fixture");
+    let schema = format!(
+        "admin_2fa_stats_empty_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    assert!(
+        schema
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA \"{schema}\"")))
+        .execute(&admin)
+        .await
+        .expect("create isolated schema");
+    let search_path = schema.clone();
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |connection, _| {
+            let path = search_path.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(path)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await
+        .expect("connect isolated PostgreSQL pool");
+    run_admin_2fa_stats_empty(Database::Postgres(pool)).await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA \"{schema}\" CASCADE"
+    )))
+    .execute(&admin)
+    .await
+    .expect("drop isolated schema");
+    admin.close().await;
 }
 
 #[tokio::test]
