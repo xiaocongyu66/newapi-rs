@@ -223,12 +223,14 @@ async fn quote(state: &AppState, user_id: i64, request: &AmountRequest, kind: Ki
     let tokens = display.kind == QuotaDisplayKind::Tokens;
     let quota_per_unit = display.quota_per_unit;
 
-    // Stripe scales its minimum by `QuotaPerUnit` in TOKENS mode
-    // (`getStripeMinTopup`); the Waffo family does not.
+    // Both `getMinTopup` (`topup_api.go:215-223`, the amount route) and
+    // `getStripeMinTopup` (`topup_stripe.go:493-499`) scale the minimum by
+    // `QuotaPerUnit` in TOKENS mode; the Waffo family has no such conversion.
     let min_topup = kind.min_topup(&settings);
-    let min_topup = if tokens && kind == Kind::Stripe {
-        // Go multiplies by `int(common.QuotaPerUnit)`; a non-integral unit is
-        // not a configurable state, so the same truncation applies.
+    let min_topup = if tokens && matches!(kind, Kind::Amount | Kind::Stripe) {
+        // `getMinTopup` rounds through `common.QuotaFromDecimal` while
+        // `getStripeMinTopup` truncates with `int(QuotaPerUnit)`; both agree
+        // for every integral unit the option schema can store.
         (i128::from(min_topup) * i128::from(quota_per_unit as i64)) as i64
     } else {
         min_topup

@@ -331,6 +331,21 @@ async fn run_contract(db: Database) {
         "充值数量不能小于 500000",
     )
     .await;
+    // `getMinTopup` scales the amount route's minimum the same way
+    // (`topup_api.go:215-223`), so a sub-unit token count is refused at the
+    // minimum check rather than falling through to `validateTopUpQuota`'s
+    // `充值数量无效`. This is the gate that pins the difference.
+    assert_error(
+        post_quote(&router, "/api/user/amount", auth, 499_999).await,
+        "充值数量不能小于 500000",
+    )
+    .await;
+    // One unit exactly clears the scaled minimum.
+    assert_quote(
+        post_quote(&router, "/api/user/amount", auth, 500_000).await,
+        "7.30",
+    )
+    .await;
     // Stripe's own minimum is scaled by `QuotaPerUnit` (1 * 500000), so any
     // request that clears it is far above the flat `> 10000` ceiling Go
     // applies to the raw amount (`topup_stripe.go:47-50`). In TOKENS mode a
