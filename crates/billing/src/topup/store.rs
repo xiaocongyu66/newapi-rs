@@ -24,7 +24,7 @@ pub const USER_TOPUP_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 /// Every option read by `GetTopUpInfo`. Missing rows keep
 /// [`TopUpSettings::default`].
-const OPTION_KEYS: [&str; 36] = [
+const OPTION_KEYS: [&str; 40] = [
     "payment_setting.amount_options",
     "payment_setting.amount_discount",
     "payment_setting.compliance_confirmed",
@@ -61,6 +61,10 @@ const OPTION_KEYS: [&str; 36] = [
     "CodePayId",
     "CodePayKey",
     "TopUpLink",
+    "StripeUnitPrice",
+    "WaffoUnitPrice",
+    "WaffoPancakeUnitPrice",
+    "TopupGroupRatio",
 ];
 
 impl TopUpSettings {
@@ -174,6 +178,20 @@ fn apply_option(settings: &mut TopUpSettings, key: &str, value: &str) {
         "CodePayId" => settings.codepay_id = value.to_owned(),
         "CodePayKey" => settings.codepay_key = value.to_owned(),
         "TopUpLink" => settings.topup_link = value.to_owned(),
+        // Go `StripeUnitPrice, _ = strconv.ParseFloat(value, 64)`：解析失败
+        // **覆盖为 0**，不保留旧值（`register_option_hooks.go:90-91`）。
+        "StripeUnitPrice" => settings.stripe_unit_price = value.parse::<f64>().unwrap_or(0.0),
+        "WaffoUnitPrice" => settings.waffo_unit_price = value.parse::<f64>().unwrap_or(0.0),
+        "WaffoPancakeUnitPrice" => {
+            settings.waffo_pancake_unit_price = value.parse::<f64>().unwrap_or(0.0)
+        }
+        // Go `common.UpdateTopupGroupRatioByJSONString`：整体替换 map，
+        // 解析失败保留旧 map。
+        "TopupGroupRatio" => {
+            if let Ok(parsed) = serde_json::from_str::<Option<BTreeMap<String, f64>>>(value) {
+                settings.topup_group_ratio = parsed;
+            }
+        }
         _ => {}
     }
 }
@@ -398,3 +416,50 @@ const SEARCH_LIST_SQL: &str = concat!(
     "WHERE user_id = $1 AND create_time >= $2 AND trade_no LIKE $3 ESCAPE '!' ",
     "ORDER BY id DESC LIMIT $4 OFFSET $5"
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_prices_parse_like_go_strconv_parsefloat() {
+        let mut settings = TopUpSettings::default();
+        for (key, field) in [
+            ("StripeUnitPrice", 0usize),
+            ("WaffoUnitPrice", 1),
+            ("WaffoPancakeUnitPrice", 2),
+        ] {
+            apply_option(&mut settings, key, "2.5");
+            apply_option(&mut settings, key, "not-a-number");
+            let value = [
+                settings.stripe_unit_price,
+                settings.waffo_unit_price,
+                settings.waffo_pancake_unit_price,
+            ][field];
+            // Go assigns the parse result unconditionally, so a failure
+            // overwrites the previous value with 0.
+            assert_eq!(value, 0.0, "{key} should collapse to 0 on a bad row");
+        }
+    }
+
+    #[test]
+    fn topup_group_ratio_replaces_the_map_or_keeps_it() {
+        let mut settings = TopUpSettings::default();
+        apply_option(&mut settings, "TopupGroupRatio", r#"{"vip":2}"#);
+        assert_eq!(
+            settings.topup_group_ratio.as_ref().unwrap().get("vip"),
+            Some(&2.0)
+        );
+        // Go `UpdateTopupGroupRatioByJSONString` keeps the whole map on a
+        // parse failure, so an unparseable row is a no-op.
+        apply_option(&mut settings, "TopupGroupRatio", "not-json");
+        assert_eq!(
+            settings.topup_group_ratio.as_ref().unwrap().get("vip"),
+            Some(&2.0)
+        );
+        // JSON `null` unmarshals to a nil map in Go, which is the same as
+        // "no ratios configured" for the query path (`None`).
+        apply_option(&mut settings, "TopupGroupRatio", "null");
+        assert_eq!(settings.topup_group_ratio, None);
+    }
+}

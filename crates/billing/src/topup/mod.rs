@@ -11,6 +11,8 @@
 //!   apply semantics)
 //! - `apps/api/internal/billing/store_topup.go` (`QueryUserTopUps`,
 //!   `SearchUserTopUps`)
+//! - `apps/api/internal/billing/topup_api.go` (`RequestAmount`,
+//!   `getPayMoney`, `validateTopUpQuota`)
 //!
 //! The module is read-only: it parses storage rows into the Go process
 //! defaults, filters configured payment methods exactly like the Go handler,
@@ -22,8 +24,15 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod quote;
 mod store;
 
+pub use quote::{
+    CreditedQuotaRejection, TopUpQuotaRejection, amount_discount, check_capacity,
+    max_top_up_amount, pay_money, stripe_credited_quota, stripe_pay_money, stripe_pay_units,
+    top_up_quota, topup_group_ratio, validate_credited_quota, validate_top_up_quota,
+    waffo_pancake_pay_money, waffo_pay_money,
+};
 pub use store::{TopUpRecord, TopUpRepository, USER_TOPUP_WINDOW_SECONDS};
 
 /// Go `billing.CurrentComplianceTermsVersion`.
@@ -77,6 +86,16 @@ pub struct TopUpSettings {
     pub waffo_min_topup: i64,
     pub waffo_pancake_min_topup: i64,
     pub price: f64,
+    /// Go `StripeUnitPrice`（`pay_subscription.go:168`，option `StripeUnitPrice`）。
+    pub stripe_unit_price: f64,
+    /// Go `WaffoUnitPrice`（`pay_subscription.go:189`，option `WaffoUnitPrice`）。
+    pub waffo_unit_price: f64,
+    /// Go `WaffoPancakeUnitPrice`（`pay_subscription.go:233`，option
+    /// `WaffoPancakeUnitPrice`）。
+    pub waffo_pancake_unit_price: f64,
+    /// Go `common.GetTopupGroupRatio` 的进程级 map：`TopupGroupRatio` option
+    /// 的 JSON `<group, ratio>` 快照；缺失的 group 由查询方兜底为 1。
+    pub topup_group_ratio: Option<BTreeMap<String, f64>>,
     pub pay_methods: Option<Vec<PayMethod>>,
     pub pay_address: String,
     pub epay_id: String,
@@ -120,6 +139,10 @@ impl Default for TopUpSettings {
             waffo_min_topup: 1,
             waffo_pancake_min_topup: 1,
             price: 7.3,
+            stripe_unit_price: 8.0,
+            waffo_unit_price: 1.0,
+            waffo_pancake_unit_price: 1.0,
+            topup_group_ratio: Some(BTreeMap::new()),
             pay_methods: Some(default_pay_methods()),
             pay_address: String::new(),
             epay_id: String::new(),
