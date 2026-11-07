@@ -285,10 +285,18 @@ fn build_router(state: AppState) -> Router {
             )),
     );
     // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
+    // `POST /api/user/aff_transfer` 同组，但 Go 在它前面多挂
+    // `UserCriticalRateLimit("aff-transfer")` 与
+    // `RequirePaymentComplianceMiddleware`（`register_api.go:179`）。端口尚无
+    // 按 key 的 critical 限流器，因此只把合规门内联进 handler（见 `aff_http`）。
     let aff_state = state.clone();
     let app = app.merge(
         Router::new()
             .route("/api/user/aff", get(crate::aff_http::aff_code))
+            .route(
+                "/api/user/aff_transfer",
+                post(crate::aff_http::transfer_aff_quota),
+            )
             .route_layer(middleware::from_fn_with_state(
                 aff_state,
                 crate::auth::user_auth,

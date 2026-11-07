@@ -128,6 +128,19 @@ pub struct UserProfileRepository {
     db: Database,
 }
 
+/// Expands one body against either backend's pool so a single statement serves
+/// both drivers. sqlx's runtime `query` accepts `$n` placeholders on SQLite as
+/// well as PostgreSQL, so only genuinely backend-specific SQL (the row-lock
+/// clause) branches outside the macro.
+macro_rules! backend {
+    ($db:expr, $pool:ident, $body:block) => {
+        match $db {
+            Database::Sqlite($pool) => $body,
+            Database::Postgres($pool) => $body,
+        }
+    };
+}
+
 impl UserProfileRepository {
     pub fn new(db: Database) -> Self {
         Self { db }
@@ -718,6 +731,29 @@ pub enum AffCodeError {
     Storage,
 }
 
+/// Failure categories of `User.TransferAffQuotaToQuota`
+/// (`store_users.go:453-493`).
+///
+/// Go returns bare `errors.New` texts the HTTP layer renders verbatim
+/// (`邀请额度不足！`) and wraps a genuine transfer error into an i18n message
+/// with the raw error interpolated (`user.transfer_failed`). This port keeps
+/// the two apart so the adapter can reproduce both without echoing storage
+/// detail: [`AffTransferError::Insufficient`] is Go's literal, and
+/// [`AffTransferError::Storage`] maps to the fixed translated string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AffTransferError {
+    /// Go rejects a non-positive amount in the shell with
+    /// "转账数额必须大于 0"; this variant guards the repository's own
+    /// invariant for direct callers.
+    InvalidAmount,
+    /// Go's `GetUserById(row, true)` read found no active user row.
+    NotFound,
+    /// Go `errors.New("邀请额度不足！")` from the in-transaction re-check.
+    Insufficient,
+    /// Transaction begin/commit or statement execution failed.
+    Storage,
+}
+
 /// Go `common.GetRandomString(4)` for affiliate codes.
 pub fn generate_aff_code() -> String {
     use rand::Rng;
@@ -791,6 +827,64 @@ impl UserProfileRepository {
                 .rows_affected(),
         };
         Ok(affected)
+    }
+
+    /// Go `User.TransferAffQuotaToQuota` (`store_users.go:453-493`): move
+    /// affiliate reward quota into spendable quota.
+    ///
+    /// Go locks the row with `LockForUpdate` and then re-checks `AffQuota`
+    /// inside the transaction. The single conditional `UPDATE` below carries
+    /// the same guard: `aff_quota >= $1` is evaluated against the row as the
+    /// write takes it, so a concurrent transfer can only leave this one with
+    /// zero rows affected rather than letting both draw on the same balance.
+    /// `FOR UPDATE` is still requested on PostgreSQL to keep the lock
+    /// ordering Go uses; the soft-delete scope mirrors GORM's default.
+    pub async fn transfer_aff_quota(
+        &self,
+        user_id: i64,
+        amount: i64,
+    ) -> Result<(), AffTransferError> {
+        if amount <= 0 {
+            return Err(AffTransferError::InvalidAmount);
+        }
+        backend!(&self.db, pool, {
+            let mut tx = pool.begin().await.map_err(|_| AffTransferError::Storage)?;
+            // Go reads the row before comparing balances, so a missing user is
+            // a distinct outcome from an empty wallet.
+            let lock = if matches!(&self.db, Database::Postgres(_)) {
+                " FOR UPDATE"
+            } else {
+                ""
+            };
+            let mut select = sqlx::QueryBuilder::new("SELECT 1 FROM users WHERE id=");
+            select.push_bind(user_id);
+            select.push(" AND deleted_at IS NULL");
+            select.push(lock);
+            let exists = select
+                .build()
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|_| AffTransferError::Storage)?
+                .is_some();
+            if !exists {
+                tx.rollback().await.ok();
+                return Err(AffTransferError::NotFound);
+            }
+            let updated = sqlx::query(
+                "UPDATE users SET aff_quota = aff_quota - $1, quota = quota + $1 \
+                 WHERE id = $2 AND aff_quota >= $1",
+            )
+            .bind(amount)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| AffTransferError::Storage)?;
+            if updated.rows_affected() != 1 {
+                tx.rollback().await.ok();
+                return Err(AffTransferError::Insufficient);
+            }
+            tx.commit().await.map_err(|_| AffTransferError::Storage)
+        })
     }
 }
 

@@ -293,3 +293,298 @@ async fn postgres_aff_routes_contract() {
     .expect("drop isolated schema");
     admin.close().await;
 }
+
+// ---------------------------------------------------------------------------
+// POST /api/user/aff_transfer — Go `identity.TransferAffQuota`
+// ---------------------------------------------------------------------------
+
+const OPTIONS: &str = r#"CREATE TABLE options (
+    "key" TEXT PRIMARY KEY,
+    value TEXT
+)"#;
+
+fn transfer_router(state: AppState) -> Router {
+    Router::new()
+        .route(
+            "/api/user/aff_transfer",
+            axum::routing::post(aff_http::transfer_aff_quota),
+        )
+        .route_layer(middleware::from_fn_with_state(state.clone(), user_auth))
+        .with_state(state)
+}
+
+async fn seed_transfer_user(db: &Database, id: i64, token: &str, aff_quota: i64, quota: i64) {
+    backend!(db, pool, {
+        sqlx::query(
+            r#"INSERT INTO users
+                (id,username,display_name,role,status,"group",auth_version,
+                 access_token,aff_code,aff_quota,quota)
+                VALUES ($1,'transfer','Transfer',1,1,'default',1,$2,
+                        'Xf99',$3,$4)"#,
+        )
+        .bind(id)
+        .bind(token)
+        .bind(aff_quota)
+        .bind(quota)
+        .execute(pool)
+        .await
+        .expect("seed transfer user");
+    });
+}
+
+async fn seed_option(db: &Database, key: &str, value: &str) {
+    backend!(db, pool, {
+        sqlx::query(r#"INSERT INTO options ("key", value) VALUES ($1,$2)"#)
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await
+            .expect("seed option");
+    });
+}
+
+async fn stored_quota(db: &Database, id: i64) -> (i64, i64) {
+    backend!(db, pool, {
+        sqlx::query_as::<_, (i64, i64)>("SELECT aff_quota, quota FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("stored balances")
+    })
+}
+
+async fn send_transfer(
+    state: &AppState,
+    authorization: Option<&str>,
+    body: &'static str,
+) -> Response {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/api/user/aff_transfer")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT_LANGUAGE, "zh-CN");
+    if let Some(value) = authorization {
+        builder = builder.header(header::AUTHORIZATION, value);
+    }
+    transfer_router(state.clone())
+        .oneshot(builder.body(Body::from(body.to_owned())).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn run_transfer_contract(db: Database) {
+    exec(&db, USERS).await;
+    exec(&db, OPTIONS).await;
+    let app = state(&db);
+
+    // ---- the compliance gate precedes every other branch ----------------
+    // Go's `RequirePaymentComplianceMiddleware` runs before the handler, so an
+    // unconfirmed site never reaches the transfer — and never even binds the
+    // body.
+    seed_option(&db, "payment_setting.compliance_confirmed", "false").await;
+    seed_transfer_user(&db, 1, "pat-1", 2_000_000, 0).await;
+    let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":500000}"#).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await,
+        json!({
+            "success": false,
+            "message": "支付、兑换码、订阅计划和邀请返利功能已禁用。管理员需先确认合规声明后方可启用。",
+        }),
+        "compliance gate uses Go's i18n literal and carries no data"
+    );
+    assert_eq!(
+        stored_quota(&db, 1).await,
+        (2_000_000, 0),
+        "a rejected gate must not move any balance"
+    );
+
+    // Confirmed site: the transfer now runs.
+    seed_option(&db, "payment_setting.compliance_confirmed", "true").await;
+
+    // ---- quota: the raw internal amount moves across --------------------
+    seed_option(&db, "general_setting.custom_currency_exchange_rate", "1").await;
+    let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":500000}"#).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await,
+        // Go `CtxApiSuccessI18n(c, MsgUserTransferSuccess, nil)`.
+        json!({"success": true, "message": "划转成功", "data": null}),
+    );
+    assert_eq!(stored_quota(&db, 1).await, (1_500_000, 500_000));
+
+    // ---- quota_display beats quota, and converts through QuotaPerUnit ----
+    // 1 USD with the 500000 default unit is exactly 500000 internal.
+    let response = send_transfer(
+        &app,
+        Some("Bearer pat-1"),
+        r#"{"quota":1,"quota_display":1.0}"#,
+    )
+    .await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": true, "message": "划转成功", "data": null}),
+    );
+    assert_eq!(
+        stored_quota(&db, 1).await,
+        (1_000_000, 1_000_000),
+        "quota_display=1.0 wins over quota=1 and converts by QuotaPerUnit"
+    );
+
+    // A `quota_display` of 0 is absent, so the raw `quota` applies.
+    let response = send_transfer(
+        &app,
+        Some("Bearer pat-1"),
+        r#"{"quota":250000,"quota_display":0}"#,
+    )
+    .await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": true, "message": "划转成功", "data": null}),
+    );
+    assert_eq!(stored_quota(&db, 1).await, (750_000, 1_250_000));
+
+    // ---- non-positive amount ---------------------------------------------
+    // Go's `amount <= 0` branch. A non-finite `quota_display` cannot be
+    // expressed in JSON at all — serde binds the zero value, which lands in
+    // the same branch — so only the negative shape needs asserting here.
+    let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":-5}"#).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": "转账数额必须大于 0"}),
+    );
+    // A non-JSON content type keeps the zero value (Go `UnmarshalBodyReusable`).
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/api/user/aff_transfer")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .header(header::AUTHORIZATION, "Bearer pat-1")
+        .header(header::ACCEPT_LANGUAGE, "zh-CN");
+    let response = transfer_router(app.clone())
+        .oneshot(builder.body(Body::from("anything")).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": "转账数额必须大于 0"}),
+    );
+    assert_eq!(stored_quota(&db, 1).await, (750_000, 1_250_000));
+
+    // ---- one-unit minimum ------------------------------------------------
+    // 499_999 internal quota is below `QuotaPerUnit` (500_000), and
+    // `{{.Min}}` is Go's `LogQuota(QuotaFromFloat(500000))` — the
+    // currency-wrapped display string, not a bare number.
+    let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":499999}"#).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({
+            "success": false,
+            "message": "转移额度最小为＄1.000000 额度！",
+        }),
+    );
+
+    // ---- insufficient affiliate balance ---------------------------------
+    let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":999999}"#).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": "邀请额度不足！"}),
+    );
+    assert_eq!(
+        stored_quota(&db, 1).await,
+        (750_000, 1_250_000),
+        "a failed transfer must not move any balance"
+    );
+
+    // ---- drained wallet goes through the same path -----------------------
+    let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":750000}"#).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": true, "message": "划转成功", "data": null}),
+    );
+    assert_eq!(stored_quota(&db, 1).await, (0, 2_000_000));
+    // Now the wallet is empty, so the same request hits the insufficient branch.
+    let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":500000}"#).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": "邀请额度不足！"}),
+    );
+
+    // ---- a soft-deleted user is a missing user --------------------------
+    seed_transfer_user(&db, 2, "pat-deleted", 1_000_000, 0).await;
+    soft_delete(&db, 2).await;
+    let response = send_transfer(&app, Some("Bearer pat-deleted"), r#"{"quota":500000}"#).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": "用户不存在"}),
+    );
+
+    // ---- authentication -------------------------------------------------
+    let response = send_transfer(&app, None, r#"{"quota":500000}"#).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = send_transfer(&app, Some("Bearer not-a-token"), r#"{"quota":500000}"#).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn sqlite_aff_transfer_contract() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite fixture");
+    run_transfer_contract(Database::Sqlite(pool)).await;
+}
+
+#[tokio::test]
+async fn postgres_aff_transfer_contract() {
+    let Ok(dsn) = std::env::var("TEST_POSTGRES_DSN") else {
+        return;
+    };
+    let options: PgConnectOptions = dsn
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid PostgreSQL fixture config"));
+    let options = options.disable_statement_logging();
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .expect("connect PostgreSQL fixture");
+    let schema = format!(
+        "aff_transfer_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    assert!(
+        schema
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA \"{schema}\"")))
+        .execute(&admin)
+        .await
+        .expect("create isolated schema");
+    let search_path = schema.clone();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(move |connection, _| {
+            let path = search_path.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(path)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await
+        .expect("connect isolated PostgreSQL pool");
+    run_transfer_contract(Database::Postgres(pool)).await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA \"{schema}\" CASCADE"
+    )))
+    .execute(&admin)
+    .await
+    .expect("drop isolated schema");
+    admin.close().await;
+}

@@ -102,14 +102,15 @@ pub fn status_body(state: &AppState) -> Value {
         QuotaDisplayKind::Tokens => ("TOKENS", false),
     };
     // 快照保真度：`QuotaDisplaySettings` 只在 CNY kind 携带 usd 汇率、只在
-    // CUSTOM kind 携带自定义汇率；其余 kind 对应的原始 option 值不在快照视图内，
-    // 输出 Go 默认值而不是猜测（P4：暴露原始 QuotaDisplay 后可全类型取真实值）。
+    // CUSTOM kind 携带自定义汇率与货币符号；其余 kind 对应的原始 option 值不在
+    // 快照视图内，输出 Go 默认值而不是猜测（P4：暴露原始 QuotaDisplay 后可全类型
+    // 取真实值）。
     let usd_exchange_rate = match display.kind {
         QuotaDisplayKind::Cny { usd_exchange_rate } => usd_exchange_rate,
         _ => DEFAULT_USD_EXCHANGE_RATE,
     };
     let custom_currency_exchange_rate = match display.kind {
-        QuotaDisplayKind::Custom { rate } => rate,
+        QuotaDisplayKind::Custom { rate, .. } => rate,
         _ => DEFAULT_CUSTOM_CURRENCY_EXCHANGE_RATE,
     };
 

@@ -94,12 +94,18 @@ impl QuotaDisplaySettings {
     /// the display amount, and an empty custom symbol falls back to "¤".
     pub fn format_quota(self, quota: i64, with_unit_suffix: bool) -> String {
         let suffix = if with_unit_suffix { " 额度" } else { "" };
+        // `to_display` consumes `self`, so keep the kind for the format branch.
+        let kind = self.kind.clone();
         let amount = self.to_display(quota);
-        match self.kind {
+        match kind {
             QuotaDisplayKind::Usd => format!("＄{amount:.6}{suffix}"),
             QuotaDisplayKind::Cny { .. } => format!("¥{amount:.6}{suffix}"),
             QuotaDisplayKind::Custom { symbol, .. } => {
-                let symbol = if symbol.is_empty() { "¤" } else { symbol.as_str() };
+                let symbol = if symbol.is_empty() {
+                    "¤"
+                } else {
+                    symbol.as_str()
+                };
                 format!("{symbol}{amount:.6}{suffix}")
             }
             QuotaDisplayKind::Tokens => {

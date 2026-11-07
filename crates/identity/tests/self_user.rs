@@ -154,9 +154,27 @@ fn quota_display_follows_go_billing_branches() {
             },
             14.6,
         ),
-        (QuotaDisplayKind::Custom { rate: 2.5 }, 5.0),
-        (QuotaDisplayKind::Custom { rate: 0.0 }, 2.0),
-        (QuotaDisplayKind::Custom { rate: -1.0 }, 2.0),
+        (
+            QuotaDisplayKind::Custom {
+                rate: 2.5,
+                symbol: String::new(),
+            },
+            5.0,
+        ),
+        (
+            QuotaDisplayKind::Custom {
+                rate: 0.0,
+                symbol: String::new(),
+            },
+            2.0,
+        ),
+        (
+            QuotaDisplayKind::Custom {
+                rate: -1.0,
+                symbol: String::new(),
+            },
+            2.0,
+        ),
         (QuotaDisplayKind::Tokens, 1_000_000.0),
     ];
     for (kind, expected) in cases {
@@ -166,6 +184,47 @@ fn quota_display_follows_go_billing_branches() {
         };
         assert!((settings.to_display(quota) - expected).abs() < 1e-9);
     }
+}
+
+#[test]
+fn format_quota_matches_gos_formatquota_hook() {
+    let usd = QuotaDisplaySettings {
+        quota_per_unit: 500_000.0,
+        kind: QuotaDisplayKind::Usd,
+    };
+    // Go `fmt.Sprintf("＄%.6f%s", amount, suffix)`; 1_000_000 / 500_000 = 2.
+    assert_eq!(usd.format_quota(1_000_000, true), "＄2.000000 额度");
+    assert_eq!(usd.format_quota(1_000_000, false), "＄2.000000");
+
+    let cny = QuotaDisplaySettings {
+        quota_per_unit: 500_000.0,
+        kind: QuotaDisplayKind::Cny {
+            usd_exchange_rate: 7.3,
+        },
+    };
+    // 2 USD * 7.3 = 14.6 CNY.
+    assert_eq!(cny.format_quota(1_000_000, true), "¥14.600000 额度");
+
+    let custom = |symbol: &str| QuotaDisplaySettings {
+        quota_per_unit: 500_000.0,
+        kind: QuotaDisplayKind::Custom {
+            rate: 2.5,
+            symbol: symbol.to_owned(),
+        },
+    };
+    assert_eq!(custom("¤").format_quota(1_000_000, true), "¤5.000000 额度");
+    assert_eq!(custom("€").format_quota(1_000_000, false), "€5.000000");
+    // Go's `symbol == ""` fallback, which keeps an empty option row printable.
+    assert_eq!(custom("").format_quota(1_000_000, true), "¤5.000000 额度");
+
+    // The TOKENS branch prints the raw internal quota with "%d", never the
+    // display amount, and suffixes "点额度" rather than " 额度".
+    let tokens = QuotaDisplaySettings {
+        quota_per_unit: 500_000.0,
+        kind: QuotaDisplayKind::Tokens,
+    };
+    assert_eq!(tokens.format_quota(1_000_000, true), "1000000 点额度");
+    assert_eq!(tokens.format_quota(1_000_000, false), "1000000");
 }
 
 #[test]
@@ -187,11 +246,17 @@ fn non_finite_quota_displays_fail_serialization_instead_of_becoming_null() {
         },
         QuotaDisplaySettings {
             quota_per_unit: 500_000.0,
-            kind: QuotaDisplayKind::Custom { rate: f64::NAN },
+            kind: QuotaDisplayKind::Custom {
+                rate: f64::NAN,
+                symbol: String::new(),
+            },
         },
         QuotaDisplaySettings {
             quota_per_unit: 1.0,
-            kind: QuotaDisplayKind::Custom { rate: f64::MAX },
+            kind: QuotaDisplayKind::Custom {
+                rate: f64::MAX,
+                symbol: String::new(),
+            },
         },
     ];
     for display in cases {
