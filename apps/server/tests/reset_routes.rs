@@ -42,6 +42,14 @@ use tower::ServiceExt;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+/// `password_reset` 的验证码存在**进程内**全局 map 里（`registration.rs`
+/// 的 `verification_map`），而同一测试二进制里的 `#[tokio::test]` 是并行跑的。
+/// SQLite 与 PostgreSQL 两份 fixture 若都用 `resetme@example.com` 注册同一个
+/// token，两条用例会互相 `delete`/重读对方的一次性 code：一条先重置成功
+/// 删掉 key，另一条随之把"已删除"误判成自己的成功路径。串行化后每条用例
+/// 独享该 map，且与 Go 无关——Go 侧同一进程同样只有一个 map。
+static CONTRACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 const SECRET: &str = "reset-routes-fixture-secret";
 
 /// 32-char dashless-hex token, matching Go `GenerateVerificationCode(0)`.
@@ -366,6 +374,9 @@ async fn run_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_reset_routes_contract() {
+    let _guard = CONTRACT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -378,6 +389,9 @@ async fn sqlite_reset_routes_contract() {
 
 #[tokio::test]
 async fn postgres_reset_routes_contract() {
+    let _guard = CONTRACT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let Ok(dsn) = std::env::var("TEST_POSTGRES_DSN") else {
         return;
     };
