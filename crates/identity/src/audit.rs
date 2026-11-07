@@ -1,4 +1,6 @@
-//! 登录成功审计日志（Go `usage.RecordLoginLog`，`type = LogTypeLogin = 7`）。
+//! 登录成功审计日志（Go `usage.RecordLoginLog`，`type = LogTypeLogin = 7`）
+//! 与管理/高危操作审计（Go `usage.RecordOperationAuditLog`，
+//! `type = LogTypeManage = 3`）。
 //!
 //! Go 写库失败只记 SysLog、不影响响应；这里保持同一语义，仓储层不向
 //! handler 传播日志失败。`request_id` 的形状对齐 Go `NewRequestId`：
@@ -9,7 +11,19 @@ use newapi_storage::Database;
 use serde_json::{Map, Value};
 
 const LOG_TYPE_LOGIN: i64 = 7;
+/// Go `usage.LogTypeManage`（`usage/store_log.go:99`）。
+const LOG_TYPE_MANAGE: i64 = 3;
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
+
+/// Go `AuditOperatorInfo` 的操作者身份（`usage/write_audit.go:67-74`），
+/// 写入 `logs.other.admin_info`（普通用户查询日志时被剥离）。
+pub struct AuditOperator<'a> {
+    pub user_id: i64,
+    pub username: &'a str,
+    pub role: i64,
+    /// Go `auditAuthMethod`：PAT 鉴权为 `access_token`，会话为 `session`。
+    pub auth_method: &'a str,
+}
 
 /// Go `ensureLogRequestId`：仅当调用方没有提供时生成。
 pub fn new_request_id(now_nanos: i128) -> String {
@@ -150,6 +164,114 @@ fn error_category(error: &sqlx::Error) -> &'static str {
         _ => "database",
     }
 }
+
+/// Go `auditContentEN`（`usage/write_audit.go:53-64`）：action 的英文兜底
+/// 模板，供导出等非本地化消费者使用；未登记的 action 退回 action 本身。
+fn audit_content_en(action: &str) -> &str {
+    match action {
+        "user.2fa_disable" => "Force-disabled two-factor authentication for the user",
+        _ => action,
+    }
+}
+
+/// 生成 `logs.request_id` 的新值（Go `NewRequestId`）。
+fn fresh_request_id() -> String {
+    new_request_id(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_nanos() as i128)
+            .unwrap_or(0),
+    )
+}
+
+/// Go `RecordOperationAuditLog`（`usage/store_log.go:231-254`）的管理审计
+/// 写入路径：日志归属操作者，`other.op` 承载 `action` + `params`，
+/// `other.admin_info` 承载操作者身份。
+///
+/// Go `RecordManageAuditFor`（`write_audit.go:97-107`）：`params` 仅在
+/// `target_user_id > 0` 且不等于操作者时写入（`buildOpField` 因此省略空的
+/// `params` 键）；content 由 action 模板渲染。`ip` 为解析后的客户端 IP。
+/// 失败仅记 `tracing::warn`，与 Go 的 SysLog 一致——审计失败不改变响应。
+pub async fn record_manage_audit(
+    db: &Database,
+    operator: &AuditOperator<'_>,
+    action: &str,
+    target_user_id: i64,
+    ip: &str,
+    now: i64,
+) {
+    let mut op = Map::new();
+    op.insert("action".to_owned(), Value::String(action.to_owned()));
+    if target_user_id > 0 && target_user_id != operator.user_id {
+        let mut params = Map::new();
+        params.insert("target_user_id".to_owned(), json_i64(target_user_id));
+        op.insert("params".to_owned(), Value::Object(params));
+    }
+    let mut admin_info = Map::new();
+    admin_info.insert("admin_id".to_owned(), json_i64(operator.user_id));
+    admin_info.insert(
+        "admin_username".to_owned(),
+        Value::String(operator.username.to_owned()),
+    );
+    admin_info.insert("admin_role".to_owned(), json_i64(operator.role));
+    admin_info.insert(
+        "auth_method".to_owned(),
+        Value::String(operator.auth_method.to_owned()),
+    );
+    let mut other = Map::new();
+    other.insert("op".to_owned(), Value::Object(op));
+    other.insert("admin_info".to_owned(), Value::Object(admin_info));
+    let other = serde_json::to_string(&Value::Object(other)).unwrap_or_default();
+
+    let content = audit_content_en(action);
+    let request_id = fresh_request_id();
+    let is_stream = false;
+    let result = match db {
+        Database::Sqlite(pool) => sqlx::query(MANAGE_AUDIT_INSERT)
+            .bind(operator.user_id)
+            .bind(now)
+            .bind(LOG_TYPE_MANAGE)
+            .bind(content)
+            .bind(operator.username)
+            .bind(is_stream)
+            .bind(ip)
+            .bind(&request_id)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(MANAGE_AUDIT_INSERT)
+            .bind(operator.user_id)
+            .bind(now)
+            .bind(LOG_TYPE_MANAGE)
+            .bind(content)
+            .bind(operator.username)
+            .bind(is_stream)
+            .bind(ip)
+            .bind(&request_id)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+    };
+    if let Err(error) = result {
+        // 不转述数据库错误文本；管理审计失败不能改变响应。
+        tracing::warn!(
+            event = "manage_audit_failed",
+            category = error_category(&error),
+            "failed to record manage audit log"
+        );
+    }
+}
+
+fn json_i64(value: i64) -> Value {
+    Value::Number(value.into())
+}
+
+const MANAGE_AUDIT_INSERT: &str = "INSERT INTO logs (user_id, created_at, type, content, \
+    username, token_name, model_name, quota, prompt_tokens, completion_tokens, \
+    use_time, is_stream, ip, request_id, other) \
+    VALUES ($1,$2,$3,$4,$5,'','',0,0,0,0,$6,$7,$8,$9)";
 
 #[cfg(test)]
 mod tests {

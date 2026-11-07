@@ -23,6 +23,8 @@ pub const MAX_FAIL_ATTEMPTS: i64 = 5;
 pub const LOCKOUT_SECONDS: i64 = 300;
 /// Go `IncrementFailedAttempts` 的 CAS 重试上限。
 const MAX_UPDATE_RETRIES: u32 = 5;
+/// Go `common.RoleRootUser`（`common/constants.go:194`）。
+pub const ROLE_ROOT_USER: i64 = 100;
 
 /// 固定文案错误；不携带验证码、哈希、密钥或数据库错误文本。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,6 +139,37 @@ impl fmt::Debug for TwoFa {
             .field("last_used_at", &self.last_used_at)
             .finish()
     }
+}
+
+/// Go `GetTwoFAStats` 的响应载荷（`store_twofa.go:400-424`，管理员统计）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TwoFaAdminStats {
+    pub total_users: i64,
+    pub enabled_users: i64,
+    /// Go `fmt.Sprintf("%.1f%%", enabled/total*100)`：字符串且字面带 `%`；
+    /// `total_users == 0` 时 Go 以 0.0 起步，结果为 `"0.0%"`。
+    pub enabled_rate: String,
+}
+
+impl TwoFaAdminStats {
+    pub(super) fn new(total_users: i64, enabled_users: i64) -> Self {
+        let rate = if total_users > 0 {
+            enabled_users as f64 / total_users as f64 * 100.0
+        } else {
+            0.0
+        };
+        Self {
+            total_users,
+            enabled_users,
+            enabled_rate: format!("{rate:.1}%"),
+        }
+    }
+}
+
+/// Go `canManageTargetRole`（`manage_users.go:374-376`）：root 可管理任何角色
+/// （含同级 root）；其他角色只能管理严格更低角色，同级或更高级一律拒绝。
+pub fn can_manage_target_role(operator_role: i64, target_role: i64) -> bool {
+    operator_role == ROLE_ROOT_USER || operator_role > target_role
 }
 
 /// Go `common.BackupCodeCount`。
@@ -442,6 +475,42 @@ impl TwoFaRepository {
                 .fetch_optional(pool)
                 .await
                 .map_err(|_| TwoFaError::Unavailable),
+        }
+    }
+
+    /// Go `GetTwoFAStats`（`store_twofa.go:400-424`）：两个 COUNT 聚合。
+    ///
+    /// `total_users` = `dbx.DB.Model(&User{}).Count`，`enabled_users` =
+    /// `dbx.DB.Model(&TwoFA{}).Where("is_enabled = true").Count`。GORM 会为
+    /// `Model(&User{})` / `Model(&TwoFA{})` 自动附加 `deleted_at IS NULL`
+    /// （软删除排除；`identity/query_users.go:10-17` 明确注释了该谓词来自
+    /// 目标模型的 `gorm.DeletedAt`），因此这里显式书写同一谓词。
+    pub async fn admin_stats(&self) -> Result<TwoFaAdminStats, TwoFaError> {
+        match &self.database {
+            Database::Sqlite(pool) => {
+                let total_users = sqlx::query_scalar::<_, i64>(COUNT_TOTAL_USERS)
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                let enabled_users = sqlx::query_scalar::<_, i64>(COUNT_ENABLED_FACTORS)
+                    .bind(true)
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                Ok(TwoFaAdminStats::new(total_users, enabled_users))
+            }
+            Database::Postgres(pool) => {
+                let total_users = sqlx::query_scalar::<_, i64>(COUNT_TOTAL_USERS)
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                let enabled_users = sqlx::query_scalar::<_, i64>(COUNT_ENABLED_FACTORS)
+                    .bind(true)
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|_| TwoFaError::Unavailable)?;
+                Ok(TwoFaAdminStats::new(total_users, enabled_users))
+            }
         }
     }
 
@@ -1140,6 +1209,16 @@ fn decode_postgres_two_fa(row: sqlx::postgres::PgRow) -> Result<TwoFa, TwoFaErro
 }
 
 const SELECT_USERNAME: &str = "SELECT username FROM users WHERE id = $1 AND deleted_at IS NULL";
+
+// Go `GetTwoFAStats`：`Model(&User{}).Count`（GORM 自动附加软删除谓词）。
+const COUNT_TOTAL_USERS: &str =
+    "SELECT CAST(COUNT(*) AS BIGINT) FROM users WHERE deleted_at IS NULL";
+
+// Go `GetTwoFAStats`：`Model(&TwoFA{}).Where("is_enabled = true").Count`；
+// `two_fas.user_id` 唯一，因此每个启用用户最多计一次。`is_enabled` 只在
+// PostgreSQL 上是布尔类型，与 `COUNT_UNUSED_CODES` 一样用绑定参数区分后端。
+const COUNT_ENABLED_FACTORS: &str = "SELECT CAST(COUNT(*) AS BIGINT) FROM two_fas \
+    WHERE is_enabled = $1 AND deleted_at IS NULL";
 
 const SELECT_ANY_FACTOR_ID: &str = "SELECT id FROM two_fas WHERE user_id = $1 ORDER BY id LIMIT 1";
 

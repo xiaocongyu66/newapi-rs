@@ -167,6 +167,25 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // Admin 2FA 路由：Go `adminRoute`（`register_api.go:204-223`）。`userRoute`
+    // 自身没有组级中间件，因此 admin 链只有 `AdminAuth()`（role >= 10）一道，
+    // 两条路由均无 `DisableCache`、无限流；403/401 的 code 与文案随中间件。
+    let admin_twofa_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/2fa/stats",
+                get(crate::admin_twofa_http::admin_stats),
+            )
+            .route(
+                "/api/user/{id}/2fa",
+                delete(crate::admin_twofa_http::admin_disable),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                admin_twofa_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `PUT /api/user/self`：Go `UserAuth → CriticalRateLimit → DisableCache →
     // handler`（缓存头由 handler 写）；`DELETE /api/user/self` 仅 `UserAuth`。
     let self_put_state = state.clone();
