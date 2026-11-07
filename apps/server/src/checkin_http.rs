@@ -121,7 +121,7 @@ fn month_query(uri: &Uri) -> Option<String> {
     let value = query
         .split('&')
         .filter_map(|pair| pair.split_once('='))
-        .find(|(key, _)| key == "month")
+        .find(|(key, _)| *key == "month")
         .map(|(_, value)| percent_decode(value))?;
     if value.is_empty() { None } else { Some(value) }
 }
