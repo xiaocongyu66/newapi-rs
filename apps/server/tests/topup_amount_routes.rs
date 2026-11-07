@@ -308,8 +308,11 @@ async fn run_contract(db: Database) {
     .await;
 
     // ---- TOKENS display -------------------------------------------------
+    // `quota_display` is a state snapshot refreshed by `reload`, so the option
+    // rows have to exist before the reload that adopts them.
     seed_option(&db, "general_setting.quota_display_type", "TOKENS").await;
     seed_option(&db, "QuotaPerUnit", "500000").await;
+    app.reload(&db).await.expect("reload quota display");
     // 500000 tokens -> 1 USD of input -> 7.30.
     assert_quote(
         post_quote(&router, "/api/user/amount", auth, 500_000).await,
@@ -335,6 +338,9 @@ async fn run_contract(db: Database) {
     )
     .await;
     clear_options(&db).await;
+    app.reload(&db)
+        .await
+        .expect("reload back to the default display");
 
     // ---- auth + body binding --------------------------------------------
     // No credential: the `UserAuth` middleware rejects before the handler.
@@ -429,9 +435,22 @@ async fn postgres_amount_routes_contract() {
     .execute(&admin)
     .await
     .expect("set search_path");
+    // `set_config(..., false)` is local to the session, so every pooled
+    // connection carries its own isolated search_path (as in topup_routes).
+    let search_path = schema.clone();
     let pool = PgPoolOptions::new()
         .max_connections(1)
-        .connect_with(options.options([[("search_path", schema.as_str())]]))
+        .after_connect(move |connection, _| {
+            let path = search_path.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(path)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
         .await
         .expect("connect isolated PostgreSQL schema");
     run_contract(Database::Postgres(pool)).await;

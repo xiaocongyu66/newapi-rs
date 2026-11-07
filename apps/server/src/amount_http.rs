@@ -88,14 +88,7 @@ pub async fn request_amount(
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
     };
-    quote(
-        &state,
-        &headers,
-        auth_user.0.user_id,
-        &request,
-        Kind::Amount,
-    )
-    .await
+    quote(&state, auth_user.0.user_id, &request, Kind::Amount).await
 }
 
 /// `POST /api/user/stripe/amount` → Go
@@ -109,14 +102,7 @@ pub async fn request_stripe_amount(
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
     };
-    quote(
-        &state,
-        &headers,
-        auth_user.0.user_id,
-        &request,
-        Kind::Stripe,
-    )
-    .await
+    quote(&state, auth_user.0.user_id, &request, Kind::Stripe).await
 }
 
 /// `POST /api/user/waffo/amount` → Go `billing.RequestWaffoAmount`.
@@ -129,7 +115,7 @@ pub async fn request_waffo_amount(
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
     };
-    quote(&state, &headers, auth_user.0.user_id, &request, Kind::Waffo).await
+    quote(&state, auth_user.0.user_id, &request, Kind::Waffo).await
 }
 
 /// `POST /api/user/waffo-pancake/amount` → Go
@@ -143,14 +129,7 @@ pub async fn request_waffo_pancake_amount(
     let Ok(request) = bind_amount(&headers, &body) else {
         return quote_error_static(MSG_BAD_REQUEST);
     };
-    quote(
-        &state,
-        &headers,
-        auth_user.0.user_id,
-        &request,
-        Kind::WaffoPancake,
-    )
-    .await
+    quote(&state, auth_user.0.user_id, &request, Kind::WaffoPancake).await
 }
 
 /// The gateway whose quote is being produced.
@@ -220,13 +199,7 @@ fn parses_as_json(headers: &HeaderMap) -> bool {
 }
 
 /// The shared body of all four `Request*Amount` handlers.
-async fn quote(
-    state: &AppState,
-    headers: &HeaderMap,
-    user_id: i64,
-    request: &AmountRequest,
-    kind: Kind,
-) -> Response {
+async fn quote(state: &AppState, user_id: i64, request: &AmountRequest, kind: Kind) -> Response {
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
@@ -278,9 +251,9 @@ async fn quote(
     if kind == Kind::Stripe {
         // Stripe reads the group first (`topup_stripe.go:52`), so the group
         // ratio has to be resolved before the quota product can be formed.
-        let profile = match load_profile(&db, headers, user_id).await {
+        let profile = match load_profile(&db, user_id).await {
             Ok(Some(profile)) => profile,
-            Ok(None) => return lookup_failure(headers),
+            Ok(None) => return lookup_failure(),
             Err(rejection) => return rejection,
         };
         let credited =
@@ -307,9 +280,9 @@ async fn quote(
     // ---- 3. group + wallet capacity --------------------------------------
     // Go `identity.GetUserGroup(id, true)` (and `ReadUserQuota` for the
     // capacity check); a missing row is the group-failure literal.
-    let profile = match load_profile(&db, headers, user_id).await {
+    let profile = match load_profile(&db, user_id).await {
         Ok(Some(profile)) => profile,
-        Ok(None) => return lookup_failure(headers),
+        Ok(None) => return lookup_failure(),
         Err(rejection) => return rejection,
     };
     if let Err(rejection) = check_capacity(credited, profile.quota) {
@@ -322,12 +295,11 @@ async fn quote(
 /// row read supplies both the group and the wallet balance.
 async fn load_profile(
     db: &newapi_storage::Database,
-    headers: &HeaderMap,
     user_id: i64,
 ) -> Result<Option<newapi_identity::users::UserProfile>, Response> {
     match UserProfileRepository::new(db.clone()).by_id(user_id).await {
         Ok(profile) => Ok(profile),
-        Err(error) => Err(database_failure(headers, &error)),
+        Err(error) => Err(database_failure(&error)),
     }
 }
 
@@ -376,7 +348,7 @@ fn finish(
     quote_success(pay_money)
 }
 
-fn lookup_failure(headers: &HeaderMap) -> Response {
+fn lookup_failure() -> Response {
     tracing::warn!(
         event = "amount_quote_user_lookup_failed",
         "amount quote user lookup failed"
@@ -384,7 +356,7 @@ fn lookup_failure(headers: &HeaderMap) -> Response {
     quote_error_static(MSG_GROUP_FAILED)
 }
 
-fn database_failure(headers: &HeaderMap, error: &sqlx::Error) -> Response {
+fn database_failure(error: &sqlx::Error) -> Response {
     tracing::warn!(
         event = "amount_quote_database_operation_failed",
         category = crate::database_error_class(error),
