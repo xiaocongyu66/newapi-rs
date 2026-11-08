@@ -303,3 +303,14 @@ impl AuthService {
 4. 最小门限的 `quota_per_unit` 取自可配置展示设置（默认 500_000），Go 用 `common.QuotaPerUnit` 常量（仅测试改写）；默认值一致，仅可配置性不同（端口既有设计，非本路由特有）。
 
 本节 SHA/CI 绑定在推送后回填。
+
+### 8.7 2026-11-08 签到契约修复：月份窗口的引擎排序差异与发放余量（远程证据待回填）
+
+`a7a83ec` 的 P1 run（`42483050976`）workspace-tests 369 过 3 败，三败全在 `apps/server/tests/checkin_routes.rs`——此前 `aff_routes` 二进制失败时 cargo 默认不加 `--no-fail-fast`，会在第一个失败二进制处中止后续二进制，签到二进制从未跑到，属于被掩盖的既有失败。两处均为**测试错**，实现与 Go 一致：
+
+1. **`sqlite/postgres_post_checkin_contract`（7877 vs 7777）**：用户 33 由 fixture 播种 `quota=100`（`checkin_routes.rs` 的 `seed_checkin_user(&db, 33, ..., 100)`），此时生效配置 `min_quota == max_quota == 7777`，Go `evaluateDailyCheckin` 在区间相等时直接返回 `min_quota`（`store_checkin.go:111-128`），发放写入 `quota + 7777`（`store_checkin.go:195-198` 的 `Update("quota", gorm.Expr("quota + ?"))`），余量即 100+7777=**7877**——与同用例中用户 32 的 `7_877` 断言同算术。原断言 7777 是漏加种子额度的笔误，已改为 `7_877`；Go 侧没有任何“默认 +100”行为。
+2. **`postgres_checkin_routes_contract`（6 ≠ 0，仅 PG）**：空 `?month=` 时 Go `DefaultQuery` 只在缺键时回退当前月（`do_checkin.go:23`），键在值空时得到空串，拼出 `-01` .. `-31` 区间（`store_checkin.go:252-253`），`GetUserCheckinRecords` 用同区间做 SQL 比较（`store_checkin.go:37-44`）。**比较结果由数据库排序规则裁决**：SQLite 的 BINARY 字节序把 `-`(0x2D) 排在数字前，区间不匹配任何记录；CI 的 Postgres 镜像默认 `LANG=en_US.UTF-8`（glibc），标点在主权重被忽略，等价于去连字符比较，`-01` ≤ `2026-…` ≤ `-31` 成立，播种的六行**全部**命中。Go 生产环境跑在同一 PG 上、发出同一条 SQL，结果同样是六条——不存在端口偏差。`expected_records` 因此带上 `db` 参数按后端分别计算（PG 分支的去连字符比较已对全部用到的月份窗口与 glibc `strcoll` 逐一验证相等），SQLite 侧保持字节序断言。非空月份（当前月、40 天前月、`abc`）在两套排序下结果一致，不受影响。
+
+**引擎差异（已知，须保留）**：签到月份窗口的字符串区间在 SQLite(BINARY) 与 Postgres(glibc, LANG=en_US.UTF-8) 之间不同——同一 SQL、不同排序规则。若未来 CI Postgres 镜像改用 C/ICU 排序规则，`expected_records` 的 PG 分支需同步复核。
+
+本节 SHA/CI 绑定在推送后回填。

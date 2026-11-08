@@ -543,14 +543,17 @@ async fn run_contract(db: Database) {
     // 空 `month=`：Go `DefaultQuery` 只缺键才回退当前月，键在值空时拿到空串，
     // 拼出的 `-01` / `-31` 区间结果完全由数据库排序规则决定（见
     // `expected_records`）：SQLite 一条不匹配，CI 的 Postgres（glibc en_US）
-    // 命中全部 0–3 开头的日期——这里播种的六行全部在内。全时段累计量与
-    // `month=abc` 一样不受窗口影响。
+    // 命中全部 0–3 开头的日期——这里播种的六行全部在内。期望全集因此要把
+    // `merged` 之外的那条 40 天前老行也加回来；SQLite 下多给的行反正一条
+    // 都匹配不上。全时段累计量与 `month=abc` 一样不受窗口影响。
+    let mut empty_month_rows: Vec<(&str, i64)> = merged.clone();
+    empty_month_rows.push((old_date.as_str(), 999));
     assert_stats(
         &db,
         &app,
         "/api/user/checkin?month=",
         auth,
-        &merged,
+        &empty_month_rows,
         "",
         AllTime {
             quota: 9_199,
