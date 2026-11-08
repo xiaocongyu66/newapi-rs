@@ -206,12 +206,14 @@ pub async fn sync_panel(
         Err(error) => return database_error(&headers, &error),
     };
     let default_api = crate::qqbot::HttpQQBotApi;
-    let api: &dyn QQBotApi = match injected {
-        // `Extension<InjectedQQBotApi>` 的两层 `.0` 先解到 `Arc<dyn QQBotApi>`
-        // 再解引用；newtype 没有 `AsRef`/`Deref`，不能直接 `as_ref()`。
-        Some(extension) => &*extension.0.0,
-        None => &default_api,
-    };
+    // 与 `checkin_http` 的 `InjectedVerifier` 同一手法：借 *本地的* `injected`
+    // 绑定（match arm 里的 newtype 是临时量，活不过 arm 的右括号，E0597），
+    // 再经 `&*extension.0` 把 `Arc<dyn QQBotApi>` 解引用成 `&dyn QQBotApi`；
+    // 缺省实现由 `unwrap_or` 的具体形参做一次 unsizing 强制转换。
+    let api: &dyn QQBotApi = injected
+        .as_ref()
+        .map(|extension| &*extension.0)
+        .unwrap_or(&default_api);
     match sync_command_panel(api, &settings.app_id, &settings.app_secret).await {
         Ok(()) => Json(json!({
             "success": true,
