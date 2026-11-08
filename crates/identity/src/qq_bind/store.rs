@@ -236,15 +236,15 @@ impl QQBindingRepository {
         }
         // 步骤 2：解绑冷却（Go `RejectQQBindIfInCooldown`）：`<= 0` 时 Go 在读
         // 记录之前就返回；无记录同样直接放行。
-        if rebind_cooldown_seconds > 0 {
-            if let Some(unbind_at) = self.unbind_at(user_id).await? {
-                let allowed_at = unbind_at.saturating_add(rebind_cooldown_seconds);
-                let now = unix_seconds();
-                if now < allowed_at {
-                    return Err(QQBindCodeError::Cooldown {
-                        remaining_seconds: allowed_at - now,
-                    });
-                }
+        if rebind_cooldown_seconds > 0
+            && let Some(unbind_at) = self.unbind_at(user_id).await?
+        {
+            let allowed_at = unbind_at.saturating_add(rebind_cooldown_seconds);
+            let now = unix_seconds();
+            if now < allowed_at {
+                return Err(QQBindCodeError::Cooldown {
+                    remaining_seconds: allowed_at - now,
+                });
             }
         }
         // 步骤 3：作废该用户此前未使用的验证码。Go 吞掉这个 UPDATE 的错误；

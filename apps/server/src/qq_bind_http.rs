@@ -207,7 +207,9 @@ pub async fn sync_panel(
     };
     let default_api = crate::qqbot::HttpQQBotApi;
     let api: &dyn QQBotApi = match injected {
-        Some(extension) => extension.0.as_ref(),
+        // `Extension<InjectedQQBotApi>` 的两层 `.0` 先解到 `Arc<dyn QQBotApi>`
+        // 再解引用；newtype 没有 `AsRef`/`Deref`，不能直接 `as_ref()`。
+        Some(extension) => &*extension.0.0,
         None => &default_api,
     };
     match sync_command_panel(api, &settings.app_id, &settings.app_secret).await {

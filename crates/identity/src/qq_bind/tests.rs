@@ -60,7 +60,7 @@ fn pool_of(repository: &QQBindingRepository) -> &sqlx::SqlitePool {
 }
 
 async fn seed_binding(repository: &QQBindingRepository, user_id: i64, username: &str) {
-    let pool = pool_of(&repository);
+    let pool = pool_of(repository);
     sqlx::query(
         "INSERT INTO qq_bindings (user_id, open_id, username, created_at) VALUES ($1, $2, $3, $4)",
     )
@@ -74,7 +74,7 @@ async fn seed_binding(repository: &QQBindingRepository, user_id: i64, username: 
 }
 
 async fn seed_unbind_record(repository: &QQBindingRepository, user_id: i64, unbind_at: i64) {
-    let pool = pool_of(&repository);
+    let pool = pool_of(repository);
     sqlx::query(
         "INSERT INTO qq_unbind_records (user_id, unbind_at, created_at) VALUES ($1, $2, $3)",
     )
@@ -87,7 +87,7 @@ async fn seed_unbind_record(repository: &QQBindingRepository, user_id: i64, unbi
 }
 
 async fn all_codes(repository: &QQBindingRepository, user_id: i64) -> Vec<(String, i64, i64)> {
-    let pool = pool_of(&repository);
+    let pool = pool_of(repository);
     sqlx::query_as::<_, (String, i64, i64)>(
         "SELECT code, used, expired_at FROM qq_bind_codes WHERE user_id = $1",
     )
@@ -98,7 +98,7 @@ async fn all_codes(repository: &QQBindingRepository, user_id: i64) -> Vec<(Strin
 }
 
 async fn binding_rows(repository: &QQBindingRepository, user_id: i64) -> i64 {
-    let pool = pool_of(&repository);
+    let pool = pool_of(repository);
     sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM qq_bindings WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(pool)
@@ -107,7 +107,7 @@ async fn binding_rows(repository: &QQBindingRepository, user_id: i64) -> i64 {
 }
 
 async fn unbind_records(repository: &QQBindingRepository, user_id: i64) -> Vec<(i64, i64)> {
-    let pool = pool_of(&repository);
+    let pool = pool_of(repository);
     sqlx::query_as::<_, (i64, i64)>(
         "SELECT unbind_at, created_at FROM qq_unbind_records WHERE user_id = $1",
     )
@@ -131,7 +131,7 @@ fn alphabet_drops_the_ambiguous_characters() {
         assert!(byte.is_ascii_alphanumeric(), "{byte} must be alphanumeric");
     }
     // Go `bindCodeAlphabet` 去掉了 0/O/o 与 1/l/I。
-    for ambiguous in [b'0', b'O', b'o', b'1', b'l', b'I'] {
+    for ambiguous in *b"0Oo1lI" {
         assert!(
             !BIND_CODE_ALPHABET.contains(&ambiguous),
             "{} must not be in the alphabet",
