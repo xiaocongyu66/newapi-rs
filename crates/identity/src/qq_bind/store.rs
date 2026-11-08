@@ -58,6 +58,22 @@ const UPSERT_UNBIND_SQL: &str = "INSERT INTO qq_unbind_records \
      ON CONFLICT (user_id) DO UPDATE SET \
      unbind_at = excluded.unbind_at, created_at = excluded.created_at";
 
+/// `qq_bindings` 行 → [`QQBindingView`] 的列映射；两个驱动的行类型不同，
+/// 必须在各自的 `match` 分支内调用。可空列按 Go 的结构体零值处理。
+macro_rules! decode_binding_view {
+    ($row:expr) => {{
+        let row = $row;
+        QQBindingView {
+            username: row
+                .try_get::<Option<String>, _>("username")?
+                .unwrap_or_default(),
+            bound_at: row
+                .try_get::<Option<i64>, _>("created_at")?
+                .unwrap_or_default(),
+        }
+    }};
+}
+
 /// Go `GetQQBindStatus` 读取的绑定投影（`manage_qqbot.go:357-360`）：
 /// 只有 `qq_username` 与 `bound_at` 两个字段会进响应体。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,29 +196,27 @@ impl QQBindingRepository {
 
     /// Go `GetQQBindingByUserId`：行不存在为 `Ok(None)`，驱动错误为 `Err`。
     /// 可空列按 Go 结构体的零值处理（`username` 空串、`created_at` 0）。
+    /// 行在每个 `match` 分支内就地解码——`SqliteRow` 与 `PgRow` 不同型，
+    /// 不能先合并再解码（与 `checkin` 的 `decode_checkin!` 同一手法）。
     async fn binding_by_user(&self, user_id: i64) -> Result<Option<QQBindingView>, sqlx::Error> {
-        let row = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(BINDING_BY_USER_SQL)
-                    .bind(user_id)
-                    .fetch_optional(pool)
-                    .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(BINDING_BY_USER_SQL)
-                    .bind(user_id)
-                    .fetch_optional(pool)
-                    .await?
-            }
-        };
-        Ok(row.map(|row| QQBindingView {
-            username: row
-                .try_get::<Option<String>, _>("username")?
-                .unwrap_or_default(),
-            bound_at: row
-                .try_get::<Option<i64>, _>("created_at")?
-                .unwrap_or_default(),
-        }))
+        match &self.db {
+            Database::Sqlite(pool) => match sqlx::query(BINDING_BY_USER_SQL)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await?
+            {
+                Some(row) => Ok(Some(decode_binding_view!(row))),
+                None => Ok(None),
+            },
+            Database::Postgres(pool) => match sqlx::query(BINDING_BY_USER_SQL)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await?
+            {
+                Some(row) => Ok(Some(decode_binding_view!(row))),
+                None => Ok(None),
+            },
+        }
     }
 
     /// Go `CreateQQBindCode`（`qq_binding.go:170-221`）。

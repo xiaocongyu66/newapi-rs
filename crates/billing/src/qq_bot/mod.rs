@@ -69,7 +69,7 @@ impl QQBotSettings {
         let rows = load_option_rows(db).await?;
         let mut settings = Self::default();
         for (key, value) in rows {
-            apply_option(&mut settings, key, value);
+            apply_option(&mut settings, key, &value);
         }
         Ok(settings)
     }
