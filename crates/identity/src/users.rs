@@ -447,7 +447,9 @@ impl UserProfileRepository {
         if user_id <= 0 {
             return false;
         }
-        let open_id: Result<Option<String>, sqlx::Error> = match &self.db {
+        // `qq_open_id` 可空，所以行类型是 `Option<String>`，`fetch_optional`
+        // 再包一层「行是否存在」；两层都要摊平才得到 Go 的字符串值。
+        let open_id: Result<Option<Option<String>>, sqlx::Error> = match &self.db {
             Database::Sqlite(pool) => {
                 sqlx::query_scalar::<_, Option<String>>(QQ_OPEN_ID)
                     .bind(user_id)
@@ -462,7 +464,7 @@ impl UserProfileRepository {
             }
         };
         match open_id {
-            Ok(open_id) => open_id.is_some_and(|value| !value.is_empty()),
+            Ok(open_id) => open_id.flatten().is_some_and(|value| !value.is_empty()),
             Err(_) => {
                 // 只说分类，不把驱动错误文本（可能含 SQL/SECRET）写进日志。
                 tracing::warn!(

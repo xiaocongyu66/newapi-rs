@@ -69,7 +69,7 @@ pub struct QuotaDisplaySettings {
 
 impl QuotaDisplaySettings {
     /// 保留 Go 的分支算术；非有限结果在响应序列化时拒绝。
-    pub fn to_display(self, quota: i64) -> f64 {
+    pub fn to_display(&self, quota: i64) -> f64 {
         let value = quota as f64;
         match self.kind {
             QuotaDisplayKind::Usd => value / self.quota_per_unit,
@@ -92,12 +92,10 @@ impl QuotaDisplaySettings {
     /// passes `true` (the " 额度" suffix) and `FormatQuota` passes `false`.
     /// The TOKENS branch prints the raw internal quota with "%d" rather than
     /// the display amount, and an empty custom symbol falls back to "¤".
-    pub fn format_quota(self, quota: i64, with_unit_suffix: bool) -> String {
+    pub fn format_quota(&self, quota: i64, with_unit_suffix: bool) -> String {
         let suffix = if with_unit_suffix { " 额度" } else { "" };
-        // `to_display` consumes `self`, so keep the kind for the format branch.
-        let kind = self.kind.clone();
         let amount = self.to_display(quota);
-        match kind {
+        match &self.kind {
             QuotaDisplayKind::Usd => format!("＄{amount:.6}{suffix}"),
             QuotaDisplayKind::Cny { .. } => format!("¥{amount:.6}{suffix}"),
             QuotaDisplayKind::Custom { symbol, .. } => {

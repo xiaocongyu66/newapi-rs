@@ -400,7 +400,12 @@ impl CheckinRepository {
     }
 
     /// Go `countTodayCheckin`（`store_checkin.go:58-71`）：COUNT 只回 0/1 之有。
-    async fn count_today(&self, user_id: i64, today: &str, sql: &str) -> Result<bool, sqlx::Error> {
+    async fn count_today(
+        &self,
+        user_id: i64,
+        today: &str,
+        sql: &'static str,
+    ) -> Result<bool, sqlx::Error> {
         let count = match &self.db {
             Database::Sqlite(pool) => {
                 sqlx::query_scalar::<_, i64>(sql)

@@ -67,7 +67,7 @@ pub(super) fn apply(
     values: &BTreeMap<&'static str, String>,
     previous: &QuotaDisplay,
 ) -> QuotaDisplay {
-    let mut next = *previous;
+    let mut next = previous.clone();
     if let Some(value) = parse_float(values, QUOTA_PER_UNIT) {
         next.quota_per_unit = value;
     }
