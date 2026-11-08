@@ -353,8 +353,8 @@ fn tz_offset_seconds() -> i64 {
         return minutes.clamp(-720, 840) * 60;
     }
     let offset = match std::env::var("TZ").as_deref().map(str::trim) {
-        Some("Asia/Shanghai" | "Asia/Chongqing" | "Asia/Taipei") => 480,
-        Some("" | "UTC" | "Etc/UTC" | "Universal" | "Zulu") => 0,
+        Ok("Asia/Shanghai" | "Asia/Chongqing" | "Asia/Taipei") => 480,
+        Ok("" | "UTC" | "Etc/UTC" | "Universal" | "Zulu") => 0,
         _ => 480,
     };
     offset * 60
