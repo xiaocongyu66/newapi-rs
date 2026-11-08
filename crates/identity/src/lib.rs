@@ -8,6 +8,7 @@ pub mod crypto;
 pub mod login;
 pub mod password_reset;
 pub mod policy;
+pub mod qq_bind;
 pub mod registration;
 pub mod self_user;
 pub mod session_cache;
