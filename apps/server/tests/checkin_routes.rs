@@ -340,6 +340,26 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
+/// 与生产 `newapi_billing::checkin::datetime` 同一条日界偏移规则（测试独立
+/// 复算，复刻 `tz_offset_minutes`）：`CHECKIN_TZ_OFFSET_MINUTES` 显式优先并
+/// 钳到 ±720/840 分钟，其次按 Go 部署清单登记过的 `TZ` 名取值，其余（含
+/// 缺省）回退 +480 分钟。播种日期与期望月份都必须按这条偏移算：CI 不设这
+/// 两个环境变量，服务端日界即 UTC+8——UTC 16:00 之后服务端“今天”比 UTC 的
+/// “今天”晚一天，用 UTC 播种会让 `checked_in_today` 与整个统计窗口错位。
+fn tz_offset_seconds() -> i64 {
+    if let Ok(raw) = std::env::var("CHECKIN_TZ_OFFSET_MINUTES")
+        && let Ok(minutes) = raw.trim().parse::<i64>()
+    {
+        return minutes.clamp(-720, 840) * 60;
+    }
+    let offset = match std::env::var("TZ").as_deref().map(str::trim) {
+        Some("Asia/Shanghai" | "Asia/Chongqing" | "Asia/Taipei") => 480,
+        Some("" | "UTC" | "Etc/UTC" | "Universal" | "Zulu") => 0,
+        _ => 480,
+    };
+    offset * 60
+}
+
 /// Howard Hinnant 逆运算（测试独立复算，与生产 `checkin::datetime` 同算法）。
 fn date_string(epoch: i64) -> String {
     let days = epoch.div_euclid(86_400);
@@ -458,7 +478,8 @@ async fn run_contract(db: Database) {
     let auth = "Bearer pat-checkin";
     let auth_nine = "Bearer pat-checkin-nine";
     let app = state(&db);
-    let now = now();
+    // 播种与期望都用服务端日界的“现在”：偏移后的 epoch，而非裸 UTC。
+    let now = now() + tz_offset_seconds();
     let today = today();
     let month = month_string(now);
 

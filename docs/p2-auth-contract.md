@@ -313,6 +313,8 @@ impl AuthService {
 
 **引擎差异（已知，须保留）**：签到月份窗口的字符串区间在 SQLite(BINARY) 与 Postgres(glibc, LANG=en_US.UTF-8) 之间不同——同一 SQL、不同排序规则。若未来 CI Postgres 镜像改用 C/ICU 排序规则，`expected_records` 的 PG 分支需同步复核。
 
+**日界时区（测试侧修复）**：服务端“今天/本月”按 Go 部署清单的本地时区（`datetime.rs`：`CHECKIN_TZ_OFFSET_MINUTES` 优先，其次登记过的 `TZ` 名，缺省 +480，即 UTC+8），而测试原先用裸 UTC epoch 播种。两条日界在 UTC 16:00–24:00 相差一天，`checked_in_today` 与整月窗口因此整体错位（实际触发于 16:31Z 的 run `42500288377`）。`run_contract` 现在与服务端同算法复算偏移（`tz_offset_seconds`）后再播种、再算期望月份；`run_post_contract` 本就用服务端 `today()`，未受影响。
+
 本节 SHA/CI 绑定在推送后回填。
 
 ### 8.8 2026-11-08 用户设置解析按 Go 部分采用（实现缺陷）（远程证据待回填）
