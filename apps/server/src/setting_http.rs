@@ -237,11 +237,11 @@ pub async fn update_user_setting(
 /// the stored value survives (`manage_users.go:1457-1461`).
 fn upstream_notify(existing: bool, role: i64, requested: Option<bool>) -> bool {
     if role >= ROLE_ADMIN_USER {
-        if let Some(value) = requested {
-            return value;
-        }
+        // 角色达标但请求没带该字段时，Go 也不改旧值。
+        requested.unwrap_or(existing)
+    } else {
+        existing
     }
-    existing
 }
 
 /// Go assigns a gateway field only inside the branch of the chosen notify
@@ -252,10 +252,10 @@ fn gateway(active: bool, value: String) -> String {
 
 /// Go clamps an out-of-range `GotifyPriority` to 5 instead of failing.
 fn clamp_gotify_priority(priority: i64) -> i64 {
-    if priority < GOTIFY_PRIORITY_MIN || priority > GOTIFY_PRIORITY_MAX {
-        GOTIFY_PRIORITY_FALLBACK
-    } else {
+    if (GOTIFY_PRIORITY_MIN..=GOTIFY_PRIORITY_MAX).contains(&priority) {
         priority
+    } else {
+        GOTIFY_PRIORITY_FALLBACK
     }
 }
 
