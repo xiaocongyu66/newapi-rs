@@ -348,10 +348,16 @@ fn authorization(token: &str) -> String {
     format!("QQBot {token}")
 }
 
-/// Go `json.Unmarshal` 的等价解码：`null` 顶层与缺字段落零值，类型不匹配
-/// 是 Decode 错误。用 `Option<T>` 承接顶层 null。
+/// Go `json.Unmarshal` 的等价解码：**顶层 `null` 与缺字段落零值**，类型不
+/// 匹配才是 Decode 错误。调用点一律把 `T` 写成 `Option<结构体>`：`Some(None)`
+/// 即 Go 的「null 是 no-op」，配合 `unwrap_or_default()` 得到零值结构体；
+/// `decode` 自己返回 `None` 才表示解码失败。
+///
+/// 不能再 `from_str::<Option<T>>().flatten()`：那样顶层 null 会被压平成
+/// `None`，与解码失败不可区分——`CreatePanel` 收到 `null` 体时 Go 返回
+/// 空字符串且无错误（`SyncQQPanel` 因此成功），本端口必须复刻这一点。
 fn decode<T: for<'de> Deserialize<'de>>(body: &str) -> Option<T> {
-    serde_json::from_str::<Option<T>>(body).ok().flatten()
+    serde_json::from_str::<T>(body).ok()
 }
 
 /// Go 按状态集合分流；这里只取状态，读取与分类在调用处。
@@ -513,7 +519,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push(format!("delete:{panel_id}"));
-            let delete = self.delete.clone();
+            let delete = self.delete;
             Box::pin(async move { delete })
         }
 
