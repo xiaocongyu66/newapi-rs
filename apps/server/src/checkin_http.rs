@@ -306,8 +306,9 @@ fn record_data(record: &CheckinRecord, display: &QuotaDisplaySettings) -> Value 
     })
 }
 
-/// Go `c.DefaultQuery("month", ...)`：缺键或空值都回退当前月。其它查询键
-/// 忽略，`month` 不做格式校验（Go 同样原样拼进字符串区间）。
+/// Go `c.DefaultQuery("month", ...)`：缺键才回退当前月；键在值空时 Go 拿到空串，
+/// 原样拼进字符串区间（`month + "-01"` / `month + "-31"`），匹配不到任何记录。
+/// 其它查询键忽略，`month` 不做格式校验（Go 同样不校验）。
 fn month_query(uri: &Uri) -> Option<String> {
     let query = uri.query()?;
     let value = query
@@ -315,7 +316,7 @@ fn month_query(uri: &Uri) -> Option<String> {
         .filter_map(|pair| pair.split_once('='))
         .find(|(key, _)| *key == "month")
         .map(|(_, value)| percent_decode(value))?;
-    if value.is_empty() { None } else { Some(value) }
+    Some(value)
 }
 
 /// Go `url.ParseQuery` 的最小还原：`+` 是空格、`%XX` 解一个字节。

@@ -364,6 +364,20 @@ async fn stored_quota(db: &Database, id: i64) -> (i64, i64) {
     })
 }
 
+/// Restore the affiliate wallet so a later case can drain it with one legal
+/// transfer; without this helper the earlier cases leave it below the
+/// one-unit minimum and only the insufficient branch stays reachable.
+async fn set_aff_quota(db: &Database, id: i64, value: i64) {
+    backend!(db, pool, {
+        sqlx::query("UPDATE users SET aff_quota = $1 WHERE id = $2")
+            .bind(value)
+            .bind(id)
+            .execute(pool)
+            .await
+            .expect("set aff quota");
+    });
+}
+
 async fn send_transfer(
     state: &AppState,
     authorization: Option<&str>,
@@ -447,18 +461,22 @@ async fn run_transfer_contract(db: Database) {
         "quota_display=1.0 wins over quota=1 and converts by QuotaPerUnit"
     );
 
-    // A `quota_display` of 0 is absent, so the raw `quota` applies.
+    // A `quota_display` of 0 is absent, so the raw `quota` applies. The raw
+    // amount must still clear Go's minimum gate (`float64(quota) <
+    // QuotaPerUnit`), which rejects 250_000 exactly like 499_999 below — the
+    // earlier draft treated it as legal and asserted success; 750_000 keeps the
+    // raw-quota path alive while staying above the minimum.
     let response = send_transfer(
         &app,
         Some("Bearer pat-1"),
-        r#"{"quota":250000,"quota_display":0}"#,
+        r#"{"quota":750000,"quota_display":0}"#,
     )
     .await;
     assert_eq!(
         body_json(response).await,
         json!({"success": true, "message": "划转成功", "data": null}),
     );
-    assert_eq!(stored_quota(&db, 1).await, (750_000, 1_250_000));
+    assert_eq!(stored_quota(&db, 1).await, (250_000, 1_750_000));
 
     // ---- non-positive amount ---------------------------------------------
     // Go's `amount <= 0` branch. A non-finite `quota_display` cannot be
@@ -484,7 +502,7 @@ async fn run_transfer_contract(db: Database) {
         body_json(response).await,
         json!({"success": false, "message": "转账数额必须大于 0"}),
     );
-    assert_eq!(stored_quota(&db, 1).await, (750_000, 1_250_000));
+    assert_eq!(stored_quota(&db, 1).await, (250_000, 1_750_000));
 
     // ---- one-unit minimum ------------------------------------------------
     // 499_999 internal quota is below `QuotaPerUnit` (500_000), and
@@ -507,17 +525,20 @@ async fn run_transfer_contract(db: Database) {
     );
     assert_eq!(
         stored_quota(&db, 1).await,
-        (750_000, 1_250_000),
+        (250_000, 1_750_000),
         "a failed transfer must not move any balance"
     );
 
     // ---- drained wallet goes through the same path -----------------------
+    // The raw-quota case above moved 750_000, leaving the wallet below the
+    // one-unit minimum, so restore the balance before draining it here.
+    set_aff_quota(&db, 1, 750_000).await;
     let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":750000}"#).await;
     assert_eq!(
         body_json(response).await,
         json!({"success": true, "message": "划转成功", "data": null}),
     );
-    assert_eq!(stored_quota(&db, 1).await, (0, 2_000_000));
+    assert_eq!(stored_quota(&db, 1).await, (0, 2_500_000));
     // Now the wallet is empty, so the same request hits the insufficient branch.
     let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":500000}"#).await;
     assert_eq!(

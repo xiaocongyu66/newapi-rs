@@ -525,13 +525,15 @@ async fn run_contract(db: Database) {
     )
     .await;
 
-    // 空 `month=` 回退当前月（Go `DefaultQuery` 对空值同样回退）。
+    // 空 `month=`：Go `DefaultQuery` 只缺键才回退当前月，键在值空时拿到空串，
+    // 拼出的 `-01` / `-31` 区间匹配不到任何记录（与下面 `month=abc` 同一条
+    // 路径），records 为空而全时段累计不变。
     assert_stats(
         &app,
         "/api/user/checkin?month=",
         auth,
         &merged,
-        &month,
+        "",
         AllTime {
             quota: 9_199,
             count: 6,
