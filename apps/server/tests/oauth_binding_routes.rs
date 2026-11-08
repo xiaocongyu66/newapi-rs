@@ -825,10 +825,13 @@ async fn run_admin_contract(db: Database) {
         json!("/api/user/abc/oauth/bindings/11"),
         "{first}"
     );
+    // Go `c.Params()` 返回 `map[string]string`（`contract/context.go:67`），
+    // `audit_access.go:133-138` 原样塞进 `audit_info.params`，所以值一律是
+    // JSON 字符串——包括可解析为数字的 `provider_id`。
     assert_eq!(first["audit_info"]["params"]["id"], json!("abc"), "{first}");
     assert_eq!(
         first["audit_info"]["params"]["provider_id"],
-        json!(11),
+        json!("11"),
         "{first}"
     );
     let last = parse_other(&logs[logs.len() - 1].4);
@@ -838,10 +841,10 @@ async fn run_admin_contract(db: Database) {
         json!("/api/user/7/oauth/bindings/13"),
         "{last}"
     );
-    assert_eq!(last["audit_info"]["params"]["id"], json!(7), "{last}");
+    assert_eq!(last["audit_info"]["params"]["id"], json!("7"), "{last}");
     assert_eq!(
         last["audit_info"]["params"]["provider_id"],
-        json!(13),
+        json!("13"),
         "{last}"
     );
 

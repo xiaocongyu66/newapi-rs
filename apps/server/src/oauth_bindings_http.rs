@@ -295,7 +295,10 @@ async fn unbind_flow(
         .delete(user_id, provider_id)
         .await
     {
-        Ok(()) => UnbindOutcome::Unbound,
+        // Go 只把存储错误当失败：GORM `Delete` 忽略 RowsAffected
+        // （`bind_oauth.go:133-136`），零行匹配不报错，解绑一条不存在的
+        // 绑定同样返回 `success`。
+        Ok(_rows) => UnbindOutcome::Unbound,
         Err(error) => {
             tracing::warn!(
                 event = "oauth_admin_unbind_failed",
