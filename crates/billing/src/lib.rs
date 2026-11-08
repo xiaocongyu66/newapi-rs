@@ -6,5 +6,7 @@
 
 pub mod billing_options;
 pub mod checkin;
+mod go_options;
+pub mod qq_bot;
 pub mod quota_display;
 pub mod topup;

@@ -25,6 +25,7 @@ use sqlx::Row;
 
 use super::CheckinSettings;
 use super::datetime::today;
+use crate::go_options::{parse_bool, parse_int};
 
 /// Go `store_checkin.go:26-30` `CheckinRecord` 的原始两列；`quota_awarded_display`
 /// 由 HTTP 适配层换算（billing 不依赖 identity）。
@@ -141,56 +142,37 @@ async fn load_option_rows(db: &Database) -> Result<BTreeMap<&'static str, String
 }
 
 /// Go `updateConfigFromMap` 的 bool / int 分支：解析失败 `continue`，即**保留
-/// 当前值**（初次加载即 [`CheckinSettings::default`]）。
+/// 当前值**（初次加载即 [`CheckinSettings::default`]）。两个解析器与
+/// [`crate::go_options`] 共用，QQ 机器人分片走同一套应用语义。
 pub(super) fn apply_option(settings: &mut CheckinSettings, key: &str, value: &str) {
     match key {
         KEY_ENABLED => {
-            if let Some(parsed) = parse_go_bool(value) {
+            if let Some(parsed) = parse_bool(value) {
                 settings.enabled = parsed;
             }
         }
         KEY_SINGLE_PLATFORM_ONLY => {
-            if let Some(parsed) = parse_go_bool(value) {
+            if let Some(parsed) = parse_bool(value) {
                 settings.single_platform_only = parsed;
             }
         }
         KEY_REQUIRE_QQ_BOUND => {
-            if let Some(parsed) = parse_go_bool(value) {
+            if let Some(parsed) = parse_bool(value) {
                 settings.require_qq_bound = parsed;
             }
         }
         KEY_MIN_QUOTA => {
-            if let Some(parsed) = parse_go_int(value) {
+            if let Some(parsed) = parse_int(value) {
                 settings.min_quota = parsed;
             }
         }
         KEY_MAX_QUOTA => {
-            if let Some(parsed) = parse_go_int(value) {
+            if let Some(parsed) = parse_int(value) {
                 settings.max_quota = parsed;
             }
         }
         _ => {}
     }
-}
-
-/// Go `strconv.ParseBool` 的接受集合；集合外一律视为解析失败。
-fn parse_go_bool(value: &str) -> Option<bool> {
-    match value {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Some(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Some(false),
-        _ => None,
-    }
-}
-
-/// Go `strconv.ParseInt(v, 10, 64)`，失败退回 `strconv.ParseFloat` 再截断
-/// （`config.go:210-220`）；两者都失败保留当前值。非有限的浮点文本（`NaN`/
-/// `Inf`）Go 的 `int64(float64)` 是未定义转换，这里按 Rust `as` 的饱和语义
-/// （NaN → 0），真实配置行不会出现。
-fn parse_go_int(value: &str) -> Option<i64> {
-    value
-        .parse::<i64>()
-        .ok()
-        .or_else(|| value.parse::<f64>().ok().map(|float| float as i64))
 }
 
 macro_rules! decode_checkin {
