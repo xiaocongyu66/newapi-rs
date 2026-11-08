@@ -353,11 +353,22 @@ fn authorization(token: &str) -> String {
 /// 即 Go 的「null 是 no-op」，配合 `unwrap_or_default()` 得到零值结构体；
 /// `decode` 自己返回 `None` 才表示解码失败。
 ///
-/// 不能再 `from_str::<Option<T>>().flatten()`：那样顶层 null 会被压平成
-/// `None`，与解码失败不可区分——`CreatePanel` 收到 `null` 体时 Go 返回
-/// 空字符串且无错误（`SyncQQPanel` 因此成功），本端口必须复刻这一点。
+/// 两点与 serde_json 的默认行为必须脱钩：
+/// - `from_str::<Option<T>>().flatten()` 会把顶层 null 压平成 `None`，与解码
+///   失败不可区分——`CreatePanel` 收到 `null` 体时 Go 返回空字符串且无错误
+///   （`SyncQQPanel` 因此成功），本端口必须复刻这一点；
+/// - serde_json 的 `deserialize_struct` 对顶层 `[` 走 struct-from-seq 回退，
+///   配合字段上的 `#[serde(default)]` 会把 `[]` 当缺字段填而解码成功，而 Go
+///   报 `cannot unmarshal array into Go value of type struct`。先按 `Value`
+///   判形状（对象或 null），再交给具体类型校验字段。
 fn decode<T: for<'de> Deserialize<'de>>(body: &str) -> Option<T> {
-    serde_json::from_str::<T>(body).ok()
+    let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    match value {
+        serde_json::Value::Null | serde_json::Value::Object(_) => {
+            serde_json::from_value::<T>(value).ok()
+        }
+        _ => None,
+    }
 }
 
 /// Go 按状态集合分流；这里只取状态，读取与分类在调用处。
