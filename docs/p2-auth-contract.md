@@ -302,7 +302,7 @@ impl AuthService {
 3. `UserCriticalRateLimit("aff-transfer")` 用户维度限流未移植（仅 CT 关键路径限流）；compliance 门为 handler 内联实现（`TopUpSettings::payment_compliance_confirmed` 二段门 `confirmed && terms_version == "v1"`，对齐 Go `IsPaymentComplianceConfirmed`）。
 4. 最小门限的 `quota_per_unit` 取自可配置展示设置（默认 500_000），Go 用 `common.QuotaPerUnit` 常量（仅测试改写）；默认值一致，仅可配置性不同（端口既有设计，非本路由特有）。
 
-本节 SHA/CI 绑定在推送后回填。
+8.6 的修复随 `a7a83ec` 推送；该提交的 P1 run `42483050976` 因其它被掩盖的签到失败未绿，本节记录的 aff_transfer 四个用例在该 run 全部通过（aff_routes 二进制 4/4），最终由 `ba7554c` 的 run `42506448654`（attempt 1，conclusion `success`）整体验证：pg14/pg17 各 454 项 workspace 测试全部通过，fmt/check/clippy exit 0。
 
 ### 8.7 2026-11-08 签到契约修复：月份窗口的引擎排序差异与发放余量（远程证据待回填）
 
@@ -315,10 +315,10 @@ impl AuthService {
 
 **日界时区（测试侧修复）**：服务端“今天/本月”按 Go 部署清单的本地时区（`datetime.rs`：`CHECKIN_TZ_OFFSET_MINUTES` 优先，其次登记过的 `TZ` 名，缺省 +480，即 UTC+8），而测试原先用裸 UTC epoch 播种。两条日界在 UTC 16:00–24:00 相差一天，`checked_in_today` 与整月窗口因此整体错位（实际触发于 16:31Z 的 run `42500288377`）。`run_contract` 现在与服务端同算法复算偏移（`tz_offset_seconds`）后再播种、再算期望月份；`run_post_contract` 本就用服务端 `today()`，未受影响。
 
-本节 SHA/CI 绑定在推送后回填。
+8.7 的修复分三步推送：`51569be`（发放余量 7877 与 PG 排序分支）、`3c02ab1`（空月份期望全集补老行）、`f9d15c9`+`7d5c34b`（日界偏移播种）。全部包含在 `ba7554c` 的 run `42506448654`（success）中验证：pg14/pg17 各 454 项全过，`checkin_routes` 四用例与 `setting_routes`/`topup_amount_routes` 双后端全绿。
 
 ### 8.8 2026-11-08 用户设置解析按 Go 部分采用（实现缺陷）（远程证据待回填）
 
 `UserSetting::from_json`（`crates/identity/src/users.rs`）此前用 serde 的全有或无语义：任何字段类型不匹配就整体回退到零值设置，注释称“不部分采用”。这与 Go 不符：Go `User.GetSetting`（`store_users.go:165-174`）忽略 `json.Unmarshal` 的错误返回部分解码结果，而 `encoding/json` 对字段类型不匹配的规定是“跳过该字段、尽可能解码其余字段、结尾才报告 `UnmarshalTypeError`”。真实影响：`PUT /api/user/setting` 与 `PUT /api/user/self` 对已存 `sidebar_modules` 为对象（前端写入形态）的用户，会把 `upstream_model_update_notify_enabled` 等其余字段静默清零——普通角色因此无法保留管理员专属开关（`manage_users.go:1457-1461` 的 carry-over），`PUT /api/user/self` 的读-改-写会整体抹掉其它设置。已改为按字段单独解码，类型不匹配的字段留零值、其余照常采用；`null` 与缺键仍为零值，JSON 非对象仍整体为零值。测试侧 `setting_routes.rs` 的“普通角色发 false 仍保留 stored true”用例（Go 依据同上）随之通过。
 
-本节 SHA/CI 绑定在推送后回填。
+8.8 的修复随 `52ab874` 推送，因签到日界 flake（`f9d15c9` 修复）前未单独绿；最终由 `ba7554c` 的 run `42506448654`（success）验证：pg14/pg17 各 454 项全过，`setting_routes.rs` 的普通角色保留管理员开关用例双后端通过。
