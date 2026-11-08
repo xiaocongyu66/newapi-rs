@@ -257,11 +257,13 @@ async fn seed_unbind_record(db: &Database, user_id: i64, unbind_at: i64) {
 }
 
 /// `CAST(used AS INTEGER)`：SQLite 的 INTEGER 与 PostgreSQL 的 BOOLEAN 读成
-/// 同一个整数（0/1），省一套方言分支。
+/// 同一个整数（0/1），省一套方言分支。`expired_at` 同步 CAST 到 BIGINT：
+/// Go 的 qq_bind_codes 建表用 INTEGER（INT4），PG 驱动按列类型解码 i64
+/// 会报 INT4/INT8 不兼容（与 aff 余额断言同一类提升）。
 async fn code_rows(db: &Database, user_id: i64) -> Vec<(String, i64, i64)> {
     backend!(db, pool, {
         sqlx::query_as::<_, (String, i64, i64)>(
-            "SELECT code, CAST(used AS INTEGER), expired_at \
+            "SELECT code, CAST(used AS INTEGER), CAST(expired_at AS BIGINT) \
              FROM qq_bind_codes WHERE user_id = $1",
         )
         .bind(user_id)
