@@ -203,6 +203,45 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::admin_auth,
             )),
     );
+    // OAuth 绑定的 self 路由：Go `selfRoute`（`register_api.go:200-201`），组内
+    // 纯 `UserAuth`，无限流、无 `DisableCache`。`UserAuth` 的 minRole 低于
+    // `RoleAdminUser`，Go 的 `beginAdminAudit` 不开捕获，因此这两条不写审计。
+    let oauth_bindings_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/oauth/bindings",
+                get(crate::oauth_bindings_http::user_bindings),
+            )
+            .route(
+                "/api/user/oauth/bindings/{provider_id}",
+                delete(crate::oauth_bindings_http::unbind),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                oauth_bindings_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // OAuth 绑定的 admin 路由：Go `adminRoute`（`register_api.go:211-212`），
+    // 同样只有 `AdminAuth()` 一道。admin DELETE 的审计由 Go 的
+    // `finishAdminAudit` 兜底（handler 未手动埋点），本端口内联进
+    // `oauth_bindings_http::admin_unbind`，写方法与业务成败无关都落库。
+    let admin_oauth_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/{id}/oauth/bindings",
+                get(crate::oauth_bindings_http::admin_user_bindings),
+            )
+            .route(
+                "/api/user/{id}/oauth/bindings/{provider_id}",
+                delete(crate::oauth_bindings_http::admin_unbind),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                admin_oauth_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `PUT /api/user/self`：Go `UserAuth → CriticalRateLimit → DisableCache →
     // handler`（缓存头由 handler 写）；`DELETE /api/user/self` 仅 `UserAuth`。
     let self_put_state = state.clone();
