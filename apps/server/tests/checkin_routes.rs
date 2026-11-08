@@ -370,14 +370,27 @@ fn display(quota: i64) -> f64 {
 }
 
 /// Go 的月份窗口：`month + "-01"` 到 `month + "-31"` 的字符串区间，与实际
-/// 月份天数无关（字典序对所有合法日期成立）。
-fn expected_records(rows: &[(&str, i64)], month: &str) -> Vec<(String, i64)> {
+/// 月份天数无关。区间由**数据库的**排序规则裁决：SQLite 用 BINARY 字节序（`-`
+/// 排在数字前），CI 的 Postgres 集群随镜像默认 `LANG=en_US.UTF-8` 初始化为
+/// glibc 规则，标点在主权重被忽略——对这些 ASCII 日期串等价于去掉连字符再
+/// 比较。Go 构造的是同一条 SQL，在同一数据库上得到同一批行，端口无须针对
+/// 排序规则做任何事；期望随后端走。
+fn expected_records(db: &Database, rows: &[(&str, i64)], month: &str) -> Vec<(String, i64)> {
     let start = format!("{month}-01");
     let end = format!("{month}-31");
+    let postgres = matches!(db, Database::Postgres(_));
+    let in_range = |date: &str| {
+        if postgres {
+            let date = date.replace('-', "");
+            date >= start.replace('-', "") && date <= end.replace('-', "")
+        } else {
+            date >= start.as_str() && date <= end.as_str()
+        }
+    };
     let mut selected: Vec<(String, i64)> = rows
         .iter()
         .map(|(date, quota)| ((*date).to_owned(), *quota))
-        .filter(|(date, _)| date.as_str() >= start.as_str() && date.as_str() <= end.as_str())
+        .filter(|(date, _)| in_range(date))
         .collect();
     // Go `sort.Slice` 按 checkin_date 降序（字符串比较）。
     selected.sort_by(|left, right| right.0.cmp(&left.0));
@@ -394,6 +407,7 @@ struct AllTime {
 }
 
 async fn assert_stats(
+    db: &Database,
     app: &AppState,
     uri: &str,
     auth: &str,
@@ -403,7 +417,7 @@ async fn assert_stats(
 ) {
     let body = assert_success(send(app, uri, Some(auth)).await).await;
     let stats = &body["data"]["stats"];
-    let expected = expected_records(rows, month);
+    let expected = expected_records(db, rows, month);
     let records = stats["records"].as_array().expect("records");
     assert_eq!(records.len(), expected.len(), "{uri}: {body}");
     for (actual, (date, quota)) in records.iter().zip(&expected) {
@@ -512,6 +526,7 @@ async fn run_contract(db: Database) {
     merged.extend(web_rows.iter().copied());
     merged.extend(qq_rows.iter().copied());
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin",
         auth,
@@ -526,9 +541,12 @@ async fn run_contract(db: Database) {
     .await;
 
     // 空 `month=`：Go `DefaultQuery` 只缺键才回退当前月，键在值空时拿到空串，
-    // 拼出的 `-01` / `-31` 区间匹配不到任何记录（与下面 `month=abc` 同一条
-    // 路径），records 为空而全时段累计不变。
+    // 拼出的 `-01` / `-31` 区间结果完全由数据库排序规则决定（见
+    // `expected_records`）：SQLite 一条不匹配，CI 的 Postgres（glibc en_US）
+    // 命中全部 0–3 开头的日期——这里播种的六行全部在内。全时段累计量与
+    // `month=abc` 一样不受窗口影响。
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin?month=",
         auth,
@@ -544,6 +562,7 @@ async fn run_contract(db: Database) {
 
     // `?month=` 越界文本：Go 不校验格式，字符串区间匹配不到任何记录。
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin?month=abc",
         auth,
@@ -561,6 +580,7 @@ async fn run_contract(db: Database) {
     let old_month = month_string(now - 40 * 86_400);
     let old_rows: Vec<(&str, i64)> = vec![(&old_date, 999)];
     assert_stats(
+        &db,
         &app,
         &format!("/api/user/checkin?month={old_month}"),
         auth,
@@ -589,6 +609,7 @@ async fn run_contract(db: Database) {
     assert_eq!(body["data"]["min_quota_display"], json!(display(500)));
     // 累计量与记录不受配置修正影响。
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin",
         auth,
@@ -615,6 +636,7 @@ async fn run_contract(db: Database) {
     nine_merged.extend(nine_web.iter().copied());
     nine_merged.extend(nine_qq.iter().copied());
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin",
         auth_nine,
@@ -629,6 +651,7 @@ async fn run_contract(db: Database) {
     .await;
     // 用户 7 的视图不受 user 9 数据影响。
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin",
         auth,
@@ -645,6 +668,7 @@ async fn run_contract(db: Database) {
     // 关闭单平台：判定与统计回到 checkins 单表。
     set_option(&db, "checkin_setting.single_platform_only", "0").await;
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin",
         auth_nine,
@@ -658,6 +682,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_stats(
+        &db,
         &app,
         "/api/user/checkin",
         auth,
@@ -786,7 +811,9 @@ async fn run_post_contract(db: Database) {
     assert_eq!(body["success"], json!(true), "{body}");
     assert_eq!(body["message"], json!(MSG_CHECKED_IN), "{body}");
     assert_eq!(checkin_count(&db, 33).await, 1);
-    assert_eq!(stored_quota(&db, 33).await, 7_777);
+    // 用户 33 的种子额度是 100，发放 7777 后余量 7877（与上面用户 32 的
+    // 7_877 同一算术：种子 100 + 发放 7777）。
+    assert_eq!(stored_quota(&db, 33).await, 7_877);
 
     // ---- 区间宽度与反向区间 ------------------------------------------------
     // 换成未签到的新用户，否则重复预判先命中。
