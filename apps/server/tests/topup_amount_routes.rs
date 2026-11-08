@@ -363,9 +363,13 @@ async fn run_contract(db: Database) {
     )
     .await;
     clear_options(&db).await;
-    app.reload(&db)
-        .await
-        .expect("reload back to the default display");
+    // The reload does **not** revert the display snapshot when rows are gone:
+    // Go's `updateConfigFromMap` skips absent keys (`settings/config.go:163`,
+    // `if !ok { continue }`), so a deleted option leaves the in-memory setting
+    // at its last value — the same rule the port's `QuotaDisplay::load` keeps.
+    // Restoring USD therefore needs an explicit row, not a bare delete.
+    seed_option(&db, "general_setting.quota_display_type", "USD").await;
+    app.reload(&db).await.expect("reload display back to USD");
 
     // ---- auth + body binding --------------------------------------------
     // No credential: the `UserAuth` middleware rejects before the handler.
