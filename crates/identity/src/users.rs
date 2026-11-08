@@ -774,12 +774,14 @@ pub enum AffCodeError {
 /// Failure categories of `User.TransferAffQuotaToQuota`
 /// (`store_users.go:453-493`).
 ///
-/// Go returns bare `errors.New` texts the HTTP layer renders verbatim
-/// (`邀请额度不足！`) and wraps a genuine transfer error into an i18n message
-/// with the raw error interpolated (`user.transfer_failed`). This port keeps
-/// the two apart so the adapter can reproduce both without echoing storage
-/// detail: [`AffTransferError::Insufficient`] is Go's literal, and
-/// [`AffTransferError::Storage`] maps to the fixed translated string.
+/// Go's HTTP shell renders **every** error from this domain through
+/// `CtxApiErrorI18n(MsgUserTransferFailed, {"Error": err.Error()})`
+/// (`manage_users.go:467-471`), so the authored literals (`邀请额度不足！`,
+/// the minimum-guard text) travel inside the `划转失败 {{.Error}}` envelope and
+/// genuine storage failures interpolate raw SQL text. This port keeps the
+/// categories apart so the adapter can reproduce the envelope around the
+/// authored literals and substitute a fixed translated string for
+/// [`AffTransferError::Storage`], never echoing storage detail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AffTransferError {
     /// Go rejects a non-positive amount in the shell with

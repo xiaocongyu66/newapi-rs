@@ -14,9 +14,13 @@
 //! Go surfaces `err.Error()` verbatim on the affiliate code write and
 //! interpolates the raw error into `user.transfer_failed`; this port maps both
 //! to fixed translated messages so no SQL or database text can reach the
-//! client. The three strings Go authors directly (`无效的转账数值`,
-//! `转账数额必须大于 0`, `邀请额度不足！`) are reproduced as-is because they are
-//! authored literals, not database output.
+//! client. `无效的转账数值` and `转账数额必须大于 0` are shell-authored literals
+//! rendered as-is. Go wraps **every** `TransferAffQuotaToQuota` error in
+//! `user.transfer_failed` (`划转失败 {{.Error}}`, `manage_users.go:467-471`),
+//! including the two authored literals the domain raises (`邀请额度不足！` and
+//! the minimum-guard text), so those responses carry the same envelope here;
+//! only genuine storage failures substitute the fixed database-error key for
+//! the interpolated error text.
 
 use axum::{
     Json,
@@ -148,10 +152,15 @@ pub async fn transfer_aff_quota(
     if quota_per_unit > 0.0 && (amount as f64) < quota_per_unit {
         let minimum = quota_from_float(quota_per_unit);
         let minimum = display.format_quota(minimum, true);
+        // The guard error is a `TransferAffQuotaToQuota` error, so Go renders it
+        // through `CtxApiErrorI18n(MsgUserTransferFailed, {"Error":
+        // err.Error()})` (`manage_users.go:467-471`): the translated minimum
+        // text rides inside the `划转失败 {{.Error}}` envelope.
+        let inner = translate_with(&headers, MSG_TRANSFER_QUOTA_MINIMUM, [("Min", minimum)]);
         return Json(error_body(&translate_with(
             &headers,
-            MSG_TRANSFER_QUOTA_MINIMUM,
-            [("Min", minimum)],
+            MSG_TRANSFER_FAILED,
+            [("Error", inner)],
         )))
         .into_response();
     }
@@ -165,7 +174,17 @@ pub async fn transfer_aff_quota(
             MSG_TRANSFER_SUCCESS,
         )))
         .into_response(),
-        Err(AffTransferError::Insufficient) => Json(error_body(MSG_INSUFFICIENT)).into_response(),
+        Err(AffTransferError::Insufficient) => {
+            // Go wraps `邀请额度不足！` in `user.transfer_failed`
+            // (`manage_users.go:467-471`): the authored literal is the
+            // interpolated `{{.Error}}`, never the bare message.
+            Json(error_body(&translate_with(
+                &headers,
+                MSG_TRANSFER_FAILED,
+                [("Error", MSG_INSUFFICIENT)],
+            )))
+            .into_response()
+        }
         Err(AffTransferError::NotFound) => {
             Json(error_body(&translate(&headers, MSG_USER_NOT_FOUND))).into_response()
         }

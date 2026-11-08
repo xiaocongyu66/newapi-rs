@@ -287,3 +287,19 @@ impl AuthService {
 **独立复核（aff 切片 `79e856a`）**
 - 结论 **PASS**：字母表/长度、软删作用域、条件更新并发语义、信封与路由、测试确定性（含 PG）均核对通过。
 - 非阻塞：`parse_code(b"")` 已在 `e603789` 对齐 Go 零值；`/api/user/aff` 未断言无缓存头（路由仅挂 `UserAuth`）；未做并发声明专门测试（SQL 探针已独立验证）。
+
+### 8.6 2026-11-08 `POST /api/user/aff_transfer` 契约全量复核（远程证据待回填）
+
+复核对象 `apps/server/tests/aff_routes.rs` 的 aff_transfer 契约（sqlite/postgres 双后端），逐条对照 Go：`identity/manage_users.go:443-473`（`TransferAffQuota`）、`identity/store_users.go:453-493`（`TransferAffQuotaToQuota`）、`transport/compose/register_api.go:179`（`UserAuth → UserCriticalRateLimit("aff-transfer") → RequirePaymentComplianceMiddleware → handler`）、`security/authenticate.go`（`TokenAuth`）。远程 CI 证据与独立复核尚待回填，本节仅记录源码级裁决。
+
+**修正（单一提交）**
+- 失败信封缺 `划转失败 ` 前缀（实现缺陷）：Go 把 `TransferAffQuotaToQuota` 的**所有**错误经 `CtxApiErrorI18n(i18n.MsgUserTransferFailed, {"Error": err.Error()})`（`manage_users.go:467-471`）渲染，zh 模板 `user.transfer_failed: "划转失败 {{.Error}}"`（`i18n/locales/zh-CN.yaml:102`）。此前 `apps/server/src/aff_http.rs` 对最小门限（`store_users.go:455-457` 的 `fmt.Errorf("转移额度最小为%s！"...)`）与余额不足（`store_users.go:473-475` 的 `errors.New("邀请额度不足！")`）直接返回内层文案，丢了外层模板；已改为先渲染内层文案再包 `user.transfer_failed`，测试三处预期同步更新为 `划转失败 转移额度最小为＄1.000000 额度！` / `划转失败 邀请额度不足！`。`crates/identity/src/users.rs` 中“Go 逐字返回 bare 错误文本”的领域文档表述有误，已更正。
+- 软删用户带有效 PAT（前任失败点，测试错）：见下述契约差分第 1 条，断言改为 401 并补“余额未动”。
+
+**契约差分（已知，须保留）**
+1. **软删用户访问 `aff_transfer`（或 `/aff`）**：Go 的 `TokenAuth` 校验 token 通过后，`GetUserCache → GetUserById` 命中带 `gorm.DeletedAt` 的 `User` 模型（`store_users.go:113`），GORM 默认作用域过滤软删行，查不到用户后 `abortWithOpenAiMessage` 返回 **500**（`MsgDatabaseError`），handler 不可达。本端口 PAT 查询自带 `deleted_at IS NULL`（`crates/identity/src/user_auth.rs:59`），软删用户等同未知 token，**刻意返回 401 `AUTH_UNAUTHORIZED`**——比把数据库错误透出给客户端更安全，且两种实现都不可能移动余额。此为两项路由共有的既定裁决，前任测试误把 Go 侧不存在路径（`用户不存在`）当作预期，已按 401 修正。
+2. `GetUserById` 失败时 Go 返回 `划转失败 record not found`（原始 GORM 文本）；本端口映射为固定 i18n `user.not_exists`（`用户不存在`），不泄漏数据库文本。
+3. `UserCriticalRateLimit("aff-transfer")` 用户维度限流未移植（仅 CT 关键路径限流）；compliance 门为 handler 内联实现（`TopUpSettings::payment_compliance_confirmed` 二段门 `confirmed && terms_version == "v1"`，对齐 Go `IsPaymentComplianceConfirmed`）。
+4. 最小门限的 `quota_per_unit` 取自可配置展示设置（默认 500_000），Go 用 `common.QuotaPerUnit` 常量（仅测试改写）；默认值一致，仅可配置性不同（端口既有设计，非本路由特有）。
+
+本节 SHA/CI 绑定在推送后回填。

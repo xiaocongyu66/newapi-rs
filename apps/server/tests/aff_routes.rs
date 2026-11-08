@@ -505,23 +505,29 @@ async fn run_transfer_contract(db: Database) {
     assert_eq!(stored_quota(&db, 1).await, (250_000, 1_750_000));
 
     // ---- one-unit minimum ------------------------------------------------
-    // 499_999 internal quota is below `QuotaPerUnit` (500_000), and
-    // `{{.Min}}` is Go's `LogQuota(QuotaFromFloat(500000))` — the
-    // currency-wrapped display string, not a bare number.
+    // 499_999 internal quota is below `QuotaPerUnit` (500_000). The guard
+    // error is a `TransferAffQuotaToQuota` error, so Go renders it through
+    // `CtxApiErrorI18n(MsgUserTransferFailed, {"Error": err.Error()})`
+    // (`manage_users.go:467-471`): the whole minimum text — where `{{.Min}}`
+    // is `LogQuota(QuotaFromFloat(500000))`, the currency-wrapped display
+    // string, not a bare number — rides inside the `划转失败 {{.Error}}`
+    // envelope.
     let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":499999}"#).await;
     assert_eq!(
         body_json(response).await,
         json!({
             "success": false,
-            "message": "转移额度最小为＄1.000000 额度！",
+            "message": "划转失败 转移额度最小为＄1.000000 额度！",
         }),
     );
 
     // ---- insufficient affiliate balance ---------------------------------
+    // Same envelope: Go's `errors.New("邀请额度不足！")` (`store_users.go:474`)
+    // is the interpolated `{{.Error}}`, never the bare message.
     let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":999999}"#).await;
     assert_eq!(
         body_json(response).await,
-        json!({"success": false, "message": "邀请额度不足！"}),
+        json!({"success": false, "message": "划转失败 邀请额度不足！"}),
     );
     assert_eq!(
         stored_quota(&db, 1).await,
@@ -543,16 +549,26 @@ async fn run_transfer_contract(db: Database) {
     let response = send_transfer(&app, Some("Bearer pat-1"), r#"{"quota":500000}"#).await;
     assert_eq!(
         body_json(response).await,
-        json!({"success": false, "message": "邀请额度不足！"}),
+        json!({"success": false, "message": "划转失败 邀请额度不足！"}),
     );
 
-    // ---- a soft-deleted user is a missing user --------------------------
+    // ---- a soft-deleted user never reaches the handler -------------------
+    // Go's route chain (`register_api.go:179`) puts `UserAuth` first:
+    // `TokenAuth` validates the PAT, then `GetUserCache`/`GetUserById` hit the
+    // GORM model whose `DeletedAt` (`store_users.go:113`) scopes the soft-
+    // deleted row out, so Go aborts with a 500 database error and the handler
+    // is unreachable. This port's PAT lookup carries `deleted_at IS NULL`
+    // (`crates/identity/src/user_auth.rs:59`) and deliberately answers 401 —
+    // the same safer choice the `/aff` contract above asserts — so neither
+    // implementation can move a balance here.
     seed_transfer_user(&db, 2, "pat-deleted", 1_000_000, 0).await;
     soft_delete(&db, 2).await;
     let response = send_transfer(&app, Some("Bearer pat-deleted"), r#"{"quota":500000}"#).await;
+    assert_auth_failure(response).await;
     assert_eq!(
-        body_json(response).await,
-        json!({"success": false, "message": "用户不存在"}),
+        stored_quota(&db, 2).await,
+        (1_000_000, 0),
+        "a rejected transfer must not move any balance"
     );
 
     // ---- authentication -------------------------------------------------
