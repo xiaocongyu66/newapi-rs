@@ -208,11 +208,11 @@ pub async fn sync_panel(
     let default_api = crate::qqbot::HttpQQBotApi;
     // 与 `checkin_http` 的 `InjectedVerifier` 同一手法：借 *本地的* `injected`
     // 绑定（match arm 里的 newtype 是临时量，活不过 arm 的右括号，E0597），
-    // 再经 `&*extension.0` 把 `Arc<dyn QQBotApi>` 解引用成 `&dyn QQBotApi`；
+    // 两层 `.0` 先到 `Arc<dyn QQBotApi>` 再解引用成 `&dyn QQBotApi`；
     // 缺省实现由 `unwrap_or` 的具体形参做一次 unsizing 强制转换。
     let api: &dyn QQBotApi = injected
         .as_ref()
-        .map(|extension| &*extension.0)
+        .map(|extension| &*extension.0.0)
         .unwrap_or(&default_api);
     match sync_command_panel(api, &settings.app_id, &settings.app_secret).await {
         Ok(()) => Json(json!({
