@@ -480,11 +480,34 @@ mod tests {
         }
     }
 
+    /// Go `strings.HasPrefix(url, "https://") || strings.HasPrefix(url,
+    /// "http://")`：**大小写敏感**，且只判协议、不判后面有无 host（所以
+    /// `"http://"` 本身也算通过——那一格由 `is_request_uri` 负责）。
+    #[test]
+    fn http_prefix_is_case_sensitive_like_go() {
+        for accepted in ["https://a", "http://a", "http://", "https://例え.jp"] {
+            assert!(is_http_url(accepted), "{accepted:?} should pass");
+        }
+        for rejected in ["HTTPS://A", "ftp://a", "mailto:a@b", "http:/a", "//a"] {
+            assert!(!is_http_url(rejected), "{rejected:?} should fail");
+        }
+    }
+
+    /// Go 只在命中分支里给字段赋值，其余保持零值；`omitempty` 再把这些零值
+    /// 从 marshaled setting 里丢掉，于是未选中的通知类型字段被**整列替换**擦掉。
+    #[test]
+    fn an_unselected_gateway_is_left_empty() {
+        assert_eq!(gateway(true, "https://a".to_owned()), "https://a");
+        assert_eq!(gateway(true, String::new()), "");
+        assert_eq!(gateway(false, "https://a".to_owned()), "");
+    }
+
     #[test]
     fn admin_only_flag_needs_an_admin_and_a_present_field() {
-        // A common role keeps the stored value whatever the request sends.
+        // A common role keeps the stored value whatever the request sends,
+        // in both directions.
         assert!(upstream_notify(true, 1, Some(false)));
-        assert!(upstream_notify(false, 1, Some(true)));
+        assert!(!upstream_notify(false, 1, Some(true)));
         // An admin adopts the field, so absence still preserves.
         assert!(!upstream_notify(false, ROLE_ADMIN_USER, Some(false)));
         assert!(upstream_notify(true, ROLE_ADMIN_USER, None));
