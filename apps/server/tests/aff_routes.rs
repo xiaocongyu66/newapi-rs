@@ -410,8 +410,13 @@ async fn run_transfer_contract(db: Database) {
         "a rejected gate must not move any balance"
     );
 
-    // Confirmed site: the transfer now runs.
+    // Confirmed site: the transfer now runs. Go `IsPaymentComplianceConfirmed`
+    // is a two-part gate — `compliance_confirmed == true` AND
+    // `compliance_terms_version == "v1"` (payment_compliance.go writes both
+    // keys in `ConfirmPaymentCompliance`), and the missing terms version alone
+    // keeps the gate shut, so both options have to be flipped here.
     seed_option(&db, "payment_setting.compliance_confirmed", "true").await;
+    seed_option(&db, "payment_setting.compliance_terms_version", "v1").await;
 
     // ---- quota: the raw internal amount moves across --------------------
     seed_option(&db, "general_setting.custom_currency_exchange_rate", "1").await;
