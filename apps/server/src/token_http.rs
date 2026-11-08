@@ -439,7 +439,7 @@ pub async fn get_token(
     };
     let repository = TokenRepository::new(db);
     match repository.by_id_for_user(auth_user.0.user_id, id).await {
-        Ok(Some(token)) => success(Some(masked_token_json(&token, state.quota_display()))),
+        Ok(Some(token)) => success(Some(masked_token_json(&token, &state.quota_display()))),
         Ok(None) => api_error(&headers, MSG_NOT_FOUND),
         Err(error) => database_error(&headers, error),
     }
@@ -507,7 +507,7 @@ pub async fn add_token(
         if !amount.is_finite() {
             return api_error(&headers, MSG_INVALID_QUOTA_VALUE);
         }
-        tokens::quota_from_display(amount, display)
+        tokens::quota_from_display(amount, &display)
     };
     let name = request.name.clone().unwrap_or_default();
     if name.len() > 50 {
@@ -707,7 +707,7 @@ pub async fn update_token(
         }
     }
     match repository.by_id_for_user(user_id, id).await {
-        Ok(Some(token)) => success(Some(masked_token_json(&token, display))),
+        Ok(Some(token)) => success(Some(masked_token_json(&token, &display))),
         Ok(None) => api_error(&headers, MSG_NOT_FOUND),
         Err(error) => database_error(&headers, error),
     }
@@ -1013,7 +1013,7 @@ mod tests {
         };
         let body = masked_token_json(
             &token,
-            QuotaDisplaySettings {
+            &QuotaDisplaySettings {
                 quota_per_unit: 500_000.0,
                 kind: newapi_identity::self_user::QuotaDisplayKind::Usd,
             },

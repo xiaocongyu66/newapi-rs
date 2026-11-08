@@ -388,10 +388,11 @@ impl AppState {
                 return Err(error);
             }
         };
-        let quota_previous = *self
+        let quota_previous = self
             .quota_display
             .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let quota_next = match QuotaDisplay::load(db, &quota_previous).await {
             Ok(next) => next,
             Err(error) => {

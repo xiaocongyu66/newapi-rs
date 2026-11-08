@@ -533,11 +533,11 @@ pub fn quota_round(value: f64) -> i64 {
 
 /// Go `billing.QuotaFromDisplayAmount`, the inverse of
 /// [`QuotaDisplaySettings::to_display`]. Non-finite input maps to 0.
-pub fn quota_from_display(display_amount: f64, settings: QuotaDisplaySettings) -> i64 {
+pub fn quota_from_display(display_amount: f64, settings: &QuotaDisplaySettings) -> i64 {
     if !display_amount.is_finite() {
         return 0;
     }
-    match settings.kind {
+    match &settings.kind {
         QuotaDisplayKind::Usd => quota_round(display_amount * settings.quota_per_unit),
         QuotaDisplayKind::Cny { usd_exchange_rate } => {
             quota_round(display_amount / usd_exchange_rate * settings.quota_per_unit)
@@ -1165,8 +1165,8 @@ mod token_repository_tests {
             quota_per_unit: 500_000.0,
             kind: QuotaDisplayKind::Usd,
         };
-        assert_eq!(quota_from_display(1.0, display), 500_000);
-        assert_eq!(quota_from_display(f64::NAN, display), 0);
+        assert_eq!(quota_from_display(1.0, &display), 500_000);
+        assert_eq!(quota_from_display(f64::NAN, &display), 0);
         assert_eq!(
             max_quota_value(500_000.0),
             MAX_QUOTA,
