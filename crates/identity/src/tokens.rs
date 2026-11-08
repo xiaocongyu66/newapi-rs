@@ -543,7 +543,7 @@ pub fn quota_from_display(display_amount: f64, settings: &QuotaDisplaySettings) 
             quota_round(display_amount / usd_exchange_rate * settings.quota_per_unit)
         }
         QuotaDisplayKind::Custom { rate, .. } => {
-            let rate = if rate <= 0.0 { 1.0 } else { rate };
+            let rate = if rate <= 0.0 { 1.0 } else { *rate };
             quota_round(display_amount / rate * settings.quota_per_unit)
         }
         QuotaDisplayKind::Tokens => quota_round(display_amount),
