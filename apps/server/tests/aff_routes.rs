@@ -332,24 +332,35 @@ async fn seed_transfer_user(db: &Database, id: i64, token: &str, aff_quota: i64,
     });
 }
 
+/// Go `dbinfra.UpdateOption` 是 FirstOrCreate + Save 的 upsert 语义：同一 key
+/// 再次“播种”是改值而非插入。SQLite 3.24+ 与 PostgreSQL 的 upsert 语法一致，
+/// 同一语句两个驱动都能跑。
 async fn seed_option(db: &Database, key: &str, value: &str) {
     backend!(db, pool, {
-        sqlx::query(r#"INSERT INTO options ("key", value) VALUES ($1,$2)"#)
-            .bind(key)
-            .bind(value)
-            .execute(pool)
-            .await
-            .expect("seed option");
+        sqlx::query(
+            r#"INSERT INTO options ("key", value) VALUES ($1,$2)
+               ON CONFLICT("key") DO UPDATE SET value = excluded.value"#,
+        )
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await
+        .expect("seed option");
     });
 }
 
+/// PG 的余额列沿用 Go schema 的 INTEGER（INT4），实现层统一以 CAST(... AS
+/// BIGINT) 提升为 i64 再解码（见 UserProfileRepository::PROFILE_BY_ID 的
+/// 处理）；SQLite 的 BIGINT 亲和性同为 INTEGER，同一语句两驱动通用。
 async fn stored_quota(db: &Database, id: i64) -> (i64, i64) {
     backend!(db, pool, {
-        sqlx::query_as::<_, (i64, i64)>("SELECT aff_quota, quota FROM users WHERE id = $1")
-            .bind(id)
-            .fetch_one(pool)
-            .await
-            .expect("stored balances")
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT CAST(aff_quota AS BIGINT), CAST(quota AS BIGINT) FROM users WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("stored balances")
     })
 }
 
