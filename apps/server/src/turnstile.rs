@@ -129,7 +129,10 @@ fn siteverify_client() -> Option<&'static reqwest::Client> {
 /// panic in `Client::build` unless a process default is installed. sqlx already
 /// compiles rustls with `aws_lc_rs`, so installing that same provider here keeps
 /// a single backend and avoids rustls' "multiple providers" panic.
-fn install_crypto_provider() {
+///
+/// `pub(crate)`：`qqbot` 的 `reqwest` 客户端复用同一安装入口，避免两个模块
+/// 各自 `install_default`（第二个会得到 `Err`，语义相同但不显式）。
+pub(crate) fn install_crypto_provider() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         // `Err` means another caller already installed the process default.
@@ -180,7 +183,10 @@ fn siteverify_form(secret: &str, token: &str, remote_ip: Option<&str>) -> String
 }
 
 /// Equivalent to Go's `url.QueryEscape` / `url.Values.Encode` escaping.
-fn form_encode_component(output: &mut String, value: &str) {
+///
+/// `pub(crate)`：`qqbot::query_escape`（Go `ListPanels` 的 scope 转义）复用
+/// 同一实现，避免两份 QueryEscape 漂移。
+pub(crate) fn form_encode_component(output: &mut String, value: &str) {
     for &byte in value.as_bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
