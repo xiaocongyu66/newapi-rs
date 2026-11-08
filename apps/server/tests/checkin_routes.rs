@@ -384,15 +384,22 @@ fn expected_records(rows: &[(&str, i64)], month: &str) -> Vec<(String, i64)> {
     selected
 }
 
+/// 跨月窗口也不变的三个统计量：累计额度、累计次数、今日是否已签。
+/// 收成一个参数，避免 `assert_stats` 的 8 个参数撞上 `too_many_arguments`。
+#[derive(Clone, Copy)]
+struct AllTime {
+    quota: i64,
+    count: i64,
+    checked_in_today: bool,
+}
+
 async fn assert_stats(
     app: &AppState,
     uri: &str,
     auth: &str,
     rows: &[(&str, i64)],
     month: &str,
-    all_time_quota: i64,
-    all_time_count: i64,
-    checked_in_today: bool,
+    all_time: AllTime,
 ) {
     let body = assert_success(send(app, uri, Some(auth)).await).await;
     let stats = &body["data"]["stats"];
@@ -413,14 +420,18 @@ async fn assert_stats(
         json!(expected.len() as i64),
         "{body}"
     );
-    assert_eq!(stats["total_quota"], json!(all_time_quota), "{body}");
+    assert_eq!(stats["total_quota"], json!(all_time.quota), "{body}");
     assert_eq!(
         stats["total_quota_display"],
-        json!(display(all_time_quota)),
+        json!(display(all_time.quota)),
         "{body}"
     );
-    assert_eq!(stats["total_checkins"], json!(all_time_count), "{body}");
-    assert_eq!(stats["checked_in_today"], json!(checked_in_today), "{body}");
+    assert_eq!(stats["total_checkins"], json!(all_time.count), "{body}");
+    assert_eq!(
+        stats["checked_in_today"],
+        json!(all_time.checked_in_today),
+        "{body}"
+    );
 }
 
 async fn run_contract(db: Database) {
@@ -506,9 +517,11 @@ async fn run_contract(db: Database) {
         auth,
         &merged,
         &month,
-        2_000 + 1_500 + 1_200 + 3_000 + 500 + 999,
-        6,
-        true,
+        AllTime {
+            quota: 2_000 + 1_500 + 1_200 + 3_000 + 500 + 999,
+            count: 6,
+            checked_in_today: true,
+        },
     )
     .await;
 
@@ -519,9 +532,11 @@ async fn run_contract(db: Database) {
         auth,
         &merged,
         &month,
-        9_199,
-        6,
-        true,
+        AllTime {
+            quota: 9_199,
+            count: 6,
+            checked_in_today: true,
+        },
     )
     .await;
 
@@ -532,9 +547,11 @@ async fn run_contract(db: Database) {
         auth,
         &[],
         "abc",
-        9_199,
-        6,
-        true,
+        AllTime {
+            quota: 9_199,
+            count: 6,
+            checked_in_today: true,
+        },
     )
     .await;
 
@@ -547,9 +564,11 @@ async fn run_contract(db: Database) {
         auth,
         &old_rows,
         &old_month,
-        9_199,
-        6,
-        true,
+        AllTime {
+            quota: 9_199,
+            count: 6,
+            checked_in_today: true,
+        },
     )
     .await;
 
@@ -573,9 +592,11 @@ async fn run_contract(db: Database) {
         auth,
         &merged,
         &month,
-        9_199,
-        6,
-        true,
+        AllTime {
+            quota: 9_199,
+            count: 6,
+            checked_in_today: true,
+        },
     )
     .await;
 
@@ -597,9 +618,11 @@ async fn run_contract(db: Database) {
         auth_nine,
         &nine_merged,
         &month,
-        1_600,
-        3,
-        true,
+        AllTime {
+            quota: 1_600,
+            count: 3,
+            checked_in_today: true,
+        },
     )
     .await;
     // 用户 7 的视图不受 user 9 数据影响。
@@ -609,9 +632,11 @@ async fn run_contract(db: Database) {
         auth,
         &merged,
         &month,
-        9_199,
-        6,
-        true,
+        AllTime {
+            quota: 9_199,
+            count: 6,
+            checked_in_today: true,
+        },
     )
     .await;
 
@@ -623,9 +648,11 @@ async fn run_contract(db: Database) {
         auth_nine,
         &nine_web,
         &month,
-        700,
-        1,
-        false,
+        AllTime {
+            quota: 700,
+            count: 1,
+            checked_in_today: false,
+        },
     )
     .await;
     assert_stats(
@@ -634,9 +661,11 @@ async fn run_contract(db: Database) {
         auth,
         &web_rows,
         &month,
-        5_699,
-        4,
-        true,
+        AllTime {
+            quota: 5_699,
+            count: 4,
+            checked_in_today: true,
+        },
     )
     .await;
 }

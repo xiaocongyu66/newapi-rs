@@ -454,7 +454,7 @@ async fn run_transfer_contract(db: Database) {
         json!({"success": false, "message": "转账数额必须大于 0"}),
     );
     // A non-JSON content type keeps the zero value (Go `UnmarshalBodyReusable`).
-    let mut builder = Request::builder()
+    let builder = Request::builder()
         .method("POST")
         .uri("/api/user/aff_transfer")
         .header(header::CONTENT_TYPE, "text/plain")
