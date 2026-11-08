@@ -133,7 +133,7 @@ pub async fn transfer_aff_quota(
         if !request.quota_display.is_finite() {
             return Json(error_body(MSG_INVALID_AMOUNT)).into_response();
         }
-        quota_from_display(request.quota_display, state.quota_display())
+        quota_from_display(request.quota_display, &state.quota_display())
     } else {
         request.quota
     };
