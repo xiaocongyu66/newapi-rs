@@ -409,6 +409,8 @@ UPDATE users SET auth_version =
 WHERE id = $1
 ";
 const DELETE_QQ_BINDING: &str = "DELETE FROM qq_bindings WHERE user_id = $1";
+// Go `identity.IsQQBoundByUserId`：只取一行的 open_id，绑定不存在或为空都算未绑定。
+const QQ_OPEN_ID: &str = "SELECT open_id FROM qq_bindings WHERE user_id = $1";
 const SOFT_DELETE_USER: &str =
     "UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL";
 const REVOKE_ALL_SESSIONS: &str = r"
@@ -436,6 +438,42 @@ impl UserProfileRepository {
             }
         }
         Ok(())
+    }
+
+    /// Go `identity.IsQQBoundByUserId`：`userId <= 0`、查询出错、以及空 `open_id`
+    /// 一律算未绑定。Go 对查询错误**不报错**，直接归为未绑定，因此这里也只回
+    /// 布尔；错误记一条分类告警，不让 SQL 文本外泄，也不改变调用方看到的结果。
+    pub async fn is_qq_bound(&self, user_id: i64) -> bool {
+        if user_id <= 0 {
+            return false;
+        }
+        let open_id: Result<Option<String>, sqlx::Error> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_scalar::<_, Option<String>>(QQ_OPEN_ID)
+                    .bind(user_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_scalar::<_, Option<String>>(QQ_OPEN_ID)
+                    .bind(user_id)
+                    .fetch_optional(pool)
+                    .await
+            }
+        };
+        match open_id {
+            Ok(open_id) => open_id.is_some_and(|value| !value.is_empty()),
+            Err(_) => {
+                // 只说分类，不把驱动错误文本（可能含 SQL/SECRET）写进日志。
+                tracing::warn!(
+                    event = "qq_binding_lookup_failed",
+                    user_id,
+                    category = "database",
+                    "QQ binding lookup failed; Go treats this as unbound"
+                );
+                false
+            }
+        }
     }
 
     /// Go `GetUserById(id, true)` 的密码列；行不存在为 `None`，NULL 密码为 `Some("")`。

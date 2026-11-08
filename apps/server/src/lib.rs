@@ -19,6 +19,7 @@ pub mod register_http;
 pub mod request_lang;
 pub mod reset_http;
 pub mod self_http;
+pub mod setting_http;
 pub mod setup_http;
 mod state;
 pub mod status;

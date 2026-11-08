@@ -126,14 +126,16 @@ fn build_router(state: AppState) -> Router {
             )),
     );
     // `GET /api/user/checkin`：Go `selfRoute` 组内纯 `UserAuth`
-    // （`register_api.go:190`），无限流、无 DisableCache；只读切片，
-    // `POST /api/user/checkin` 由后续切片实现。
+    // （`register_api.go:190-191`），无限流、无 DisableCache。
+    // POST 同组但多挂 `middleware.TurnstileCheck()`；本端口把该门内联进
+    // handler 顶部（可观察结果等价：都是 200 + JSON 且不触达写路径），
+    // 见 `checkin_http::do_checkin`。
     let checkin_state = state.clone();
     let app = app.merge(
         Router::new()
             .route(
                 "/api/user/checkin",
-                get(crate::checkin_http::checkin_status),
+                get(crate::checkin_http::checkin_status).post(crate::checkin_http::do_checkin),
             )
             .route_layer(middleware::from_fn_with_state(
                 checkin_state,
@@ -299,6 +301,21 @@ fn build_router(state: AppState) -> Router {
             )
             .route_layer(middleware::from_fn_with_state(
                 aff_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // `PUT /api/user/setting`：Go `selfRoute.PUT("/setting", ...)`
+    // （`register_api.go:180`），组内纯 `UserAuth`，无 DisableCache、无限流。
+    // 全部结果都是 HTTP 200，分支顺序即契约（见 `setting_http` 的模块注释）。
+    let setting_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/setting",
+                put(crate::setting_http::update_user_setting),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                setting_state,
                 crate::auth::user_auth,
             )),
     );

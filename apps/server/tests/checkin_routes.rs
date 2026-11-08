@@ -48,8 +48,18 @@ const OPTIONS: &str = r#"CREATE TABLE options ("key" TEXT PRIMARY KEY, "value" T
 
 // Go `store_checkin.go:18-24` / `qq_checkin.go:18-26`：两张表都没有
 // `deleted_at`，因此 fixture 的 DDL 也不建该列。
-const CHECKINS: &str = r#"CREATE TABLE checkins (
-    id BIGINT PRIMARY KEY,
+// `id` 是 Go 的 `gorm:"primaryKey;autoIncrement"`：SQLite 的
+// `INTEGER PRIMARY KEY` 自动成为 rowid 别名，PostgreSQL 则需要显式 serial。
+const CHECKINS_SQLITE: &str = r#"CREATE TABLE checkins (
+    id INTEGER PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    checkin_date VARCHAR(10) NOT NULL,
+    quota_awarded BIGINT NOT NULL,
+    created_at BIGINT
+)"#;
+
+const CHECKINS_POSTGRES: &str = r#"CREATE TABLE checkins (
+    id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
     checkin_date VARCHAR(10) NOT NULL,
     quota_awarded BIGINT NOT NULL,
@@ -66,6 +76,27 @@ const QQ_CHECKINS: &str = r#"CREATE TABLE qq_checkins (
     created_at BIGINT
 )"#;
 
+/// Go `identity/qq_binding.go:16-23`。POST 只在 `require_qq_bound` 开启时读它
+/// （`IsQQBoundByUserId` 取一行的 `open_id`）。
+const QQ_BINDINGS: &str = r#"CREATE TABLE qq_bindings (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    open_id VARCHAR(128) NOT NULL,
+    union_open_id VARCHAR(128),
+    username VARCHAR(64),
+    created_at BIGINT
+)"#;
+
+/// Go `do_checkin.go:79-86` 的成功消息：POST 是手写 `common.H`（与
+/// `CtxApiSuccessI18n` 同形、但非同一 helper），因此与 GET 不同，**带** message。
+const MSG_CHECKED_IN: &str = "签到成功";
+/// Go `do_checkin.go:18` / `:50` `common.CtxApiErrorMsg(c, "签到功能未启用")`。
+const MSG_DISABLED: &str = "签到功能未启用";
+/// Go `store_checkin.go:108` / `:186`。
+const MSG_ALREADY_CHECKED_TODAY: &str = "今日已签到";
+/// Go `do_checkin.go:63-66`：带 `code` 的拒绝体。
+const MSG_QQ_NOT_BOUND: &str = "请先绑定 QQ 账号后再签到";
+
 /// 默认额度展示快照（USD，`QuotaPerUnit` 500000）：`AppState::default()` 不加载
 /// 数据库选项，展示值即 `quota / 500000`。
 const QUOTA_PER_UNIT: f64 = 500_000.0;
@@ -79,9 +110,22 @@ macro_rules! backend {
     };
 }
 
+/// `checkins.id` 才是 Go `autoIncrement` 的那一列（`qq_checkins.id` 只由 seed
+/// 显式给定，无需序列）。
+async fn create_checkins(db: &Database) {
+    let ddl = match db {
+        Database::Sqlite(_) => CHECKINS_SQLITE,
+        Database::Postgres(_) => CHECKINS_POSTGRES,
+    };
+    exec(db, ddl).await;
+}
+
 fn router(state: AppState) -> Router {
     Router::new()
-        .route("/api/user/checkin", get(checkin_http::checkin_status))
+        .route(
+            "/api/user/checkin",
+            get(checkin_http::checkin_status).post(checkin_http::do_checkin),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), user_auth))
         .with_state(state)
 }
@@ -130,6 +174,25 @@ async fn set_option(db: &Database, key: &str, value: &str) {
     });
 }
 
+/// POST 场景专用：显式给出 `quota`，因为 `quota + award` 在 NULL 上得 NULL，
+/// 而 Go 的用户行同样非空。
+async fn seed_checkin_user(db: &Database, id: i64, token: &str, quota: i64) {
+    backend!(db, pool, {
+        sqlx::query(
+            r#"INSERT INTO users
+                (id,username,display_name,role,status,"group",quota,
+                 auth_version,access_token)
+                VALUES ($1,'fixture','Fixture',1,1,'default',$2,1,$3)"#,
+        )
+        .bind(id)
+        .bind(quota)
+        .bind(token)
+        .execute(pool)
+        .await
+        .expect("seed checkin user");
+    });
+}
+
 async fn seed_checkin(db: &Database, id: i64, user_id: i64, date: &str, quota: i64) {
     backend!(db, pool, {
         sqlx::query(
@@ -172,6 +235,75 @@ async fn send(state: &AppState, uri: &str, authorization: Option<&str>) -> Respo
         .oneshot(builder.body(Body::empty()).unwrap())
         .await
         .unwrap()
+}
+
+/// POST `?turnstile=`：Go 的 `TurnstileCheck` 从查询串取 token。
+async fn send_post(state: &AppState, query: &str, authorization: Option<&str>) -> Response {
+    let uri = if query.is_empty() {
+        "/api/user/checkin".to_owned()
+    } else {
+        format!("/api/user/checkin?{query}")
+    };
+    let mut builder = Request::builder().method("POST").uri(uri);
+    if let Some(value) = authorization {
+        builder = builder.header(header::AUTHORIZATION, value);
+    }
+    router(state.clone())
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+/// `users.quota`，用于验证发放是否落在同一表上。
+async fn stored_quota(db: &Database, user_id: i64) -> i64 {
+    backend!(db, pool, {
+        sqlx::query_scalar::<_, i64>("SELECT quota FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .expect("stored quota")
+    })
+}
+
+/// `checkins` 里 `user_id` 的今日行数，用于验证插入与重复拦截。
+async fn checkin_count(db: &Database, user_id: i64) -> i64 {
+    backend!(db, pool, {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM checkins WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .expect("checkin count")
+    })
+}
+
+/// 今日已发放的额度，确认发放值就是响应里的 `quota_awarded`。
+async fn today_award(db: &Database, user_id: i64, today: &str) -> Option<i64> {
+    backend!(db, pool, {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT quota_awarded FROM checkins WHERE user_id = $1 AND checkin_date = $2",
+        )
+        .bind(user_id)
+        .bind(today)
+        .fetch_optional(pool)
+        .await
+        .expect("today award")
+    })
+}
+
+async fn bind_qq(db: &Database, user_id: i64, open_id: &str) {
+    backend!(db, pool, {
+        sqlx::query(
+            r#"INSERT INTO qq_bindings (id,user_id,open_id,created_at)
+               VALUES ($1,$2,$3,$4)"#,
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .bind(open_id)
+        .bind(now())
+        .execute(pool)
+        .await
+        .expect("seed qq binding");
+    });
 }
 
 async fn body_json(response: Response) -> Value {
@@ -293,7 +425,7 @@ async fn assert_stats(
 async fn run_contract(db: Database) {
     exec(&db, USERS).await;
     exec(&db, OPTIONS).await;
-    exec(&db, CHECKINS).await;
+    create_checkins(&db).await;
     exec(&db, QQ_CHECKINS).await;
     seed_user(&db, 7, "pat-checkin").await;
     seed_user(&db, 9, "pat-checkin-nine").await;
@@ -508,6 +640,181 @@ async fn run_contract(db: Database) {
     .await;
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/user/checkin — Go `billing.DoCheckin`
+// ---------------------------------------------------------------------------
+
+async fn run_post_contract(db: Database) {
+    exec(&db, USERS).await;
+    exec(&db, OPTIONS).await;
+    create_checkins(&db).await;
+    exec(&db, QQ_CHECKINS).await;
+    exec(&db, QQ_BINDINGS).await;
+    // `quota` 必须显式给值：Go 的 users 行同样非空，且 `quota + x` 在 NULL 上
+    // 得 NULL，两个后端都一样，这会让"发放"静默失效。
+    seed_checkin_user(&db, 31, "pat-post-checkin", 500_000).await;
+    let app = state(&db);
+    let auth = "Bearer pat-post-checkin";
+    let today = today();
+
+    // ---- 默认关闭 ---------------------------------------------------------
+    // Go `do_checkin_setting.go:30` 的 Enabled 缺省 false。
+    let response = send_post(&app, "", Some(auth)).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": MSG_DISABLED}),
+        "checkin starts disabled, like Go"
+    );
+
+    // ---- 一次成功发放 -----------------------------------------------------
+    // 区间取等让随机源无分歧：Go `evaluateDailyCheckin` 在 min == max 时直接
+    // 返回 min_quota，不调用 rand。
+    set_option(&db, "checkin_setting.enabled", "1").await;
+    set_option(&db, "checkin_setting.min_quota", "7777").await;
+    set_option(&db, "checkin_setting.max_quota", "7777").await;
+    let response = send_post(&app, "", Some(auth)).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({
+            "success": true,
+            "message": MSG_CHECKED_IN,
+            "data": {
+                "quota_awarded": 7_777,
+                "quota_awarded_display": display(7_777),
+            },
+        }),
+        "POST 手写 common.H 带 message；数据字段与 Go 逐字一致"
+    );
+    assert_eq!(today_award(&db, 31, &today).await, Some(7_777));
+    assert_eq!(checkin_count(&db, 31).await, 1);
+    assert_eq!(stored_quota(&db, 31).await, 507_777);
+
+    // ---- 重复签到 ---------------------------------------------------------
+    // 事务前预判即拦截，不再触达写路径。
+    let response = send_post(&app, "", Some(auth)).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": MSG_ALREADY_CHECKED_TODAY})
+    );
+    assert_eq!(checkin_count(&db, 31).await, 1);
+    assert_eq!(stored_quota(&db, 31).await, 507_777);
+
+    // ---- 单平台模式跨两表 -------------------------------------------------
+    // 今日只在 qq_checkins 有行时，网页入口也必须报已签到。
+    seed_checkin_user(&db, 32, "pat-post-checkin-qq", 100).await;
+    seed_qq_checkin(&db, 32, 32, &today, 123).await;
+    let response = send_post(&app, "", Some("Bearer pat-post-checkin-qq")).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({"success": false, "message": MSG_ALREADY_CHECKED_TODAY})
+    );
+    assert_eq!(checkin_count(&db, 32).await, 0);
+
+    // 关闭单平台后，QQ 的行不再挡网页入口。
+    set_option(&db, "checkin_setting.single_platform_only", "0").await;
+    let response = send_post(&app, "", Some("Bearer pat-post-checkin-qq")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(true), "{body}");
+    assert_eq!(body["message"], json!(MSG_CHECKED_IN), "{body}");
+    assert_eq!(checkin_count(&db, 32).await, 1);
+    assert_eq!(stored_quota(&db, 32).await, 7_877);
+
+    // ---- require_qq_bound 门 ----------------------------------------------
+    // Go 的顺序：门在 `UserCheckin`（其第一步是重复预判）**之前**，所以一个
+    // 今日已签到但未绑 QQ 的用户，先看到的是未绑定提示而不是"今日已签到"。
+    set_option(&db, "checkin_setting.single_platform_only", "1").await;
+    set_option(&db, "checkin_setting.require_qq_bound", "1").await;
+    let response = send_post(&app, "", Some(auth)).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({
+            "success": false,
+            "code": "qq_not_bound",
+            "message": MSG_QQ_NOT_BOUND,
+        }),
+        "QQ 门先于重复预判：已签到的用户也先看到未绑定提示"
+    );
+    // 一个全新用户给出同一拒绝体，确认拒绝不依赖用户是否已签到。
+    seed_checkin_user(&db, 33, "pat-post-checkin-unbound", 100).await;
+    let response = send_post(&app, "", Some("Bearer pat-post-checkin-unbound")).await;
+    assert_eq!(
+        body_json(response).await,
+        json!({
+            "success": false,
+            "code": "qq_not_bound",
+            "message": MSG_QQ_NOT_BOUND,
+        }),
+        "未绑 QQ 时拒绝体额外带 code"
+    );
+    assert_eq!(checkin_count(&db, 33).await, 0, "门不应触达写路径");
+    // 绑定后放行。
+    bind_qq(&db, 33, "open-33").await;
+    let response = send_post(&app, "", Some("Bearer pat-post-checkin-unbound")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(true), "{body}");
+    assert_eq!(body["message"], json!(MSG_CHECKED_IN), "{body}");
+    assert_eq!(checkin_count(&db, 33).await, 1);
+    assert_eq!(stored_quota(&db, 33).await, 7_777);
+
+    // ---- 区间宽度与反向区间 ------------------------------------------------
+    // 换成未签到的新用户，否则重复预判先命中。
+    set_option(&db, "checkin_setting.require_qq_bound", "0").await;
+    set_option(&db, "checkin_setting.min_quota", "1000").await;
+    set_option(&db, "checkin_setting.max_quota", "10000").await;
+    seed_checkin_user(&db, 34, "pat-post-checkin-wide", 0).await;
+    let response = send_post(&app, "", Some("Bearer pat-post-checkin-wide")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(true), "{body}");
+    let awarded = body["data"]["quota_awarded"]
+        .as_i64()
+        .expect("integer award");
+    assert!(
+        (1_000..=10_000).contains(&awarded),
+        "award {awarded} outside the configured range"
+    );
+    assert_eq!(today_award(&db, 34, &today).await, Some(awarded));
+    assert_eq!(stored_quota(&db, 34).await, awarded);
+
+    // 反向区间被钳成相等：Go `maxQuota < minQuota` 时 `maxQuota = minQuota`。
+    set_option(&db, "checkin_setting.min_quota", "3000").await;
+    set_option(&db, "checkin_setting.max_quota", "1000").await;
+    seed_checkin_user(&db, 35, "pat-post-checkin-reverse", 0).await;
+    let response = send_post(&app, "", Some("Bearer pat-post-checkin-reverse")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(true), "{body}");
+    assert_eq!(body["data"]["quota_awarded"], json!(3_000));
+    assert_eq!(stored_quota(&db, 35).await, 3_000);
+
+    // ---- Turnstile 未启用时不设卡 ------------------------------------------
+    // `AppState::default()` 的 turnstile_check_enabled 为 false，因此不带
+    // token 也放行；开启态的行为由 login 的既有用例覆盖。
+    seed_checkin_user(&db, 36, "pat-post-checkin-turnstile", 0).await;
+    let response = send_post(
+        &app,
+        "turnstile=",
+        Some("Bearer pat-post-checkin-turnstile"),
+    )
+    .await;
+    // 该格区间已被钳成相等（min=3000 / max=1000），发放值可完全写死。
+    assert_eq!(
+        body_json(response).await,
+        json!({
+            "success": true,
+            "message": MSG_CHECKED_IN,
+            "data": {
+                "quota_awarded": 3_000,
+                "quota_awarded_display": display(3_000),
+            },
+        }),
+        "an empty turnstile token is ignored while the check is disabled"
+    );
+    assert_eq!(stored_quota(&db, 36).await, 3_000);
+
+    // ---- 鉴权 ------------------------------------------------------------
+    let response = send_post(&app, "", None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn sqlite_checkin_routes_contract() {
     let pool = SqlitePoolOptions::new()
@@ -563,6 +870,70 @@ async fn postgres_checkin_routes_contract() {
         .await
         .expect("connect isolated PostgreSQL pool");
     run_contract(Database::Postgres(pool)).await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA \"{schema}\" CASCADE"
+    )))
+    .execute(&admin)
+    .await
+    .expect("drop isolated schema");
+    admin.close().await;
+}
+
+#[tokio::test]
+async fn sqlite_post_checkin_contract() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite fixture");
+    run_post_contract(Database::Sqlite(pool)).await;
+}
+
+#[tokio::test]
+async fn postgres_post_checkin_contract() {
+    let Ok(dsn) = std::env::var("TEST_POSTGRES_DSN") else {
+        return;
+    };
+    let options: PgConnectOptions = dsn
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid PostgreSQL fixture config"));
+    let options = options.disable_statement_logging();
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .expect("connect PostgreSQL fixture");
+    let schema = format!(
+        "checkin_post_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    assert!(
+        schema
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA \"{schema}\"")))
+        .execute(&admin)
+        .await
+        .expect("create isolated schema");
+    let search_path = schema.clone();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(move |connection, _| {
+            let path = search_path.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(path)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await
+        .expect("connect isolated PostgreSQL pool");
+    run_post_contract(Database::Postgres(pool)).await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA \"{schema}\" CASCADE"
     )))
