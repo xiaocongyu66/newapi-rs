@@ -287,6 +287,7 @@ async fn today_award(db: &Database, user_id: i64, today: &str) -> Option<i64> {
         .fetch_optional(pool)
         .await
         .expect("today award")
+        .flatten()
     })
 }
 

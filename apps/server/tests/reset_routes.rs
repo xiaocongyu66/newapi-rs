@@ -48,7 +48,18 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 /// token，两条用例会互相 `delete`/重读对方的一次性 code：一条先重置成功
 /// 删掉 key，另一条随之把"已删除"误判成自己的成功路径。串行化后每条用例
 /// 独享该 map，且与 Go 无关——Go 侧同一进程同样只有一个 map。
-static CONTRACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static CONTRACT_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+/// 取互斥锁。用 `tokio::sync::Mutex` 而不是 `std::sync::Mutex`：guard 要活过
+/// 整个 fixture 的 `await`，而 `#[tokio::test]` 的 current-thread runtime 上
+/// 阻塞 std 锁有把 runtime 卡死的真实风险（clippy 的 `await_holding_lock`
+/// 拦的正是这个）。
+async fn contract_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    CONTRACT_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
 
 const SECRET: &str = "reset-routes-fixture-secret";
 
@@ -374,9 +385,7 @@ async fn run_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_reset_routes_contract() {
-    let _guard = CONTRACT_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = contract_lock().await;
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -389,9 +398,7 @@ async fn sqlite_reset_routes_contract() {
 
 #[tokio::test]
 async fn postgres_reset_routes_contract() {
-    let _guard = CONTRACT_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = contract_lock().await;
     let Ok(dsn) = std::env::var("TEST_POSTGRES_DSN") else {
         return;
     };
