@@ -256,12 +256,14 @@ async fn seed_unbind_record(db: &Database, user_id: i64, unbind_at: i64) {
     });
 }
 
-/// `CAST(used AS BIGINT)`：SQLite 的 `used` 是 INTEGER、PostgreSQL 的 fixture
-/// 是 BOOLEAN（INT4 语义），都读成同一个 i64（0/1），省一套方言分支。
+/// `used` 的双后端统一：SQLite 是 INTEGER、PG fixture 是 BOOLEAN，而 PG
+/// 拒绝 boolean→bigint 直转（42846），须先转 integer 再提升 bigint；
+/// SQLite 的 CAST(… AS BIGINT) 按 INTEGER 亲和性等价穿过。两层转换在两个
+/// 驱动上都合法，省一套方言分支。
 async fn code_rows(db: &Database, user_id: i64) -> Vec<(String, i64, i64)> {
     backend!(db, pool, {
         sqlx::query_as::<_, (String, i64, i64)>(
-            "SELECT code, CAST(used AS BIGINT), expired_at \
+            "SELECT code, CAST(CAST(used AS INTEGER) AS BIGINT), expired_at \
              FROM qq_bind_codes WHERE user_id = $1",
         )
         .bind(user_id)
