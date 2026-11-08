@@ -95,7 +95,7 @@ pub async fn checkin_status(
     let display = state.quota_display();
     Json(json!({
         "success": true,
-        "data": checkin_data(&settings, &stats, display),
+        "data": checkin_data(&settings, &stats, &display),
     }))
     .into_response()
 }
@@ -267,7 +267,7 @@ async fn turnstile_gate(
 fn checkin_data(
     settings: &CheckinSettings,
     stats: &CheckinStats,
-    display: QuotaDisplaySettings,
+    display: &QuotaDisplaySettings,
 ) -> Value {
     json!({
         "enabled": settings.enabled,
@@ -281,7 +281,7 @@ fn checkin_data(
 }
 
 /// Go `GetUserCheckinStats` 返回的 map：累计量先加总再换算展示值。
-fn stats_data(stats: &CheckinStats, display: QuotaDisplaySettings) -> Value {
+fn stats_data(stats: &CheckinStats, display: &QuotaDisplaySettings) -> Value {
     let records: Vec<Value> = stats
         .records
         .iter()
@@ -298,7 +298,7 @@ fn stats_data(stats: &CheckinStats, display: QuotaDisplaySettings) -> Value {
 }
 
 /// Go `CheckinRecord`：不含 `id` / `user_id`。
-fn record_data(record: &CheckinRecord, display: QuotaDisplaySettings) -> Value {
+fn record_data(record: &CheckinRecord, display: &QuotaDisplaySettings) -> Value {
     json!({
         "checkin_date": record.checkin_date,
         "quota_awarded": record.quota_awarded,

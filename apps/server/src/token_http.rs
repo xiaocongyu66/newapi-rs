@@ -284,7 +284,7 @@ pub async fn list_tokens(
     let display = state.quota_display();
     let items: Vec<Value> = tokens
         .iter()
-        .map(|token| masked_token_json(token, display))
+        .map(|token| masked_token_json(token, &display))
         .collect();
     Json(json!({
         "success": true,
@@ -366,7 +366,7 @@ pub async fn search_tokens(
     let display = state.quota_display();
     let items: Vec<Value> = tokens
         .iter()
-        .map(|token| masked_token_json(token, display))
+        .map(|token| masked_token_json(token, &display))
         .collect();
     Json(json!({
         "success": true,
@@ -734,7 +734,7 @@ pub async fn delete_token(
     }
 }
 
-fn masked_token_json(token: &TokenRecord, display: QuotaDisplaySettings) -> Value {
+fn masked_token_json(token: &TokenRecord, display: &QuotaDisplaySettings) -> Value {
     json!({
         "id": token.id,
         "user_id": token.user_id,
