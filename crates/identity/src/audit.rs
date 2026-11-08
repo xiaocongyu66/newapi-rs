@@ -207,20 +207,9 @@ pub async fn record_manage_audit(
         params.insert("target_user_id".to_owned(), json_i64(target_user_id));
         op.insert("params".to_owned(), Value::Object(params));
     }
-    let mut admin_info = Map::new();
-    admin_info.insert("admin_id".to_owned(), json_i64(operator.user_id));
-    admin_info.insert(
-        "admin_username".to_owned(),
-        Value::String(operator.username.to_owned()),
-    );
-    admin_info.insert("admin_role".to_owned(), json_i64(operator.role));
-    admin_info.insert(
-        "auth_method".to_owned(),
-        Value::String(operator.auth_method.to_owned()),
-    );
     let mut other = Map::new();
     other.insert("op".to_owned(), Value::Object(op));
-    other.insert("admin_info".to_owned(), Value::Object(admin_info));
+    other.insert("admin_info".to_owned(), admin_info_object(operator));
     let other = serde_json::to_string(&Value::Object(other)).unwrap_or_default();
 
     let content = audit_content_en(action);
@@ -264,7 +253,145 @@ pub async fn record_manage_audit(
     }
 }
 
+/// Go `finishAdminAudit`（`security/audit_access.go:83-147`）的路由兜底审计：
+/// 所有经过 `AdminAuth`/`RootAuth` 的写操作，只要 handler 没有用
+/// `MarkAuditLogged` 埋点，就在响应之后记录一条管理审计日志（写方法才会被
+/// `beginAdminAudit` 捕获响应，因此 GET 不产生兜底记录）。
+///
+/// 与 [`record_manage_audit`] 的差别正是 Go 里这两条路径的差别：
+/// - `op.params` 只有 action 未命中 `auditRouteActions`（退回 `generic`）时才写
+///   `method`/`route`；命中固定 action 的兜底记录 `other.op` 只有 `action`。
+/// - 额外写 `other.audit_info`（`method`/`route`/`path`/`status`/`success`，
+///   路由参数按 `c.Params()` 原样以字符串给出），供前端取原始路由与结果。
+/// - `content` 是 `method + " " + route`，不走 `auditContentEN` 模板。
+///
+/// Go 把这条写入丢进 `gopool.Go`，本端口在 handler 内 `await`：落库时机晚于
+/// 响应之外的一切都可观察结果（一行 type=3 的日志）相同，失败仅告警。
+pub struct RouteAudit<'a> {
+    pub operator: &'a AuditOperator<'a>,
+    /// 命中的固定 action；未命中时 Go 用 `generic`。
+    pub action: &'a str,
+    /// 请求方法，如 `DELETE`。
+    pub method: &'a str,
+    /// Go `c.FullPath()` 注册路由模板，如 `/api/user/:id/oauth/bindings/:provider_id`。
+    pub route: &'a str,
+    /// Go `c.Path()` 实际请求路径，如 `/api/user/2/oauth/bindings/7`。
+    pub path: &'a str,
+    /// 响应状态；Go 的 `c.ResponseStatus()`。本端口四个绑定端点恒为 200。
+    pub status: u16,
+    /// 业务是否成功：等价 Go `auditResponseSuccess` 解析响应体 `success` 字段。
+    pub success: bool,
+    /// Go `c.Params()`：路由参数，字符串值，按参数名有序。
+    pub route_params: Vec<(&'a str, String)>,
+    /// 解析后的客户端 IP。
+    pub ip: &'a str,
+    pub now: i64,
+}
+
+pub async fn record_route_audit(db: &Database, audit: RouteAudit<'_>) {
+    let RouteAudit {
+        operator,
+        action,
+        method,
+        route,
+        path,
+        status,
+        success,
+        route_params,
+        ip,
+        now,
+    } = audit;
+
+    let mut op = Map::new();
+    op.insert("action".to_owned(), Value::String(action.to_owned()));
+    if action == "generic" {
+        // Go 的兜底分支只给未登记 action 带上 method/route，前端据此展示
+        // "METHOD route"；已登记 action 的 `op` 不带 params 键。
+        op.insert("method".to_owned(), Value::String(method.to_owned()));
+        op.insert("route".to_owned(), Value::String(route.to_owned()));
+    }
+    let admin_info = admin_info_object(operator);
+    let mut audit_info = Map::new();
+    audit_info.insert("method".to_owned(), Value::String(method.to_owned()));
+    audit_info.insert("route".to_owned(), Value::String(route.to_owned()));
+    audit_info.insert("path".to_owned(), Value::String(path.to_owned()));
+    audit_info.insert("status".to_owned(), json_u64(u64::from(status)));
+    audit_info.insert("success".to_owned(), Value::Bool(success));
+    if !route_params.is_empty() {
+        let mut params = Map::new();
+        for (key, value) in route_params {
+            params.insert((*key).to_owned(), Value::String(value));
+        }
+        audit_info.insert("params".to_owned(), Value::Object(params));
+    }
+    let mut other = Map::new();
+    other.insert("op".to_owned(), Value::Object(op));
+    other.insert("admin_info".to_owned(), admin_info);
+    other.insert("audit_info".to_owned(), Value::Object(audit_info));
+    let other = serde_json::to_string(&Value::Object(other)).unwrap_or_default();
+
+    // Go `content := method + " " + route`（`audit_access.go:131`）。
+    let content = format!("{method} {route}");
+    let request_id = fresh_request_id();
+    let is_stream = false;
+    let result = match db {
+        Database::Sqlite(pool) => sqlx::query(MANAGE_AUDIT_INSERT)
+            .bind(operator.user_id)
+            .bind(now)
+            .bind(LOG_TYPE_MANAGE)
+            .bind(&content)
+            .bind(operator.username)
+            .bind(is_stream)
+            .bind(ip)
+            .bind(&request_id)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(MANAGE_AUDIT_INSERT)
+            .bind(operator.user_id)
+            .bind(now)
+            .bind(LOG_TYPE_MANAGE)
+            .bind(&content)
+            .bind(operator.username)
+            .bind(is_stream)
+            .bind(ip)
+            .bind(&request_id)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+    };
+    if let Err(error) = result {
+        // 不转述数据库错误文本；兜底审计失败不能改变响应。
+        tracing::warn!(
+            event = "route_audit_failed",
+            category = error_category(&error),
+            "failed to record route audit log"
+        );
+    }
+}
+
+fn admin_info_object(operator: &AuditOperator<'_>) -> Value {
+    let mut admin_info = Map::new();
+    admin_info.insert("admin_id".to_owned(), json_i64(operator.user_id));
+    admin_info.insert(
+        "admin_username".to_owned(),
+        Value::String(operator.username.to_owned()),
+    );
+    admin_info.insert("admin_role".to_owned(), json_i64(operator.role));
+    admin_info.insert(
+        "auth_method".to_owned(),
+        Value::String(operator.auth_method.to_owned()),
+    );
+    Value::Object(admin_info)
+}
+
 fn json_i64(value: i64) -> Value {
+    Value::Number(value.into())
+}
+
+fn json_u64(value: u64) -> Value {
     Value::Number(value.into())
 }
 
