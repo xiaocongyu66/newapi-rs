@@ -317,20 +317,60 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 }
 
 impl UserSetting {
-    /// Go `User.GetSetting`：无法解析时记录日志并使用零值设置，不部分采用。
-    /// `encoding/json` 把 null 视为目标字段的零值，因此先剔除 null 键再解码，
-    /// 非 null 的类型错误才整体回退为零值设置。
+    /// Go `User.GetSetting`（`store_users.go:165-174`）：解析失败只记录日志，
+    /// 返回**部分采用**的设置而非整体回退。Go 的 `encoding/json` 在某个字段
+    /// 的 JSON 类型不匹配时跳过该字段、继续解码其余字段（结尾才报告
+    /// `UnmarshalTypeError`），因此 `sidebar_modules` 被存成对象这类坏行不
+    /// 会丢弃 `upstream_model_update_notify_enabled` 等其余字段。serde 默认
+    /// 全有或无，这里按字段单独解码以复刻 Go 的部分采用；`null` 与缺键同样
+    /// 视为零值（`encoding/json` 对 null 的定义）。
     pub fn from_json(raw: &str) -> Self {
-        let Ok(Value::Object(mut object)) = serde_json::from_str::<Value>(raw) else {
+        let Ok(Value::Object(object)) = serde_json::from_str::<Value>(raw) else {
             return Self::default();
         };
-        object.retain(|_, value| !value.is_null());
-        serde_json::from_value(Value::Object(object)).unwrap_or_default()
+        UserSetting {
+            notify_type: setting_field(&object, "notify_type"),
+            quota_warning_threshold: setting_field(&object, "quota_warning_threshold"),
+            webhook_url: setting_field(&object, "webhook_url"),
+            webhook_secret: setting_field(&object, "webhook_secret"),
+            notification_email: setting_field(&object, "notification_email"),
+            bark_url: setting_field(&object, "bark_url"),
+            gotify_url: setting_field(&object, "gotify_url"),
+            gotify_token: setting_field(&object, "gotify_token"),
+            gotify_priority: setting_field(&object, "gotify_priority"),
+            upstream_model_update_notify_enabled: setting_field(
+                &object,
+                "upstream_model_update_notify_enabled",
+            ),
+            accept_unset_model_ratio_model: setting_field(
+                &object,
+                "accept_unset_model_ratio_model",
+            ),
+            record_ip_log: setting_field(&object, "record_ip_log"),
+            sidebar_modules: setting_field(&object, "sidebar_modules"),
+            billing_preference: setting_field(&object, "billing_preference"),
+            language: setting_field(&object, "language"),
+        }
     }
 
     /// Go `json.Marshal(dto.UserSetting)`；结构与字段均为可序列化原语。
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("user setting is always serializable")
+    }
+}
+
+/// Decode one `dto.UserSetting` field the way Go's `encoding/json` does when
+/// the stored value does not fit the target type: skip it and keep the zero
+/// value instead of failing the whole struct decode.
+fn setting_field<T>(object: &serde_json::Map<String, Value>, key: &str) -> T
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    match object.get(key) {
+        Some(value) if !value.is_null() => {
+            serde_json::from_value(value.clone()).unwrap_or_default()
+        }
+        _ => T::default(),
     }
 }
 

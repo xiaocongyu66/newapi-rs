@@ -314,3 +314,9 @@ impl AuthService {
 **引擎差异（已知，须保留）**：签到月份窗口的字符串区间在 SQLite(BINARY) 与 Postgres(glibc, LANG=en_US.UTF-8) 之间不同——同一 SQL、不同排序规则。若未来 CI Postgres 镜像改用 C/ICU 排序规则，`expected_records` 的 PG 分支需同步复核。
 
 本节 SHA/CI 绑定在推送后回填。
+
+### 8.8 2026-11-08 用户设置解析按 Go 部分采用（实现缺陷）（远程证据待回填）
+
+`UserSetting::from_json`（`crates/identity/src/users.rs`）此前用 serde 的全有或无语义：任何字段类型不匹配就整体回退到零值设置，注释称“不部分采用”。这与 Go 不符：Go `User.GetSetting`（`store_users.go:165-174`）忽略 `json.Unmarshal` 的错误返回部分解码结果，而 `encoding/json` 对字段类型不匹配的规定是“跳过该字段、尽可能解码其余字段、结尾才报告 `UnmarshalTypeError`”。真实影响：`PUT /api/user/setting` 与 `PUT /api/user/self` 对已存 `sidebar_modules` 为对象（前端写入形态）的用户，会把 `upstream_model_update_notify_enabled` 等其余字段静默清零——普通角色因此无法保留管理员专属开关（`manage_users.go:1457-1461` 的 carry-over），`PUT /api/user/self` 的读-改-写会整体抹掉其它设置。已改为按字段单独解码，类型不匹配的字段留零值、其余照常采用；`null` 与缺键仍为零值，JSON 非对象仍整体为零值。测试侧 `setting_routes.rs` 的“普通角色发 false 仍保留 stored true”用例（Go 依据同上）随之通过。
+
+本节 SHA/CI 绑定在推送后回填。
