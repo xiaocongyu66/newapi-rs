@@ -71,7 +71,7 @@ fn state(db: &Database) -> AppState {
     AppState::default().bind_runtime(db.clone(), SECRET)
 }
 
-async fn exec(db: &Database, statement: &str) {
+async fn exec(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         sqlx::query(statement)
             .execute(pool)
