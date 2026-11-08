@@ -142,6 +142,75 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // QQ 绑定路由（`register_api.go:193-197`，紧跟 checkin 之后注册）：
+    // - `GET /qq/bind`：`selfRoute` 组内纯 `UserAuth`，无限流、无 DisableCache。
+    // - `POST /qq/bind/code`：`UserAuth → CriticalRateLimit → DisableCache`。
+    //   429 与 Redis 故障（500）都在 DisableCache 之前产生，不带缓存头。
+    // - `DELETE /qq/bind`：`UserAuth → CriticalRateLimit`，**无** DisableCache。
+    // - `POST /qq/panel/sync`：`selfRoute` 组级 `UserAuth` → 路由级
+    //   `security.AdminAuth()` → `CriticalRateLimit`，同样无 DisableCache。
+    //   与 admin 2FA 那两条不同（它们在 `userRoute` 直下、没有组级 UserAuth），
+    //   这里的 `AdminAuth` 是叠加在 `UserAuth` 之上的角色门；两者对同一凭据
+    //   的判定同序（状态 → 角色 → 用户信息），只是最低角色从 1 提到 10。
+    let qq_bind_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/qq/bind", get(crate::qq_bind_http::bind_status))
+            .route_layer(middleware::from_fn_with_state(
+                qq_bind_state,
+                crate::auth::user_auth,
+            )),
+    );
+    let qq_code_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/qq/bind/code",
+                post(crate::qq_bind_http::generate_bind_code),
+            )
+            .route_layer(middleware::from_fn(qq_disable_cache_guard))
+            .route_layer(middleware::from_fn_with_state(
+                qq_code_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                qq_code_state,
+                crate::auth::user_auth,
+            )),
+    );
+    let qq_unbind_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/qq/bind", delete(crate::qq_bind_http::unbind))
+            .route_layer(middleware::from_fn_with_state(
+                qq_unbind_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                qq_unbind_state,
+                crate::auth::user_auth,
+            )),
+    );
+    let qq_panel_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/qq/panel/sync",
+                post(crate::qq_bind_http::sync_panel),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                qq_panel_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                qq_panel_state.clone(),
+                crate::auth::admin_auth,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                qq_panel_state,
+                crate::auth::user_auth,
+            )),
+    );
     // 四条报价路由：Go `selfRoute` 组内纯 `UserAuth`（`/api/user/amount` 一线
     // 同样无限流）。响应是裸 `common.H` 包裹而非 `CtxApiSuccess`，详见
     // `amount_http` 的模块注释。
@@ -756,6 +825,15 @@ async fn critical_guard(State(state): State<AppState>, request: Request, next: N
         }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+/// `POST /api/user/qq/bind/code` 的 Go `middleware.DisableCache()`：在
+/// CriticalRateLimit 之后用 `SetHeader` 覆写三个 no-cache 头，只影响 handler
+/// 的 200 响应；限流产生的 429/500 在本层之前，不带缓存头。
+async fn qq_disable_cache_guard(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    disable_cache_headers(&mut response);
+    response
 }
 
 /// refresh/logout 的保护链，复刻 Go 注册顺序：

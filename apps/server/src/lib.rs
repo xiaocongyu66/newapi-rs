@@ -16,6 +16,8 @@ pub mod limit;
 pub mod limit_redis;
 mod login_http;
 pub mod oauth_bindings_http;
+pub mod qq_bind_http;
+pub mod qqbot;
 pub mod register_http;
 pub mod request_lang;
 pub mod reset_http;
