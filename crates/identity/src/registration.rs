@@ -559,22 +559,19 @@ impl RegistrationRepository {
 
     async fn update_setting(&self, user_id: i64, setting: &str) -> Result<(), sqlx::Error> {
         match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(FINISH_UPDATE_SETTING)
-                    .bind(setting)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(FINISH_UPDATE_SETTING)
-                    .bind(setting)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await
-            }
+            Database::Sqlite(pool) => sqlx::query(FINISH_UPDATE_SETTING)
+                .bind(setting)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Postgres(pool) => sqlx::query(FINISH_UPDATE_SETTING)
+                .bind(setting)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
         }
-        .map(|_| ())
     }
 
     /// Go `IncreaseUserQuota(id, quota, true)` 的直接分支：行级
@@ -582,22 +579,19 @@ impl RegistrationRepository {
     /// 与模块头注释一致，不补。
     async fn increase_quota(&self, user_id: i64, quota: i64) -> Result<(), sqlx::Error> {
         match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(INCREASE_QUOTA)
-                    .bind(quota)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(INCREASE_QUOTA)
-                    .bind(quota)
-                    .bind(user_id)
-                    .execute(pool)
-                    .await
-            }
+            Database::Sqlite(pool) => sqlx::query(INCREASE_QUOTA)
+                .bind(quota)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Postgres(pool) => sqlx::query(INCREASE_QUOTA)
+                .bind(quota)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
         }
-        .map(|_| ())
     }
 
     /// Go `inviteUser`：`aff_count` 总是 +1；仅当邀请额度奖励实际发放
@@ -605,34 +599,29 @@ impl RegistrationRepository {
     /// `gorm.Expr` 按条件加入列；amount == 0 时等价于只更新 aff_count。
     async fn invite_user(&self, inviter_id: i64, amount: i64) -> Result<(), sqlx::Error> {
         match &self.db {
-            Database::Sqlite(pool) if amount > 0 => {
-                sqlx::query(INVITE_USER)
-                    .bind(amount)
-                    .bind(inviter_id)
-                    .execute(pool)
-                    .await
-            }
-            Database::Sqlite(pool) => {
-                sqlx::query(INVITE_USER_COUNT_ONLY)
-                    .bind(inviter_id)
-                    .execute(pool)
-                    .await
-            }
-            Database::Postgres(pool) if amount > 0 => {
-                sqlx::query(INVITE_USER)
-                    .bind(amount)
-                    .bind(inviter_id)
-                    .execute(pool)
-                    .await
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(INVITE_USER_COUNT_ONLY)
-                    .bind(inviter_id)
-                    .execute(pool)
-                    .await
-            }
+            Database::Sqlite(pool) if amount > 0 => sqlx::query(INVITE_USER)
+                .bind(amount)
+                .bind(inviter_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Sqlite(pool) => sqlx::query(INVITE_USER_COUNT_ONLY)
+                .bind(inviter_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Postgres(pool) if amount > 0 => sqlx::query(INVITE_USER)
+                .bind(amount)
+                .bind(inviter_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Postgres(pool) => sqlx::query(INVITE_USER_COUNT_ONLY)
+                .bind(inviter_id)
+                .execute(pool)
+                .await
+                .map(|_| ()),
         }
-        .map(|_| ())
     }
 
     async fn username_by_id(&self, user_id: i64) -> Option<String> {
