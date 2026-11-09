@@ -715,10 +715,12 @@ async fn run_contract(db: &Database) {
     assert_eq!(data[1]["quota_display"], serde_json::json!(2.0));
     assert_eq!(data[1]["channel"], serde_json::json!(5));
 
-    // A token id without rows is 200 + empty array, not an error.
+    // A token id without rows is 200 + empty array, not an error. token_id 0
+    // deterministically has no rows; other_token's own row stays out of the
+    // log_token result above.
     let response = send(
         &state(db),
-        &format!("/api/log/token?token_id={other_token}"),
+        "/api/log/token?token_id=0",
         Some("Bearer logkey"),
     )
     .await;
