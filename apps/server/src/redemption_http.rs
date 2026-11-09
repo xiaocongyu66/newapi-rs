@@ -372,7 +372,10 @@ pub async fn add_redemption(
     };
     let quota_display = request.quota_display.unwrap_or(0.0);
     if !quota_display.is_finite() {
-        // Go 的唯一非 200 分支：显式 400 + 未翻译字面量（含 NaN/Inf）。
+        // Go 的唯一非 200 分支：显式 400 + 未翻译字面量
+        // （`rejectNonFiniteDisplayAmount` 的防御位）。JSON 无法表达 NaN/Inf，
+        // 超出 f64 的指数在两端都先在绑定阶段失败（Go encoding/json 的
+        // ErrRange / serde_json 的 NumberOutOfRange），此分支保持与 Go 同构。
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"success": false, "message": MSG_INVALID_QUOTA})),

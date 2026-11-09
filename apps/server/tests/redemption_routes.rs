@@ -53,7 +53,6 @@ const MSG_NAME_LENGTH: &str = "Redemption code name length must be between 1-20"
 const MSG_COUNT_POSITIVE: &str = "Redemption code count must be greater than 0";
 const MSG_COUNT_MAX: &str = "Maximum 100 redemption codes can be generated at once";
 const MSG_EXPIRE_TIME_INVALID: &str = "Expiration time cannot be earlier than current time";
-const MSG_INVALID_QUOTA: &str = "invalid quota";
 
 const USERS_SQLITE: &str = r#"CREATE TABLE users (
     id INTEGER PRIMARY KEY, username TEXT, display_name TEXT,
@@ -350,6 +349,28 @@ async fn send(
         .unwrap()
 }
 
+/// 原始字节体：发 `1e400` 这类 `json!` 无法表达的 JSON 数字字面量。
+async fn send_raw(
+    state: &AppState,
+    method: Method,
+    path: &str,
+    authorization: &str,
+    body: &'static [u8],
+) -> Response {
+    router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::AUTHORIZATION, authorization)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
 async fn body_json(response: Response) -> Value {
     let bytes = to_bytes(response.into_body(), 1024 * 1024)
         .await
@@ -411,20 +432,21 @@ async fn run_contract(db: Database) {
     confirm_compliance(&db).await;
 
     // ---- AddRedemption -----------------------------------------------------
-    // 非有限额度：Go 唯一的 400 分支，消息为未翻译字面量。
-    let response = send(
-        &app,
-        Method::POST,
-        "/api/redemption/",
-        Some(&admin),
-        Some(&json!({"name":"gift","count":1,"quota_display":1e400})),
+    // 超出 f64 的指数：Go encoding/json（ErrRange）与 serde_json
+    // （NumberOutOfRange）都在绑定阶段失败，handler 回 invalid params。
+    let body = body_json(
+        send_raw(
+            &app,
+            Method::POST,
+            "/api/redemption/",
+            &admin,
+            br#"{"name":"gift","count":1,"quota_display":1e400}"#,
+        )
+        .await,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body_json(response).await["message"],
-        json!(MSG_INVALID_QUOTA)
-    );
+    assert_eq!(body["success"], json!(false));
+    assert_eq!(body["message"], json!(MSG_INVALID_PARAMS));
 
     // 名称为空或超过 20 个字符（按 rune 计数，不是字节）。
     for name in ["", "０１２３４５６７８９０１２３４５６７８９０１"] {
