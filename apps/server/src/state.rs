@@ -11,6 +11,7 @@ use newapi_config::SessionCookieSettings;
 use newapi_identity::auth_flow::auth_flow_key;
 use newapi_identity::auth_session::{AuthFence, SessionAuth};
 use newapi_identity::self_user::{QuotaDisplayKind, QuotaDisplaySettings};
+use newapi_identity::token_cache::RedisTokenCache;
 use newapi_security::client_ip::{ProxyPolicy, resolve_client_ip};
 use newapi_storage::Database;
 use tokio::sync::watch;
@@ -145,6 +146,8 @@ pub struct AppState {
     /// `GlobalAPIRateLimit`（mark "GA"）；未注入时不做限流（测试路径），
     /// 与 `rate_limiter` 的默认语义一致，未 bind 的 state 绝不产出 429。
     global_rate_limiter: Option<Arc<RateLimiter>>,
+    /// Go `common.RDB` 令牌缓存；未注入时所有缓存路径降级为直通（RedisEnabled=false）。
+    token_cache: Option<Arc<RedisTokenCache>>,
     anonymous_body_limit: usize,
 }
 
@@ -167,6 +170,7 @@ impl Default for AppState {
             rate_limiter: None,
             search_rate_limiter: None,
             global_rate_limiter: None,
+            token_cache: None,
             anonymous_body_limit: anonymous_body_limit_bytes(512),
         }
     }
@@ -229,6 +233,13 @@ impl AppState {
 
     pub fn bind_global_api_rate_limit(mut self, limiter: RateLimiter) -> Self {
         self.global_rate_limiter = Some(Arc::new(limiter));
+        self
+    }
+
+    /// 注入令牌 Redis 缓存（Go `track_token_cache.go`）；未注入的 state 保持
+    /// `common.RedisEnabled=false` 语义，所有缓存读/失效路径全部直通。
+    pub fn bind_token_cache(mut self, cache: Option<Arc<RedisTokenCache>>) -> Self {
+        self.token_cache = cache;
         self
     }
 
@@ -325,6 +336,11 @@ impl AppState {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// 令牌 Redis 缓存；未注入时 `TokenRepository` 走纯数据库路径。
+    pub fn token_cache(&self) -> Option<Arc<RedisTokenCache>> {
+        self.token_cache.clone()
     }
 
     /// SelfUser 组装用的额度展示设置（billing 快照 → identity 算术设置）。

@@ -123,6 +123,11 @@ fn router(state: AppState) -> Router {
             get(token_http::get_token).delete(token_http::delete_token),
         )
         .route("/api/token/{id}/key", post(token_http::get_token_key))
+        .route("/api/token/batch", post(token_http::delete_token_batch))
+        .route(
+            "/api/token/batch/keys",
+            post(token_http::get_token_keys_batch),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), user_auth))
         .with_state(state)
 }
@@ -1146,6 +1151,140 @@ async fn run_contract(db: Database) {
         )
         .await
         .unwrap();
+    assert_business_error(response, Some(translated("common.invalid_params"))).await;
+
+    // 批量删除与批量取键（Go `DeleteTokenBatch`/`GetTokenKeysBatch`）。
+    reset(&db).await;
+    seed_user(&db, USER_A, "default", pat_a).await;
+    seed_user(&db, USER_B, "default", pat_b).await;
+    let own1_key = key_for("own1", 10);
+    let own2_key = key_for("own2", 11);
+    let other_key = key_for("other", 12);
+    let own1 = seed_token(
+        &db, USER_A, &own1_key, "own1", 1, -1, 0, true, "default", "",
+    )
+    .await;
+    let own2 = seed_token(
+        &db, USER_A, &own2_key, "own2", 1, -1, 0, true, "default", "",
+    )
+    .await;
+    let other = seed_token(
+        &db, USER_B, &other_key, "other", 1, -1, 0, true, "default", "",
+    )
+    .await;
+
+    // 空体、非对象、`null`、缺字段与类型错误都走 invalid params。
+    for body in [
+        None,
+        Some(&json!({})),
+        Some(&json!({"ids": []})),
+        Some(&json!(null)),
+        Some(&json!([])),
+        Some(&json!({"ids": "not-a-list"})),
+    ] {
+        let response = send_json(&app, Method::POST, "/api/token/batch", Some(&auth_a), body).await;
+        assert_business_error(response, Some(translated("common.invalid_params"))).await;
+    }
+    // 类型错误同样拒绝（列表里的字符串）。
+    let response = send_json(
+        &app,
+        Method::POST,
+        "/api/token/batch",
+        Some(&auth_a),
+        Some(&json!({"ids": ["x"]})),
+    )
+    .await;
+    assert_business_error(response, Some(translated("common.invalid_params"))).await;
+
+    // 他人的 id 与不存在的 id 既不报错也不计入；删除是单事务全有全无。
+    let body = assert_success(
+        send_json(
+            &app,
+            Method::POST,
+            "/api/token/batch",
+            Some(&auth_a),
+            Some(&json!({"ids": [own1, other, 99999]})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["data"], json!(1), "只有自己的令牌被计入");
+    assert!(is_soft_deleted(&db, own1).await);
+    assert!(!is_soft_deleted(&db, own2).await);
+    assert!(!is_soft_deleted(&db, other).await);
+
+    // 批量取键：全量返回明文 key 且带 no-cache 头；不含他人与已软删令牌。
+    let response = send_json(
+        &app,
+        Method::POST,
+        "/api/token/batch/keys",
+        Some(&auth_a),
+        Some(&json!({"ids": [own1, own2, other]})),
+    )
+    .await;
+    assert_disable_cache(&response);
+    let body = assert_success(response).await;
+    let keys = body["data"]["keys"].as_object().expect("keys 是一个对象");
+    assert_eq!(keys.len(), 1, "他人与已软删令牌都不返回");
+    let own2_entry = own2.to_string();
+    assert_eq!(keys.get(own2_entry.as_str()), Some(&json!(own2_key)));
+    assert!(
+        !body.to_string().contains(&other_key),
+        "batch/keys 泄漏了他人令牌明文: {body}"
+    );
+
+    // 重复 id 只计一次。
+    let body = assert_success(
+        send_json(
+            &app,
+            Method::POST,
+            "/api/token/batch",
+            Some(&auth_a),
+            Some(&json!({"ids": [own2, own2]})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["data"], json!(1));
+    assert!(is_soft_deleted(&db, own2).await);
+
+    // 上限 100 条；错误响应仍带 no-cache 头。
+    let ids: Vec<i64> = (1..=101).collect();
+    let response = send_json(
+        &app,
+        Method::POST,
+        "/api/token/batch/keys",
+        Some(&auth_a),
+        Some(&json!({"ids": ids})),
+    )
+    .await;
+    assert_disable_cache(&response);
+    assert_business_error(response, Some(translated_max("common.batch_too_many", 100))).await;
+    // 批量删除没有 100 条上限。
+    let ids: Vec<i64> = (1..=101).collect();
+    let body = assert_success(
+        send_json(
+            &app,
+            Method::POST,
+            "/api/token/batch",
+            Some(&auth_a),
+            Some(&json!({"ids": ids})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["data"], json!(0), "全部 id 都不存在");
+
+    // batch/keys 的 invalid params 分支同样带 no-cache 头。
+    let response = send_json(
+        &app,
+        Method::POST,
+        "/api/token/batch/keys",
+        Some(&auth_a),
+        None,
+    )
+    .await;
+    assert_disable_cache(&response);
     assert_business_error(response, Some(translated("common.invalid_params"))).await;
 }
 

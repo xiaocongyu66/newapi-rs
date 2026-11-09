@@ -34,6 +34,7 @@ use newapi_identity::{
         TokenUpdate,
     },
 };
+use newapi_storage::Database;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -53,6 +54,7 @@ const MSG_EXHAUSTED_CANNOT_ENABLE: &str = "token.exhausted_cannot_enable";
 const MSG_AUTO_GROUPS_TOO_MANY: &str = "token.auto_groups_too_many";
 const MSG_AUTO_GROUPS_DUPLICATE: &str = "token.auto_groups_duplicate";
 const MSG_AUTO_GROUPS_INVALID: &str = "token.auto_groups_invalid";
+const MSG_BATCH_TOO_MANY: &str = "common.batch_too_many";
 
 // Go returns these as raw (untranslated) strings; the port translates them
 // through the same i18n keys stored in `crates/i18n/locales`.
@@ -256,6 +258,33 @@ fn parse_token_request(body: &[u8]) -> Option<TokenRequest> {
     }
 }
 
+/// Go `identity.TokenBatch`：批量请求体只认 `ids`；缺失、`null` 与空列表
+/// 统一由 handler 走 invalid params。
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TokenBatchRequest {
+    ids: Vec<i64>,
+}
+
+/// Go `c.BindJSON(&tokenBatch)`：与 `parse_token_request` 同一对边界规则。
+fn parse_token_batch(body: &[u8]) -> Option<TokenBatchRequest> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    match value {
+        Value::Null => Some(TokenBatchRequest::default()),
+        Value::Object(object) => serde_json::from_value(Value::Object(object)).ok(),
+        _ => None,
+    }
+}
+
+/// 构造带令牌缓存的仓储；state 未注入缓存时为纯数据库路径
+/// （Go `common.RedisEnabled=false`）。
+fn token_repository(state: &AppState, db: Database) -> TokenRepository {
+    match state.token_cache() {
+        Some(cache) => TokenRepository::new(db).with_token_cache(cache),
+        None => TokenRepository::new(db),
+    }
+}
+
 /// `GET /api/token/`.
 pub async fn list_tokens(
     State(state): State<AppState>,
@@ -267,7 +296,7 @@ pub async fn list_tokens(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let query = page_query(&uri);
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     let info = page_info(&query);
     let tokens = match repository
         .list_for_user(auth_user.0.user_id, info.offset, info.page_size)
@@ -310,7 +339,7 @@ pub async fn search_tokens(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let query = page_query(&uri);
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     let info = page_info(&query);
     let mut keyword = query.keyword.clone().unwrap_or_default();
     let mut key = query.token.clone().unwrap_or_default();
@@ -390,7 +419,7 @@ pub async fn token_auto_groups(
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     let runtime = match TokenRuntimeSettings::load(repository.database()).await {
         Ok(settings) => settings,
         Err(error) => return database_error(&headers, error),
@@ -437,7 +466,7 @@ pub async fn get_token(
         Ok(id) => id,
         Err(_) => return api_error(&headers, MSG_INVALID_PARAMS),
     };
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     match repository.by_id_for_user(auth_user.0.user_id, id).await {
         Ok(Some(token)) => success(Some(masked_token_json(&token, &state.quota_display()))),
         Ok(None) => api_error(&headers, MSG_NOT_FOUND),
@@ -471,7 +500,7 @@ async fn get_token_key_inner(
         Ok(id) => id,
         Err(_) => return api_error(headers, MSG_INVALID_PARAMS),
     };
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     match repository.by_id_for_user(auth_user.0.user_id, id).await {
         // Only this endpoint returns the unmasked key.
         Ok(Some(token)) => success(Some(json!({ "key": token.key }))),
@@ -493,7 +522,7 @@ pub async fn add_token(
     let Some(request) = parse_token_request(&body) else {
         return api_error(&headers, MSG_INVALID_PARAMS);
     };
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     let runtime = match TokenRuntimeSettings::load(repository.database()).await {
         Ok(settings) => settings,
         Err(error) => return database_error(&headers, error),
@@ -624,7 +653,7 @@ pub async fn update_token(
             return api_error_args(&headers, MSG_QUOTA_EXCEED_MAX, &[("Max", max.to_string())]);
         }
     }
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     let user_id = auth_user.0.user_id;
     let id = request.id.unwrap_or(0);
     let existing = match repository.by_id_for_user(user_id, id).await {
@@ -647,6 +676,9 @@ pub async fn update_token(
             return api_error(&headers, MSG_EXHAUSTED_CANNOT_ENABLE);
         }
     }
+    // Go `Token.Update`/`SelectUpdate`：写库前失效缓存并立栅栏，防止并发
+    // 读者把变更前的快照重新写回缓存；失败仅记录，不阻断业务。
+    repository.invalidate_cached(&existing.key).await;
     if status_only {
         match repository.update_status_for_user(user_id, id, status).await {
             Ok(true) => {}
@@ -726,11 +758,90 @@ pub async fn delete_token(
     // Go ignores the Atoi error, so a malformed id becomes 0 and then fails
     // the ownership lookup just like a missing row.
     let id = id.parse::<i64>().unwrap_or(0);
-    let repository = TokenRepository::new(db);
+    let repository = token_repository(&state, db);
     match repository.delete_for_user(auth_user.0.user_id, id).await {
         Ok(true) => success(None),
         Ok(false) => api_error(&headers, MSG_NOT_FOUND),
         Err(error) => database_error(&headers, error),
+    }
+}
+
+/// `POST /api/token/batch`（Go `DeleteTokenBatch`）：按用户批量软删除。
+/// 单事务全有全无；不存在的 id 与他人的 id 既不报错也不计入——Go 用
+/// `WHERE user_id` 过滤，响应 `data` 为实际删除条数，无逐条失败字段。
+pub async fn delete_token_batch(
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some(db) = state.db() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let Some(request) = parse_token_batch(&body) else {
+        return api_error(&headers, MSG_INVALID_PARAMS);
+    };
+    // Go：BindJSON 成功但 `len(ids) == 0` 同样走 invalid params。
+    if request.ids.is_empty() {
+        return api_error(&headers, MSG_INVALID_PARAMS);
+    }
+    let repository = token_repository(&state, db);
+    match repository
+        .delete_many_for_user(auth_user.0.user_id, &request.ids)
+        .await
+    {
+        Ok(count) => success(Some(json!(count))),
+        Err(error) => database_error(&headers, error),
+    }
+}
+
+/// `POST /api/token/batch/keys`（Go `GetTokenKeysBatch`）：批量取明文 key。
+/// Go 路由链为 `UserAuth → CriticalRateLimit → DisableCache → handler`，
+/// 因此 handler 的每个响应（含业务错误）都带三个 no-cache 头；超过 100 条
+/// 按 i18n 报错。
+pub async fn get_token_keys_batch(
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mut response = get_token_keys_batch_inner(&state, &auth_user, &headers, &body).await;
+    disable_cache_headers(&mut response);
+    response
+}
+
+async fn get_token_keys_batch_inner(
+    state: &AppState,
+    auth_user: &AuthenticatedUser,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Response {
+    let Some(db) = state.db() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let Some(request) = parse_token_batch(body) else {
+        return api_error(headers, MSG_INVALID_PARAMS);
+    };
+    if request.ids.is_empty() {
+        return api_error(headers, MSG_INVALID_PARAMS);
+    }
+    if request.ids.len() > 100 {
+        return api_error_args(headers, MSG_BATCH_TOO_MANY, &[("Max", "100".to_owned())]);
+    }
+    let repository = token_repository(state, db);
+    match repository
+        .keys_by_ids_for_user(auth_user.0.user_id, &request.ids)
+        .await
+    {
+        Ok(pairs) => {
+            // Go `map[int]string`：键为 id，值仅含当前用户未软删令牌的明文。
+            let mut keys = serde_json::Map::new();
+            for (id, key) in pairs {
+                keys.insert(id.to_string(), json!(key));
+            }
+            success(Some(json!({ "keys": Value::Object(keys) })))
+        }
+        Err(error) => database_error(headers, error),
     }
 }
 
@@ -1021,5 +1132,21 @@ mod tests {
         assert_eq!(body["key"], json!("abcd**********5678"));
         assert_eq!(body["auto_groups"], Value::Null);
         assert!(!body.to_string().contains(&token.key));
+    }
+
+    #[test]
+    fn token_batch_request_accepts_only_object_or_null() {
+        assert_eq!(
+            parse_token_batch(br#"{"ids":[1,2]}"#).unwrap().ids,
+            vec![1, 2]
+        );
+        // `null` 与缺失字段解码为零值；空列表由 handler 判 invalid params。
+        assert!(parse_token_batch(b"null").is_some());
+        assert!(parse_token_batch(b"{}").unwrap().ids.is_empty());
+        // 空体、非对象顶层与类型错误都失败。
+        assert!(parse_token_batch(b"").is_none());
+        assert!(parse_token_batch(b"[]").is_none());
+        assert!(parse_token_batch(br#"{"ids":"nope"}"#).is_none());
+        assert!(parse_token_batch(br#"{"ids":["x"]}"#).is_none());
     }
 }

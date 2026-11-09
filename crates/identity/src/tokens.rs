@@ -1,13 +1,16 @@
 //! JWT 编码与用途隔离；时间由调用方注入，禁止读取隐式系统时钟。
+use std::sync::Arc;
+
 use base64::{Engine, alphabet, engine::general_purpose};
 use hmac::Mac;
 use newapi_storage::Database;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row};
 
 use crate::crypto::{AuthKeys, HmacSha256, equal, mac, random_uuid};
 use crate::self_user::{QuotaDisplayKind, QuotaDisplaySettings};
+use crate::token_cache::RedisTokenCache;
 use crate::{AuthError, AuthIdentity, CredentialKind, SecretString};
 
 pub const ACCESS_TTL: i64 = 900;
@@ -733,14 +736,97 @@ macro_rules! decode_token {
     }};
 }
 
+/// 生成 `IN (…)` 的占位符列表；宏在具类型调用点展开，占位符形式由
+/// `QueryBuilder` 按驱动处理，业务值一律绑定、不拼字符串。
+macro_rules! push_id_list {
+    ($query:expr, $ids:expr) => {{
+        let query = $query;
+        let ids: &[i64] = $ids;
+        query.push("(");
+        for (index, id) in ids.iter().enumerate() {
+            if index > 0 {
+                query.push(",");
+            }
+            query.push_bind(*id);
+        }
+        query.push(")");
+    }};
+}
+
+/// 把按用户批量软删除的事务体按驱动各展开一份；先在同事务内读出待删令牌
+/// 的明文 key（供缓存失效），再 `UPDATE deleted_at`，最后提交。任何错误
+/// 都回滚，缓存失效失败除外（与 Go 的顺序与容忍度一致）。
+macro_rules! batch_delete_transaction {
+    ($pool:expr, $cache:expr, $user_id:expr, $ids:expr) => {{
+        let user_id: i64 = $user_id;
+        let ids: &[i64] = $ids;
+        let mut transaction = $pool.begin().await?;
+        let outcome: Result<usize, sqlx::Error> = async {
+            let mut select = QueryBuilder::new(
+                "SELECT CAST(id AS BIGINT) AS id, \"key\" FROM tokens WHERE user_id = ",
+            );
+            select.push_bind(user_id);
+            select.push(" AND deleted_at IS NULL AND id IN (");
+            push_id_list!(&mut select, ids);
+            select.push(")");
+            let mut keys = Vec::new();
+            for row in select.build().fetch_all(&mut *transaction).await? {
+                keys.push((
+                    row.try_get::<Option<i64>, _>("id")?.unwrap_or_default(),
+                    row.try_get::<Option<String>, _>("key")?.unwrap_or_default(),
+                ));
+            }
+            if let Some(cache) = $cache.as_ref() {
+                let only_keys: Vec<String> =
+                    keys.iter().map(|(_, key)| key.clone()).collect();
+                if let Err(error) = cache.invalidate_many(&only_keys).await {
+                    tracing::warn!(
+                        event = "token_cache_invalidate_failed",
+                        category = %error,
+                        "failed to invalidate token cache before batch delete"
+                    );
+                }
+            }
+            let mut delete = QueryBuilder::new(
+                "UPDATE tokens SET deleted_at=CURRENT_TIMESTAMP WHERE user_id = ",
+            );
+            delete.push_bind(user_id);
+            delete.push(" AND deleted_at IS NULL AND id IN (");
+            push_id_list!(&mut delete, ids);
+            delete.push(")");
+            delete.build().execute(&mut *transaction).await?;
+            Ok(keys.len())
+        }
+        .await;
+        match outcome {
+            Ok(count) => {
+                transaction.commit().await?;
+                Ok(count)
+            }
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                Err(error)
+            }
+        }
+    }};
+}
+
 #[derive(Clone)]
 pub struct TokenRepository {
     db: Database,
+    /// Go `common.RedisEnabled`：未注入时所有缓存路径降级为直通，仅查数据库。
+    cache: Option<Arc<RedisTokenCache>>,
 }
 
 impl TokenRepository {
     pub fn new(db: Database) -> Self {
-        Self { db }
+        Self { db, cache: None }
+    }
+
+    /// 注入令牌 Redis 缓存；未注入等价于 Go 的 `common.RedisEnabled=false`。
+    pub fn with_token_cache(mut self, cache: Arc<RedisTokenCache>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
     /// Borrow the underlying pool for option/group snapshots that live with
@@ -978,8 +1064,21 @@ impl TokenRepository {
         Ok(affected > 0)
     }
 
-    /// Go `DeleteTokenById`: soft delete, scoped to the owner.
+    /// Go `DeleteTokenById`: soft delete, scoped to the owner. 注入缓存时先
+    /// 读出令牌明文 key 并失效（Go 的 `Token.Delete` 内含栅栏+删哈希），
+    /// 随后仍按影响行数判定存在性；未注入缓存时保持单语句删除。
     pub async fn delete_for_user(&self, user_id: i64, id: i64) -> Result<bool, sqlx::Error> {
+        if let Some(cache) = self.cache.as_ref() {
+            if let Some(token) = self.by_id_for_user(user_id, id).await? {
+                if let Err(error) = cache.invalidate_for_mutation(&token.key).await {
+                    tracing::warn!(
+                        event = "token_cache_invalidate_failed",
+                        category = %error,
+                        "failed to invalidate token cache before delete"
+                    );
+                }
+            }
+        }
         let affected = match &self.db {
             Database::Sqlite(pool) => sqlx::query(DELETE_SQL)
                 .bind(id)
@@ -1055,6 +1154,156 @@ impl TokenRepository {
             }
         };
         Ok((tokens, total))
+    }
+
+    /// Go `GetTokenByKey(key, false)`：缓存命中直接返回；未命中、不完整哈希
+    /// 或 Redis 故障都回源数据库（Go 的 fall-through），并在冷缓存上用数据库
+    /// 快照初始化哈希——栅栏存在时放弃，已存在的热哈希仅续 TTL，绝不覆盖。
+    pub async fn by_key_cached(&self, key: &str) -> Result<Option<TokenRecord>, sqlx::Error> {
+        if let Some(cache) = self.cache.as_ref() {
+            match cache.get_by_key(key).await {
+                Ok(Some(token)) => return Ok(Some(token)),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        event = "token_cache_read_failed",
+                        category = %error,
+                        "token cache read failed; falling back to the database"
+                    );
+                }
+            }
+        }
+        let Some(token) = self.by_key(key).await? else {
+            return Ok(None);
+        };
+        if let Some(cache) = self.cache.as_ref() {
+            // 初始化失败不影响本次读取，与 Go 的 `cacheErr` 仅记日志一致。
+            match cache.init(&token).await {
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        event = "token_cache_init_failed",
+                        category = %error,
+                        "failed to init token cache"
+                    );
+                }
+            }
+        }
+        Ok(Some(token))
+    }
+
+    /// Go `InvalidateTokenCacheForMutation`：变更写库前失效缓存并立栅栏；
+    /// 未注入缓存或失败均不阻断业务（Go 同样只 `SysLog`）。
+    pub async fn invalidate_cached(&self, key: &str) {
+        let Some(cache) = self.cache.as_ref() else {
+            return;
+        };
+        if let Err(error) = cache.invalidate_for_mutation(key).await {
+            tracing::warn!(
+                event = "token_cache_invalidate_failed",
+                category = %error,
+                "failed to invalidate token cache before mutation"
+            );
+        }
+    }
+
+    /// Go `GetTokenKeysByIds`：仅返回当前用户且未软删的令牌明文 key。
+    pub async fn keys_by_ids_for_user(
+        &self,
+        user_id: i64,
+        ids: &[i64],
+    ) -> Result<Vec<(i64, String)>, sqlx::Error> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pairs = Vec::new();
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let mut query = QueryBuilder::new(
+                    "SELECT CAST(id AS BIGINT) AS id, \"key\" FROM tokens WHERE user_id = ",
+                );
+                query.push_bind(user_id);
+                query.push(" AND deleted_at IS NULL AND id IN (");
+                push_id_list!(&mut query, ids);
+                query.push(")");
+                for row in query.build().fetch_all(pool).await? {
+                    pairs.push((
+                        row.try_get::<Option<i64>, _>("id")?.unwrap_or_default(),
+                        row.try_get::<Option<String>, _>("key")?.unwrap_or_default(),
+                    ));
+                }
+            }
+            Database::Postgres(pool) => {
+                let mut query = QueryBuilder::new(
+                    "SELECT CAST(id AS BIGINT) AS id, \"key\" FROM tokens WHERE user_id = ",
+                );
+                query.push_bind(user_id);
+                query.push(" AND deleted_at IS NULL AND id IN (");
+                push_id_list!(&mut query, ids);
+                query.push(")");
+                for row in query.build().fetch_all(pool).await? {
+                    pairs.push((
+                        row.try_get::<Option<i64>, _>("id")?.unwrap_or_default(),
+                        row.try_get::<Option<String>, _>("key")?.unwrap_or_default(),
+                    ));
+                }
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// Go `BatchDeleteTokens`：事务内按用户批量软删除，返回实际删除条数。
+    /// 失效在事务内、删除前完成（栅栏先于提交立起），缓存失败仅记录、不回滚——
+    /// 与 Go 一致：`invalidateTokensCache` 的错误不中止删除。
+    pub async fn delete_many_for_user(
+        &self,
+        user_id: i64,
+        ids: &[i64],
+    ) -> Result<usize, sqlx::Error> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        match &self.db {
+            Database::Sqlite(pool) => batch_delete_transaction!(pool, &self.cache, user_id, ids),
+            Database::Postgres(pool) => batch_delete_transaction!(pool, &self.cache, user_id, ids),
+        }
+    }
+
+    /// Go `InvalidateUserTokensCache`：按用户清理其全部令牌缓存（`Unscoped`
+    /// 含软删行），使用户被禁用/删除时其令牌请求立即回源。失败仅记录。
+    pub async fn invalidate_user_tokens_cache(&self, user_id: i64) -> Result<(), sqlx::Error> {
+        let Some(cache) = self.cache.as_ref() else {
+            return Ok(());
+        };
+        let mut keys = Vec::new();
+        match &self.db {
+            Database::Sqlite(pool) => {
+                for row in sqlx::query(r#"SELECT "key" FROM tokens WHERE user_id = $1"#)
+                    .bind(user_id)
+                    .fetch_all(pool)
+                    .await?
+                {
+                    keys.push(row.try_get::<Option<String>, _>("key")?.unwrap_or_default());
+                }
+            }
+            Database::Postgres(pool) => {
+                for row in sqlx::query(r#"SELECT "key" FROM tokens WHERE user_id = $1"#)
+                    .bind(user_id)
+                    .fetch_all(pool)
+                    .await?
+                {
+                    keys.push(row.try_get::<Option<String>, _>("key")?.unwrap_or_default());
+                }
+            }
+        }
+        if let Err(error) = cache.invalidate_many(&keys).await {
+            tracing::warn!(
+                event = "token_cache_invalidate_failed",
+                category = %error,
+                "failed to invalidate user token cache"
+            );
+        }
+        Ok(())
     }
 
     /// Go `GetUserGroup(id, false)` fallback used by `getTokenRequestUserGroup`.
