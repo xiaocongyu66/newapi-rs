@@ -226,6 +226,9 @@ pub(crate) fn error_category(error: &sqlx::Error) -> &'static str {
 fn audit_content_en(action: &str) -> &str {
     match action {
         "user.2fa_disable" => "Force-disabled two-factor authentication for the user",
+        "user.passkey_register" => "Registered a passkey",
+        "user.passkey_delete" => "Deleted a passkey",
+        "user.reset_passkey" => "Reset the user passkey",
         _ => action,
     }
 }
@@ -238,6 +241,63 @@ fn fresh_request_id() -> String {
             .map(|value| value.as_nanos() as i128)
             .unwrap_or(0),
     )
+}
+
+/// Go `RecordUserSecurityAudit`（`usage/write_audit.go:109-116`）：普通用户
+/// 自己的安全敏感操作（passkey 绑定/解绑）写一条 type=3 日志，归属用户本
+/// 人，不带 admin_info、不带 params（`writeUserSecurityAudit` 的 params 为
+/// nil）。失败仅告警，不改变响应。
+pub async fn record_user_security_audit(
+    db: &Database,
+    user_id: i64,
+    username: &str,
+    action: &str,
+    ip: &str,
+    now: i64,
+) {
+    let mut op = Map::new();
+    op.insert("action".to_owned(), Value::String(action.to_owned()));
+    let mut other = Map::new();
+    other.insert("op".to_owned(), Value::Object(op));
+    let other = serde_json::to_string(&Value::Object(other)).unwrap_or_default();
+
+    let content = audit_content_en(action);
+    let request_id = fresh_request_id();
+    let result = match db {
+        Database::Sqlite(pool) => sqlx::query(MANAGE_AUDIT_INSERT)
+            .bind(user_id)
+            .bind(now)
+            .bind(LOG_TYPE_MANAGE)
+            .bind(content)
+            .bind(username)
+            .bind(false)
+            .bind(ip)
+            .bind(&request_id)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(MANAGE_AUDIT_INSERT)
+            .bind(user_id)
+            .bind(now)
+            .bind(LOG_TYPE_MANAGE)
+            .bind(content)
+            .bind(username)
+            .bind(false)
+            .bind(ip)
+            .bind(&request_id)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            event = "user_security_audit_failed",
+            category = error_category(&error),
+            "failed to record user security audit log"
+        );
+    }
 }
 
 /// Go `RecordOperationAuditLog`（`usage/store_log.go:231-254`）的管理审计
@@ -256,11 +316,32 @@ pub async fn record_manage_audit(
     ip: &str,
     now: i64,
 ) {
+    record_manage_audit_with_params(db, operator, action, target_user_id, None, ip, now).await
+}
+
+/// 同上，但允许 handler 附加 Go `writeManageAudit(c, id, action, params)` 显式
+/// 传入的参数（如 `user.reset_passkey` 的 `username`/`id`）。Go 在
+/// `RecordManageAuditFor` 缺省插入 `target_user_id`，已有同名键不覆盖；
+/// `buildOpField` 在 params 为空时省略该键。
+pub async fn record_manage_audit_with_params(
+    db: &Database,
+    operator: &AuditOperator<'_>,
+    action: &str,
+    target_user_id: i64,
+    extra_params: Option<&Map<String, Value>>,
+    ip: &str,
+    now: i64,
+) {
     let mut op = Map::new();
     op.insert("action".to_owned(), Value::String(action.to_owned()));
-    if target_user_id > 0 && target_user_id != operator.user_id {
-        let mut params = Map::new();
+    let mut params = extra_params.cloned().unwrap_or_default();
+    if target_user_id > 0
+        && target_user_id != operator.user_id
+        && !params.contains_key("target_user_id")
+    {
         params.insert("target_user_id".to_owned(), json_i64(target_user_id));
+    }
+    if !params.is_empty() {
         op.insert("params".to_owned(), Value::Object(params));
     }
     let mut other = Map::new();

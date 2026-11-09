@@ -327,6 +327,22 @@ impl LoginService {
         })
     }
 
+    /// Port of Go `SetupLogin`（`manage_users.go:157-188`）：密码/2FA 之外的
+    /// 登录入口（passkey 登录等）在业务校验通过后调用此方法签发会话包。
+    /// 与 `login`/`login_with_2fa` 共用 [`Self::complete`]，不校验
+    /// `expected_auth_version`（Go 的 0 分支）。
+    pub async fn complete_session(
+        &self,
+        user_id: i64,
+        method: &str,
+        ip: &str,
+        user_agent: &str,
+        now: i64,
+    ) -> Result<LoginSuccess, LoginFailure> {
+        self.complete(None, user_id, method, ip, user_agent, now)
+            .await
+    }
+
     /// Port of Go `setupLoginAtAuthVersion`：权威重读 → 状态与会话版本 →
     /// 签发会话 → `UpdateUserLastLoginAt` → 审计日志 → SelfUser 所需资料。
     /// Go `Capabilities()` 从不返回错误，因此权限装配失败（策略表损坏或不可

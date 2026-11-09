@@ -22,6 +22,13 @@ rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_r
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
 sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json"] }
+# passkey 切片（方案 A）：CI 探针（run 42554243782）已验证 0.6.2 在钉版工具链
+# 下可解析可编译。三个 feature 为业务必需：conditional-ui 提供匿名可发现登录
+# 仪式（否则 start_discoverable_authentication 不存在）；danger-allow-state-
+# serialisation 让仪式状态可序列化进 auth_flows.payload（对应 Go 的
+# SessionData JSON）；danger-credential-internals 暴露 Credential 以便从 Go
+# 列结构重建凭据做 verify/login。
+webauthn-rs = { version = "=0.6.2", default-features = false, features = ["danger-allow-state-serialisation", "danger-credential-internals", "conditional-ui"] }
 newapi-config = { path = "crates/config" }
 newapi-storage = { path = "crates/storage" }
 newapi-catalog = { path = "crates/catalog" }

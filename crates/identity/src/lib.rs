@@ -8,6 +8,7 @@ pub mod crypto;
 pub mod email;
 pub mod login;
 pub mod oauth_bindings;
+pub mod passkey;
 pub mod password_reset;
 pub mod policy;
 pub mod qq_bind;
