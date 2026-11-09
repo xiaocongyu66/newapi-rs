@@ -599,6 +599,22 @@ async fn create_flow(db: &Database, body: &[u8]) -> CreateOutcome {
     let Some(request) = parse_create_request(body) else {
         return CreateOutcome::InvalidParams;
     };
+    // gin 的 `binding:"required"`：七个必填字段缺省或空串都判 invalid params
+    // （对应 Go 的“无效的请求参数”分支，本端口折叠为固定 i18n 键）。
+    if [
+        &request.name,
+        &request.slug,
+        &request.client_id,
+        &request.client_secret,
+        &request.authorization_endpoint,
+        &request.token_endpoint,
+        &request.user_info_endpoint,
+    ]
+    .into_iter()
+    .any(|field| field.is_empty())
+    {
+        return CreateOutcome::InvalidParams;
+    }
     let repository = CustomOAuthRepository::new(db.clone());
     // Go `IsSlugTaken` 的 fail-closed：DB 错误同样算“已占用”。
     let slug_taken = match repository.slug_taken(&request.slug, 0).await {

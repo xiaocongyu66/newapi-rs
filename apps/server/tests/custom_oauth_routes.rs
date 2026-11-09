@@ -173,7 +173,7 @@ fn router(state: AppState) -> Router {
         .route("/api/custom-oauth-provider/discovery", post(discovery))
         .route(
             "/api/custom-oauth-provider/{id}",
-            get(get_one).put(update).delete(delete),
+            get(get_one).put(update).delete(delete_provider),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -190,7 +190,7 @@ fn state(db: &Database) -> AppState {
     AppState::default().bind_runtime(db.clone(), SECRET)
 }
 
-async fn exec(db: &Database, statement: &str) {
+async fn exec(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         sqlx::query(statement)
             .execute(pool)
@@ -275,6 +275,7 @@ async fn seed_binding(db: &Database, id: i64, user_id: i64, provider_id: i64, su
 }
 
 /// 审计行的内容投影（`logs.other` JSON 解码）。
+#[derive(Debug)]
 struct AuditRow {
     user_id: i64,
     action: String,
