@@ -592,18 +592,18 @@ impl CustomOAuthRepository {
 
     /// Go `GetBindingCountByProviderId`；存储故障原样传播，由 HTTP 层折叠。
     pub async fn binding_count(&self, provider_id: i64) -> Result<i64, sqlx::Error> {
-        backend!(&self.db, pool, {
+        Ok(backend!(&self.db, pool, {
             sqlx::query_scalar::<_, i64>(COUNT_BINDINGS_BY_PROVIDER)
                 .bind(provider_id)
                 .fetch_one(pool)
                 .await?
-        })
+        }))
     }
 
     /// Go `dbx.DB.Create(provider)`：返回数据库分配的 id
     /// （GORM 回填 `provider.Id`，响应中的 id 即来自这里）。
     pub async fn insert(&self, record: &CustomOAuthProviderRecord) -> Result<i64, sqlx::Error> {
-        backend!(&self.db, pool, {
+        Ok(backend!(&self.db, pool, {
             sqlx::query_scalar::<_, i64>(INSERT_PROVIDER)
                 .bind(&record.name)
                 .bind(&record.slug)
@@ -625,7 +625,7 @@ impl CustomOAuthRepository {
                 .bind(&record.access_denied_message)
                 .fetch_one(pool)
                 .await?
-        })
+        }))
     }
 
     /// Go `dbx.DB.Save(provider)` 的整行写回；GORM 不把 `RowsAffected`
