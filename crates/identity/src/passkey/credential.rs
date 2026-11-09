@@ -21,7 +21,8 @@ const SELECT_AUTH_VERSION_UNSCOPED: &str =
     "SELECT CAST(auth_version AS BIGINT) FROM users WHERE id = $1";
 
 /// 读取列投影：整数一律 CAST 到 BIGINT，时间一律投影为 epoch 秒，
-/// 与 auth_flows 仓储的双后端约定一致。
+/// 与 auth_flows 仓储的双后端约定一致。拼接出的语句只含固定常量片段、
+/// 不含任何请求数据，按工作区既有约定经 `AssertSqlSafe` 声明人工审计。
 pub const ASSERTION_STATE_COLUMNS_SQLITE: &str = "id, CAST(user_id AS BIGINT) AS user_id, \
     credential_id, public_key, attestation_type, aaguid, \
     CAST(sign_count AS BIGINT) AS sign_count, \
@@ -218,20 +219,20 @@ impl PasskeyCredentialRepository {
     ) -> Result<Option<PasskeyCredential>, PasskeyStoreError> {
         match &self.db {
             Database::Sqlite(pool) => {
-                let row = sqlx::query(&format!(
-                    "SELECT {} FROM passkey_credentials WHERE user_id=$1 AND deleted_at IS NULL",
-                    ASSERTION_STATE_COLUMNS_SQLITE
-                ))
+                let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SELECT {ASSERTION_STATE_COLUMNS_SQLITE} \
+                     FROM passkey_credentials WHERE user_id=$1 AND deleted_at IS NULL"
+                )))
                 .bind(user_id)
                 .fetch_optional(pool)
                 .await?;
                 Ok(row.as_ref().map(decode_sqlite).transpose()?)
             }
             Database::Postgres(pool) => {
-                let row = sqlx::query(&format!(
-                    "SELECT {} FROM passkey_credentials WHERE user_id=$1 AND deleted_at IS NULL",
-                    ASSERTION_STATE_COLUMNS_POSTGRES
-                ))
+                let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SELECT {ASSERTION_STATE_COLUMNS_POSTGRES} \
+                     FROM passkey_credentials WHERE user_id=$1 AND deleted_at IS NULL"
+                )))
                 .bind(user_id)
                 .fetch_optional(pool)
                 .await?;
@@ -248,20 +249,20 @@ impl PasskeyCredentialRepository {
         let encoded = general_purpose::STANDARD.encode(credential_id);
         match &self.db {
             Database::Sqlite(pool) => {
-                let row = sqlx::query(&format!(
-                    "SELECT {} FROM passkey_credentials WHERE credential_id=$1 AND deleted_at IS NULL",
-                    ASSERTION_STATE_COLUMNS_SQLITE
-                ))
+                let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SELECT {ASSERTION_STATE_COLUMNS_SQLITE} \
+                     FROM passkey_credentials WHERE credential_id=$1 AND deleted_at IS NULL"
+                )))
                 .bind(&encoded)
                 .fetch_optional(pool)
                 .await?;
                 Ok(row.as_ref().map(decode_sqlite).transpose()?)
             }
             Database::Postgres(pool) => {
-                let row = sqlx::query(&format!(
-                    "SELECT {} FROM passkey_credentials WHERE credential_id=$1 AND deleted_at IS NULL",
-                    ASSERTION_STATE_COLUMNS_POSTGRES
-                ))
+                let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SELECT {ASSERTION_STATE_COLUMNS_POSTGRES} \
+                     FROM passkey_credentials WHERE credential_id=$1 AND deleted_at IS NULL"
+                )))
                 .bind(&encoded)
                 .fetch_optional(pool)
                 .await?;
@@ -448,7 +449,7 @@ async fn bump_auth_version_sqlite(
 ) -> Result<i64, PasskeyStoreError> {
     let affected = sqlx::query(BUMP_AUTH_VERSION)
         .bind(user_id)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if affected != 1 {
@@ -456,7 +457,7 @@ async fn bump_auth_version_sqlite(
     }
     let version: i64 = sqlx::query_scalar(SELECT_AUTH_VERSION_UNSCOPED)
         .bind(user_id)
-        .fetch_one(&mut **tx)
+        .fetch_one(&mut *tx)
         .await?;
     Ok(version)
 }
@@ -467,7 +468,7 @@ async fn bump_auth_version_postgres(
 ) -> Result<i64, PasskeyStoreError> {
     let affected = sqlx::query(BUMP_AUTH_VERSION)
         .bind(user_id)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if affected != 1 {
@@ -475,7 +476,7 @@ async fn bump_auth_version_postgres(
     }
     let version: i64 = sqlx::query_scalar(SELECT_AUTH_VERSION_UNSCOPED)
         .bind(user_id)
-        .fetch_one(&mut **tx)
+        .fetch_one(&mut *tx)
         .await?;
     Ok(version)
 }
@@ -515,7 +516,7 @@ async fn insert_credential_sqlite(
     .bind(transports_json(&stored.transports))
     .bind(stored.attachment.as_deref().unwrap_or(""))
     .bind(now)
-    .execute(&mut **tx)
+    .execute(&mut *tx)
     .await?;
     Ok(())
 }
@@ -548,7 +549,7 @@ async fn insert_credential_postgres(
     .bind(transports_json(&stored.transports))
     .bind(stored.attachment.as_deref().unwrap_or(""))
     .bind(now)
-    .execute(&mut **tx)
+    .execute(&mut *tx)
     .await?;
     Ok(())
 }

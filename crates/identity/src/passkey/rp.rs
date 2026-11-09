@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use webauthn_rs::prelude::{Url, Webauthn, WebauthnBuilder};
+use webauthn_rs::prelude::{Url, WebauthnBuilder};
 
 use crate::passkey::ceremony::Ceremony;
 use crate::passkey::settings::PasskeySettings;
@@ -320,8 +320,12 @@ mod tests {
 
     #[test]
     fn build_rejects_a_bare_ipv6_rp_id_like_go() {
-        let error =
-            build_ceremony(&settings(true), &facts("[2001:db8::1]:8443", true), "").unwrap_err();
+        // `Ceremony` 不 derive Debug（`Webauthn` 未约束 Debug），故避开
+        // `unwrap_err` 改用 match 断言失败分类。
+        let error = match build_ceremony(&settings(true), &facts("[2001:db8::1]:8443", true), "") {
+            Ok(_) => panic!("a bare IPv6 rp id must not build a ceremony"),
+            Err(error) => error,
+        };
         assert!(matches!(error, RpError::Configuration), "{error:?}");
     }
 

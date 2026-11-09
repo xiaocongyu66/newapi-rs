@@ -7,9 +7,7 @@
 //! `secure_algs()` 与实际认证器会出现的 EC2/OKP/RSA 三类键型。
 
 use serde_cbor_2::Value;
-use webauthn_rs::prelude::{
-    COSEAlgorithm, COSEEC2Key, COSEKey, COSEKeyType, COSEOKPKey, COSERSAKey, ECDSACurve, EDDSACurve,
-};
+use webauthn_rs::prelude::{COSEAlgorithm, COSEKey, COSEKeyType, ECDSACurve, EDDSACurve};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoseError {
@@ -86,10 +84,10 @@ fn eddsa_curve_value(curve: &EDDSACurve) -> Option<i128> {
 /// COSEKey → 原始 CBOR 字节。键型/算法不在已知集合内时返回
 /// `Unsupported`（不伪造未知结构）。
 pub fn encode_cose_key(key: &COSEKey) -> Result<Vec<u8>, CoseError> {
-    let alg = alg_value(&key.type_)?;
+    let alg = alg_value(&key.type_).ok_or(CoseError::Unsupported)?;
     let map = match &key.key {
         COSEKeyType::EC_EC2(ec) => {
-            let crv = ecdsa_curve_value(&ec.curve)?;
+            let crv = ecdsa_curve_value(&ec.curve).ok_or(CoseError::Unsupported)?;
             cbor_map(vec![
                 (KTY, Value::Integer(KTY_EC2)),
                 (ALG, Value::Integer(alg)),
@@ -99,7 +97,7 @@ pub fn encode_cose_key(key: &COSEKey) -> Result<Vec<u8>, CoseError> {
             ])
         }
         COSEKeyType::EC_OKP(okp) => {
-            let crv = eddsa_curve_value(&okp.curve)?;
+            let crv = eddsa_curve_value(&okp.curve).ok_or(CoseError::Unsupported)?;
             cbor_map(vec![
                 (KTY, Value::Integer(KTY_OKP)),
                 (ALG, Value::Integer(alg)),
@@ -127,6 +125,7 @@ pub fn decode_cose_key(bytes: &[u8]) -> Result<COSEKey, CoseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use webauthn_rs::prelude::COSEEC2Key;
 
     fn ec2_key() -> COSEKey {
         COSEKey {
