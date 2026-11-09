@@ -428,12 +428,11 @@ async fn run_contract(db: Database) {
     let response = send(&app, "/api/user/self/groups", Some("Bearer pat-auto")).await;
     let body = body_json(response).await;
     assert_eq!(body["data"]["vip"]["desc"], json!("VIP 分组"));
-    assert_eq!(
-        body["data"]
+    assert!(
+        !body["data"]
             .as_object()
             .unwrap()
-            .contains_key("unavailable"),
-        false
+            .contains_key("unavailable")
     );
 
     // Snapshot contract: a later option write is invisible until the next
@@ -459,7 +458,7 @@ async fn run_contract(db: Database) {
     assert_eq!(body["data"], json!([]));
     let response = send(&app, "/api/user/self/groups", Some("Bearer pat-auto")).await;
     let body = body_json(response).await;
-    assert_eq!(body["data"].as_object().unwrap().contains_key("vip"), false);
+    assert!(!body["data"].as_object().unwrap().contains_key("vip"));
 }
 
 #[tokio::test]
