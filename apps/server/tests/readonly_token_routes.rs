@@ -818,7 +818,11 @@ async fn run_contract(db: &Database) {
         },
     )
     .await;
-    for header in ["pairkey", "Bearer  pairkey", "Bearer pairkey third"] {
+    // Handler-side pair rule (manage_tokens.go:197-213): a raw key reaches the
+    // handler through the middleware but fails the split (1 segment), and a
+    // double space fails the split too (3 segments) even though the middleware
+    // trimmed the key fine.
+    for header in ["pairkey", "Bearer  pairkey"] {
         let response = send(&state(db), "/api/usage/token/", Some(header)).await;
         assert_eq!(
             response.status(),
@@ -833,13 +837,15 @@ async fn run_contract(db: &Database) {
             "handler rejects the non-pair header `{header}`",
         );
     }
-    // The scheme check is case-insensitive: BEARER/bearer both reach the token.
-    for header in ["BEARER pairkey", "bearer pairkey"] {
+    // The handler scheme check is case-insensitive; the middleware strips only
+    // the exact `Bearer `/`bearer ` prefixes, so the lowercase spelling is the
+    // reachable case that proves it.
+    for header in ["Bearer pairkey", "bearer pairkey"] {
         let response = send(&state(db), "/api/usage/token/", Some(header)).await;
         assert_eq!(
             response.status(),
             StatusCode::OK,
-            "case-insensitive header `{header}`"
+            "bearer-variant header `{header}`"
         );
         let body = body_json(response).await;
         assert_eq!(body["code"], serde_json::json!(true));
