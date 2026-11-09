@@ -500,7 +500,7 @@ async fn get_token_key_inner(
         Ok(id) => id,
         Err(_) => return api_error(headers, MSG_INVALID_PARAMS),
     };
-    let repository = token_repository(&state, db);
+    let repository = token_repository(state, db);
     match repository.by_id_for_user(auth_user.0.user_id, id).await {
         // Only this endpoint returns the unmasked key.
         Ok(Some(token)) => success(Some(json!({ "key": token.key }))),
