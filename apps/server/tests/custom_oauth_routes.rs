@@ -30,8 +30,8 @@ use axum::{
 };
 use newapi_server::custom_oauth_http::{
     DiscoveryError, DiscoveryFuture, DiscoveryResponse, DiscoveryTransport,
-    InjectedDiscoveryTransport, create, delete, discovery, get_one, list, require_system_settings,
-    update,
+    InjectedDiscoveryTransport, create, delete as delete_provider, discovery, get_one, list,
+    require_system_settings, update,
 };
 use newapi_server::{AppState, auth as server_auth};
 use newapi_storage::Database;
