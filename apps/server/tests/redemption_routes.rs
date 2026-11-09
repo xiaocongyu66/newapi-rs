@@ -246,7 +246,15 @@ async fn seed_user(db: &Database, id: i64, username: &str, role: i64, pat: &str)
     });
 }
 
+/// Go 生产码恒为 32 位 hex；夹具键固定 32 字符，避免 PG `char(32)`
+/// 对短值尾部补格带来的解码差异。
+fn fixed_key(tag: &str) -> String {
+    assert!(tag.len() < 32, "seed tag must fit in 32 chars");
+    format!("{tag:0>32}")
+}
+
 /// Go `Redemption` 行；显式指定 id 让分页/搜索断言不依赖自增起始值。
+#[allow(clippy::too_many_arguments)]
 async fn seed_redemption(
     db: &Database,
     id: i64,
@@ -558,9 +566,9 @@ async fn run_contract(db: Database) {
     reset(&db).await;
     confirm_compliance(&db).await;
     seed_user(&db, 1, "admin-one", 10, PAT_ADMIN).await;
-    seed_redemption(&db, 10, 1, "k10", 1, "alpha", 500_000, 0).await;
-    seed_redemption(&db, 20, 1, "k20", 2, "apple", 500_000, 0).await;
-    seed_redemption(&db, 30, 1, "k30", 3, "beta", 250_000, 0).await;
+    seed_redemption(&db, 10, 1, &fixed_key("k10"), 1, "alpha", 500_000, 0).await;
+    seed_redemption(&db, 20, 1, &fixed_key("k20"), 2, "apple", 500_000, 0).await;
+    seed_redemption(&db, 30, 1, &fixed_key("k30"), 3, "beta", 250_000, 0).await;
 
     let body = body_json(
         send(
@@ -584,7 +592,7 @@ async fn run_contract(db: Database) {
     assert_eq!(items[0]["id"], json!(30));
     assert_eq!(items[0]["quota_display"], json!(0.5));
     assert_eq!(items[1]["id"], json!(20));
-    assert_eq!(items[1]["key"], json!("k20"));
+    assert_eq!(items[1]["key"], json!(fixed_key("k20")));
     assert_eq!(items[0]["count"], json!(0));
     assert!(items[0].get("deleted_at").is_none());
     // 无查询参数：默认 page=1、page_size=10。
@@ -671,8 +679,28 @@ async fn run_contract(db: Database) {
     assert_eq!(body["data"]["total"], json!(3));
 
     // 增补过期/未过期行覆盖 status 四个分支。
-    seed_redemption(&db, 40, 1, "k40", 1, "gamma", 500_000, now() - 100).await;
-    seed_redemption(&db, 50, 1, "k50", 1, "delta", 500_000, now() + 3600).await;
+    seed_redemption(
+        &db,
+        40,
+        1,
+        &fixed_key("k40"),
+        1,
+        "gamma",
+        500_000,
+        now() - 100,
+    )
+    .await;
+    seed_redemption(
+        &db,
+        50,
+        1,
+        &fixed_key("k50"),
+        1,
+        "delta",
+        500_000,
+        now() + 3600,
+    )
+    .await;
     // "2"：已禁用。
     let body = body_json(
         send(
@@ -753,7 +781,7 @@ async fn run_contract(db: Database) {
     assert_eq!(body["message"], json!(""));
     let data = &body["data"];
     assert_eq!(data["id"], json!(30));
-    assert_eq!(data["key"], json!("k30"));
+    assert_eq!(data["key"], json!(fixed_key("k30")));
     assert_eq!(data["status"], json!(3));
     assert_eq!(data["quota"], json!(250_000));
     assert_eq!(data["quota_display"], json!(0.5));
