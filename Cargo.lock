@@ -1729,11 +1729,13 @@ name = "newapi-billing"
 version = "0.1.0"
 dependencies = [
  "newapi-storage",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "sqlx",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
