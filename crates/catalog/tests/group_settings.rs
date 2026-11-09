@@ -189,7 +189,7 @@ async fn contract(db: &Database) {
         "",
         "not json",
         "[]",
-        r#"{"default":{}}"#,
+        r#"{"default":1}"#,
         r#"{"default":["vip"]}"#,
     ] {
         update(db, "group_ratio_setting.group_special_usable_group", value).await;
@@ -199,6 +199,19 @@ async fn contract(db: &Database) {
             "value={value:?}"
         );
     }
+    // A valid empty overlay for a user group decodes as-is: an empty inner map
+    // is a legal "no overrides" row, not a decode failure.
+    update(
+        db,
+        "group_ratio_setting.group_special_usable_group",
+        r#"{"default":{}}"#,
+    )
+    .await;
+    let empty_overlay = GroupSettings::load(db, &loaded).await.unwrap();
+    assert_eq!(
+        empty_overlay.group_special_usable_group,
+        BTreeMap::from([("default".to_owned(), BTreeMap::new())])
+    );
     for value in ["", "not json", "{}", r#"["vip",1]"#] {
         update(db, "AutoGroups", value).await;
         let fallback = GroupSettings::load(db, &loaded).await.unwrap();
