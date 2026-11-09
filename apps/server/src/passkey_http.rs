@@ -135,6 +135,7 @@ fn service_unavailable() -> Response {
 
 /// 按请求实时读取并解析 Passkey 设置（Go 的 options 表 `passkey` 行 +
 /// ServerAddress 派生）。返回（生效视图，ServerAddress 原值）。
+#[allow(clippy::result_large_err)]
 async fn resolved_settings(
     state: &AppState,
     headers: &HeaderMap,
@@ -149,6 +150,7 @@ async fn resolved_settings(
 }
 
 /// Go `BuildWebAuthn`：错误复现 Go 字面量（含替换值）。
+#[allow(clippy::result_large_err)]
 fn build_ceremony_or_error(
     effective: &PasskeySettings,
     server_address: &str,
@@ -180,6 +182,7 @@ fn transport_facts(headers: &HeaderMap) -> TransportFacts {
 
 /// Go `getAuthenticatedUser`：中间件已校验登录态，这里重读用户资料并按
 /// Go 返回 401（禁用）或 200+固定文案（存储故障）。
+#[allow(clippy::result_large_err)]
 async fn authenticated_user(
     state: &AppState,
     auth_user: &AuthenticatedUser,
@@ -252,6 +255,7 @@ fn proof_failure_response(failure: ProofFailure) -> Response {
         .into_response()
 }
 
+#[allow(clippy::result_large_err)]
 fn require_security_proof(
     state: &AppState,
     auth_user: &AuthenticatedUser,
@@ -292,6 +296,7 @@ fn require_security_proof(
 
 /// Go `requirePasskeyRegistrationVerification`：用户启用 2FA 时要求
 /// scope=`passkey.register` 的 2FA 安全验证；未启用直接放行。
+#[allow(clippy::result_large_err)]
 async fn require_registration_verification(
     state: &AppState,
     auth_user: &AuthenticatedUser,
@@ -315,6 +320,7 @@ async fn require_registration_verification(
 
 /// Go `requirePasskeyDeleteVerification`：启用 2FA 时要求 2FA 证明；否则
 /// 必须已绑定 Passkey 并持有 scope=`passkey.delete` 的 passkey 证明。
+#[allow(clippy::result_large_err)]
 async fn require_delete_verification(
     state: &AppState,
     auth_user: &AuthenticatedUser,
@@ -355,6 +361,7 @@ async fn require_delete_verification(
 }
 
 /// 读取用户 2FA 是否启用；存储故障落固定分类。
+#[allow(clippy::result_large_err)]
 async fn two_fa_enabled_result(
     state: &AppState,
     user_id: i64,
@@ -386,6 +393,7 @@ fn session_keys(state: &AppState) -> Option<AuthKeys> {
 
 /// Go `AdvanceCurrentSessionToUserVersion` + `authRotationData`：推进当前
 /// 会话的 auth_version、撤销其他会话、按新版本签发 access token。
+#[allow(clippy::result_large_err)]
 async fn rotate_session(
     state: &AppState,
     headers: &HeaderMap,
@@ -467,6 +475,7 @@ async fn rotate_session(
 
 /// Go `parsePasskeyFinishRequest`：flow_token 与 credential 任一为空即
 /// “参数不完整”；credential 随后按 webauthn 协议结构解析。
+#[allow(clippy::result_large_err)]
 fn parse_finish_request(body: &Bytes) -> Result<(String, Value), Response> {
     let parsed: PasskeyFinishRequest =
         serde_json::from_slice(body).map_err(|_| api_message(MSG_FLOW_INCOMPLETE))?;
@@ -492,6 +501,7 @@ fn attachment_of(credential: &Value) -> Option<String> {
 
 /// 注册响应：只提取 attachment；协议结构解析交给 ceremony（复用同一
 /// 固定文案），避免 HTTP 层直接依赖 webauthn 类型。
+#[allow(clippy::result_large_err)]
 fn parse_registration_credential(credential: Value) -> Result<(Value, Option<String>), Response> {
     if !credential.is_object() {
         return Err(api_message(MSG_CREDENTIAL_INVALID));
@@ -502,6 +512,7 @@ fn parse_registration_credential(credential: Value) -> Result<(Value, Option<Str
 
 /// 断言响应：仅做对象级校验；rawId/userHandle 的 base64url 解码在
 /// login_finish 内完成。
+#[allow(clippy::result_large_err)]
 fn parse_assertion_credential(credential: Value) -> Result<Value, Response> {
     if !credential.is_object() {
         return Err(api_message(MSG_CREDENTIAL_INVALID));
@@ -1025,7 +1036,7 @@ pub async fn login_finish(
     if let Err(error) = repository
         .update_assertion_state(
             user.id,
-            &result.cred_id(),
+            result.cred_id(),
             &AssertionOutcome {
                 counter: result.counter(),
                 user_verified: result.user_verified(),
@@ -1247,7 +1258,7 @@ async fn verify_finish_inner(
     if let Err(error) = repository
         .update_assertion_state(
             user.id,
-            &result.cred_id(),
+            result.cred_id(),
             &AssertionOutcome {
                 counter: result.counter(),
                 user_verified: result.user_verified(),

@@ -512,7 +512,7 @@ async fn three_flows(db: &Database) {
     repository
         .update_assertion_state(
             7,
-            &result.cred_id(),
+            result.cred_id(),
             &newapi_identity::passkey::AssertionOutcome {
                 counter: result.counter(),
                 user_verified: result.user_verified(),
@@ -583,8 +583,7 @@ async fn three_flows(db: &Database) {
         NOW,
     )
     .await
-    .err()
-    .expect("flow token cannot be replayed");
+    .expect_err("flow token cannot be replayed");
     assert_eq!(error, newapi_identity::passkey::SessionFlowError::NotFound);
 
     // --- 跨用户绑定：register 流的 token 不能被别的用户消费 ---
@@ -618,8 +617,7 @@ async fn three_flows(db: &Database) {
         NOW,
     )
     .await
-    .err()
-    .expect("foreign user cannot consume");
+    .expect_err("foreign user cannot consume");
     assert_eq!(error, newapi_identity::passkey::SessionFlowError::NotFound);
 }
 
@@ -827,8 +825,7 @@ async fn sqlite_passkey_failures_are_fixed_categories() {
     credential_json["response"]["clientDataJSON"] = json!(b64url(&client));
     let error = ceremony
         .finish_registration(credential_json, &registration)
-        .err()
-        .expect("wrong client data type rejected");
+        .expect_err("wrong client data type rejected");
     assert_eq!(error, newapi_identity::passkey::CeremonyError::Invalid);
     db.close().await;
 }
