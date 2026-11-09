@@ -117,28 +117,10 @@ pub async fn reset_guard(State(state): State<AppState>, request: Request, next: 
 }
 
 /// Go `UnmarshalBodyReusable`：非 JSON Content-Type 跳过解析并保持零值；
-/// 空体保持零值；只有 JSON 解析失败才报绑定错误（与 register/login 移植一致，
-/// 对外固定为 `common.invalid_params`）。
+/// 空体保持零值；JSON / form-urlencoded / multipart 解析失败报绑定错误
+/// （见 `body_bind`），对外固定为 `common.invalid_params`。
 fn bind(headers: &HeaderMap, body: &[u8]) -> Result<ResetRequest, ()> {
-    if !parses_as_json(headers) || body.is_empty() {
-        return Ok(ResetRequest::default());
-    }
-    serde_json::from_slice(body).map_err(|_| ())
-}
-
-fn parses_as_json(headers: &HeaderMap) -> bool {
-    match headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-    {
-        None | Some("") => true,
-        Some(value) => value
-            .split(';')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .eq_ignore_ascii_case("application/json"),
-    }
+    crate::body_bind::bind_body::<ResetRequest>(headers, body)
 }
 
 fn request_ip(state: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {

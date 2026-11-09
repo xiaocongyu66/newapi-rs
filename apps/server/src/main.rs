@@ -187,6 +187,26 @@ async fn run() -> Result<(), ()> {
         },
         None => newapi_server::RateLimiter::memory(global_rate_limit_settings),
     };
+    // Go `middleware.EmailVerificationRateLimit`：固定 2 次/30 秒，与上面的
+    // 限流开关无关；配置 Redis 时走 Redis 固定窗口（故障自动回退内存），
+    // 否则纯进程内滑动窗口。
+    let email_verification_limiter = match config.redis_url() {
+        Some(url) => match newapi_server::limit_redis::RedisRateLimiter::connect(url).await {
+            Ok(limiter) => {
+                newapi_server::limit_email::EmailVerificationLimiter::with_redis(limiter)
+            }
+            Err(_) => {
+                tracing::error!(
+                    event = "rate_limit_redis_unavailable",
+                    mark = "EV",
+                    "redis rate limit connection failed"
+                );
+                db.close().await;
+                return Err(());
+            }
+        },
+        None => newapi_server::limit_email::EmailVerificationLimiter::memory_only(),
+    };
     let auth = SessionAuth::with_fence(db.clone(), AuthKeys::new(&secret), fence);
     let state = initial
         .bind_auth(Arc::new(auth), config.session_cookie.clone())
@@ -198,7 +218,8 @@ async fn run() -> Result<(), ()> {
         )
         .bind_search_rate_limit(search_rate_limiter)
         .bind_global_api_rate_limit(global_rate_limiter)
-        .bind_token_cache(token_cache);
+        .bind_token_cache(token_cache)
+        .bind_email_verification_rate_limit(email_verification_limiter);
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {
         Ok(listener) => listener,
         Err(_) => {

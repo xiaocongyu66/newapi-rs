@@ -5,6 +5,7 @@ pub mod audit;
 pub mod auth_flow;
 pub mod auth_session;
 pub mod crypto;
+pub mod email;
 pub mod login;
 pub mod oauth_bindings;
 pub mod password_reset;

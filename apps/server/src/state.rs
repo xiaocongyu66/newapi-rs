@@ -152,6 +152,10 @@ pub struct AppState {
     global_rate_limiter: Option<Arc<RateLimiter>>,
     /// Go `common.RDB` 令牌缓存；未注入时所有缓存路径降级为直通（RedisEnabled=false）。
     token_cache: Option<Arc<RedisTokenCache>>,
+    /// `EmailVerificationRateLimit`（mark "EV"，2/30s）；未注入时直通
+    /// （测试路径）。与上面的限流器不同：Go 的 EV 没有 enabled 开关，
+    /// Redis 故障回退内存，拒绝响应是 429 + JSON。
+    email_verification_rate_limiter: Option<Arc<crate::limit_email::EmailVerificationLimiter>>,
     anonymous_body_limit: usize,
 }
 
@@ -176,6 +180,7 @@ impl Default for AppState {
             search_rate_limiter: None,
             global_rate_limiter: None,
             token_cache: None,
+            email_verification_rate_limiter: None,
             anonymous_body_limit: anonymous_body_limit_bytes(512),
         }
     }
@@ -248,6 +253,16 @@ impl AppState {
         self
     }
 
+    /// 注入 `EmailVerificationRateLimit`（Go
+    /// `middleware.EmailVerificationRateLimit`）；未注入的测试路径直通。
+    pub fn bind_email_verification_rate_limit(
+        mut self,
+        limiter: crate::limit_email::EmailVerificationLimiter,
+    ) -> Self {
+        self.email_verification_rate_limiter = Some(Arc::new(limiter));
+        self
+    }
+
     /// 解析客户端 IP：peer 不可信时忽略转发头，与 Go `resolveTrustedClientIP` 一致。
     pub fn client_ip(
         &self,
@@ -312,6 +327,20 @@ impl AppState {
         match self.global_rate_limiter.as_ref() {
             Some(limiter) => limiter.check("GA", client_ip, now).await,
             None => Ok(None),
+        }
+    }
+
+    /// 邮箱验证码限流（Go `middleware.EmailVerificationRateLimit`）：
+    /// `None` = 放行或限流器未注入，`Some(decision)` 为已拒绝的判定，
+    /// 由 guard 翻译成 429 + JSON（与关键路径的裸 429 不同）。
+    pub async fn check_email_verification_rate_limit(
+        &self,
+        client_ip: &str,
+        now: i64,
+    ) -> Option<crate::limit_email::EmailLimitDecision> {
+        match self.email_verification_rate_limiter.as_ref() {
+            Some(limiter) => Some(limiter.check(client_ip, now).await),
+            None => None,
         }
     }
 

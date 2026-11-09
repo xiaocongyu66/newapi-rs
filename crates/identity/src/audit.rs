@@ -13,6 +13,8 @@ use serde_json::{Map, Value};
 const LOG_TYPE_LOGIN: i64 = 7;
 /// Go `usage.LogTypeManage`（`usage/store_log.go:99`）。
 const LOG_TYPE_MANAGE: i64 = 3;
+/// Go `usage.LogTypeSystem`（`usage/store_log.go:100`）。
+pub const LOG_TYPE_SYSTEM: i64 = 4;
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 
 /// Go `AuditOperatorInfo` 的操作者身份（`usage/write_audit.go:67-74`），
@@ -157,7 +159,61 @@ pub async fn record_login_log(
     }
 }
 
-fn error_category(error: &sqlx::Error) -> &'static str {
+/// Go `writeSystemLog` → `usage.RecordLog(userID, LogTypeSystem, content)`
+/// （`usage/store_log.go:146-162`）：系统日志（type = 4）。Go 的
+/// `RecordLog` 内部按 user_id 反查 username，调用方（注册收尾）刚创建
+/// 完用户，直接传入省去一次等价查询；`日志行其余列都是 Go 零值
+/// （`''`/0），与既有审计插入同构。写库失败只 `tracing::warn`，
+/// 与 Go 的 SysLog 行为一致——系统日志失败不改变响应。
+pub async fn record_system_log(
+    db: &Database,
+    user_id: i64,
+    username: &str,
+    content: &str,
+    now: i64,
+) {
+    let request_id = fresh_request_id();
+    let is_stream = false;
+    let result = match db {
+        Database::Sqlite(pool) => sqlx::query(SYSTEM_LOG_INSERT)
+            .bind(user_id)
+            .bind(now)
+            .bind(LOG_TYPE_SYSTEM)
+            .bind(content)
+            .bind(username)
+            .bind(is_stream)
+            .bind(&request_id)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(SYSTEM_LOG_INSERT)
+            .bind(user_id)
+            .bind(now)
+            .bind(LOG_TYPE_SYSTEM)
+            .bind(content)
+            .bind(username)
+            .bind(is_stream)
+            .bind(&request_id)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            event = "system_log_failed",
+            category = error_category(&error),
+            "failed to record system log"
+        );
+    }
+}
+
+const SYSTEM_LOG_INSERT: &str = "INSERT INTO logs (user_id, created_at, type, content, \
+    username, token_name, model_name, quota, prompt_tokens, completion_tokens, \
+    use_time, is_stream, ip, request_id, other) \
+    VALUES ($1,$2,$3,$4,$5,'','',0,0,0,0,$6,'',$7,'')";
+
+/// sqlx 错误的固定分类；`registration` 的注册收尾告警同样使用。
+pub(crate) fn error_category(error: &sqlx::Error) -> &'static str {
     match error {
         sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => "pool",
         sqlx::Error::Io(_) | sqlx::Error::WorkerCrashed => "io",

@@ -10,13 +10,12 @@
 //! never reaches the client; storage failures collapse to
 //! `common.database_error`.
 //!
-//! Deliberate gaps, reported rather than faked:
-//! - `GENERATE_DEFAULT_TOKEN` has no Rust configuration yet, so no default
-//!   token is created (Go defaults this switch to off).
-//! - Go's post-create `finishInsert` sidebar initialization is not ported;
-//!   `setting` keeps the value `User.Insert` itself writes.
+//! Go 的完整收尾已移植：`User.Insert` 提交后的 `finishInsert`（侧栏初始化、
+//! 新用户赠送日志、邀请人奖励）与 `GenerateDefaultToken`（默认关闭）生成
+//! 的初始令牌。SMTP 传输留 P7。
 
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 
 use axum::{
     Json,
@@ -26,11 +25,15 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use newapi_billing::topup::TopUpSettings;
+use newapi_catalog::registration_settings::RegistrationSettings;
 use newapi_identity::{
     crypto::hash_password,
     registration::{
-        NewUser, RegistrationError, RegistrationRepository, verify_email_verification_code,
+        FinishInsert, FinishInsertSettings, NewUser, RegistrationError, RegistrationRepository,
+        verify_email_verification_code,
     },
+    tokens::{NewToken, TokenRepository, generate_token_key},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -119,10 +122,14 @@ pub async fn register(State(state): State<AppState>, headers: HeaderMap, body: B
     if !settings.password_register_enabled {
         return rejected(translate(&headers, "user.password_register_disabled"));
     }
-    let Some(repository) = repository(&state) else {
+    let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let mut request = match bind(&headers, &body) {
+    let repository = RegistrationRepository::new(db.clone());
+    // Go `c.BindJSON(&user)` 实为 `UnmarshalBodyReusable`：JSON、
+    // form-urlencoded、multipart 三种 Content-Type 都会绑定（见
+    // `body_bind`）。失败统一折叠为 `common.invalid_params`。
+    let mut request = match crate::body_bind::bind_body::<RegisterRequest>(&headers, &body) {
         Ok(request) => request,
         Err(()) => return invalid_params(&headers),
     };
@@ -183,16 +190,50 @@ pub async fn register(State(state): State<AppState>, headers: HeaderMap, body: B
     } else {
         String::new()
     };
+    // Go `User.Insert` 在事务内写 `user.Quota = common.QuotaForNewUser`，
+    // `finishInsert` 随后消费同一组选项；这里装载一次供两处共用。
+    let finish_settings = load_finish_insert_settings(&state).await;
     let draft = NewUser {
         username: request.username.clone(),
         password_hash,
-        display_name: request.username,
+        display_name: request.username.clone(),
         email,
         inviter_id,
+        quota: finish_settings.quota_for_new_user,
         created_at: crate::http::now_seconds(),
     };
+    let username = request.username.clone();
     match repository.create(draft).await {
-        Ok(_) => success(),
+        Ok(user_id) => {
+            // Go `User.Insert` 提交后立即执行 `finishInsert`（侧栏初始化、
+            // 新用户赠送日志、邀请人奖励）；全部 best-effort，不改变响应。
+            let display = state.quota_display();
+            repository
+                .finish_insert(FinishInsert {
+                    user_id,
+                    username: &username,
+                    inviter_id,
+                    settings: &finish_settings,
+                    display: &display,
+                    now: crate::http::now_seconds(),
+                })
+                .await;
+            // Go 的 `GenerateDefaultToken`（默认关闭）：生成 48 位 key
+            // 并落初始令牌；失败固定回 `user.default_token_failed` /
+            // `user.create_default_token_error`（用户已创建）。
+            if generate_default_token() {
+                match insert_default_token(&db, user_id, &username).await {
+                    Ok(()) => {}
+                    Err(DefaultTokenError::KeyGeneration) => {
+                        return rejected(translate(&headers, "user.default_token_failed"));
+                    }
+                    Err(DefaultTokenError::Insert) => {
+                        return rejected(translate(&headers, "user.create_default_token_error"));
+                    }
+                }
+            }
+            success()
+        }
         Err(RegistrationError::EmailTaken) => {
             rejected(translate(&headers, "user.email_already_taken"))
         }
@@ -290,32 +331,108 @@ async fn read_limited_body(limit: usize, request: Request) -> Result<Request, St
     }
 }
 
-/// Go `UnmarshalBodyReusable`：非 JSON Content-Type 或空体保持零值；只有声明
-/// 为 JSON 且解析失败才报绑定错误。
-fn bind(headers: &HeaderMap, body: &[u8]) -> Result<RegisterRequest, ()> {
-    if !parses_as_json(headers) || body.is_empty() {
-        return Ok(RegisterRequest::default());
-    }
-    serde_json::from_slice(body).map_err(|_| ())
+/// 默认令牌生成的失败分类；固定映射到 Go 的两个 i18n key。
+enum DefaultTokenError {
+    /// Go `common.GenerateKey` 失败（`MsgUserDefaultTokenFailed`）。
+    KeyGeneration,
+    /// Go `token.Insert` 失败（`MsgCreateDefaultTokenErr`）。
+    Insert,
 }
 
-fn parses_as_json(headers: &HeaderMap) -> bool {
-    match headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-    {
-        None | Some("") => true,
-        Some(value) => value
-            .split(';')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .eq_ignore_ascii_case("application/json"),
-    }
+/// Go `constant.GenerateDefaultToken`（`common/init.go:193-194` 读取
+/// `GENERATE_DEFAULT_TOKEN`，默认关闭）。Go 在进程初始化时读一次，
+/// 这里以 OnceLock 对齐；接受集为 `strconv.ParseBool` 的真值集合。
+fn generate_default_token() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| match std::env::var("GENERATE_DEFAULT_TOKEN") {
+        Ok(value) => matches!(value.as_str(), "1" | "t" | "T" | "TRUE" | "true" | "True"),
+        Err(_) => false,
+    })
 }
 
-fn repository(state: &AppState) -> Option<RegistrationRepository> {
-    state.db().map(RegistrationRepository::new)
+/// Go `defaultUseAutoGroup`（`resolve_group.go:74` 默认 false）；option
+/// 快照未进 catalog（status.rs 同样以编译期默认输出）。until P3。
+fn default_use_auto_group() -> bool {
+    false
+}
+
+/// Go `Register` 的默认令牌（`manage_users.go:294-320`）：48 位 key、
+/// 名称 `"<用户名>的初始令牌"`、永不过期、不限额度、示例额度 500000。
+async fn insert_default_token(
+    db: &newapi_storage::Database,
+    user_id: i64,
+    username: &str,
+) -> Result<(), DefaultTokenError> {
+    let key = generate_token_key().ok_or(DefaultTokenError::KeyGeneration)?;
+    let now = crate::http::now_seconds();
+    let group = if default_use_auto_group() {
+        "auto".to_owned()
+    } else {
+        String::new()
+    };
+    let token = NewToken {
+        user_id,
+        key,
+        name: format!("{username}的初始令牌"),
+        created_time: now,
+        accessed_time: now,
+        expired_time: -1,
+        remain_quota: 500_000,
+        unlimited_quota: true,
+        model_limits_enabled: false,
+        model_limits: String::new(),
+        allow_ips: None,
+        group,
+        cross_group_retry: false,
+        auto_groups: String::new(),
+    };
+    TokenRepository::new(db.clone())
+        .insert(&token)
+        .await
+        .map(|_| ())
+        .map_err(|_| DefaultTokenError::Insert)
+}
+
+/// Go `finishInsert` 的选项快照：Go 读进程内存（启动时由 options 表
+/// 灌入），这里逐请求装载；读取失败按 Go 的默认值继续（全 0、合规未
+/// 确认），与“注册本身必须成功”的优先级一致。
+async fn load_finish_insert_settings(state: &AppState) -> FinishInsertSettings {
+    let Some(db) = state.db() else {
+        return FinishInsertSettings {
+            quota_for_new_user: 0,
+            quota_for_invitee: 0,
+            quota_for_inviter: 0,
+            payment_compliance_confirmed: false,
+        };
+    };
+    let mut settings = FinishInsertSettings {
+        quota_for_new_user: 0,
+        quota_for_invitee: 0,
+        quota_for_inviter: 0,
+        payment_compliance_confirmed: false,
+    };
+    match RegistrationSettings::load(&db, &RegistrationSettings::default()).await {
+        Ok(registration) => {
+            settings.quota_for_new_user = registration.quota_for_new_user;
+            settings.quota_for_invitee = registration.quota_for_invitee;
+            settings.quota_for_inviter = registration.quota_for_inviter;
+        }
+        Err(error) => tracing::warn!(
+            event = "registration_settings_load_failed",
+            category = crate::database_error_class(&error),
+            "registration settings load failed; skipping quota rewards"
+        ),
+    }
+    match TopUpSettings::load(&db).await {
+        Ok(topup) => settings.payment_compliance_confirmed = topup.payment_compliance_confirmed(),
+        // 合规门失败关闭（Go 的 fail-closed 语义）。
+        Err(error) => tracing::warn!(
+            event = "compliance_check_failed",
+            category = crate::database_error_class(&error),
+            "payment compliance load failed; treating as unconfirmed"
+        ),
+    }
+    settings
 }
 
 fn request_ip(state: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
@@ -443,16 +560,35 @@ mod tests {
     fn non_json_or_empty_bodies_stay_at_zero_values() {
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
-        let parsed = bind(&headers, br#"{"username":"user","password":"secret123"}"#)
-            .expect("skip is not an error");
+        let parsed = crate::body_bind::bind_body::<RegisterRequest>(
+            &headers,
+            br#"{"username":"user","password":"secret123"}"#,
+        )
+        .expect("skip is not an error");
         assert!(parsed.username.is_empty());
         assert!(
-            bind(&HeaderMap::new(), b"")
+            crate::body_bind::bind_body::<RegisterRequest>(&HeaderMap::new(), b"")
                 .expect("empty body")
                 .username
                 .is_empty()
         );
-        assert!(bind(&HeaderMap::new(), b"{").is_err());
+        assert!(crate::body_bind::bind_body::<RegisterRequest>(&HeaderMap::new(), b"{").is_err());
+    }
+
+    #[test]
+    fn form_urlencoded_body_binds_like_go_bindjson() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        let parsed = crate::body_bind::bind_body::<RegisterRequest>(
+            &headers,
+            b"username=formuser&password=secret123",
+        )
+        .expect("form body binds");
+        assert_eq!(parsed.username, "formuser");
+        assert_eq!(parsed.password, "secret123");
     }
 
     #[test]
