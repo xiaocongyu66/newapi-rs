@@ -766,7 +766,7 @@ macro_rules! batch_delete_transaction {
                 "SELECT CAST(id AS BIGINT) AS id, \"key\" FROM tokens WHERE user_id = ",
             );
             select.push_bind(user_id);
-            select.push(" AND deleted_at IS NULL AND id IN (");
+            select.push(" AND deleted_at IS NULL AND id IN ");
             push_id_list!(&mut select, ids);
             select.push(")");
             let mut keys = Vec::new();
@@ -791,7 +791,7 @@ macro_rules! batch_delete_transaction {
                 "UPDATE tokens SET deleted_at=CURRENT_TIMESTAMP WHERE user_id = ",
             );
             delete.push_bind(user_id);
-            delete.push(" AND deleted_at IS NULL AND id IN (");
+            delete.push(" AND deleted_at IS NULL AND id IN ");
             push_id_list!(&mut delete, ids);
             delete.push(")");
             delete.build().execute(&mut *transaction).await?;
@@ -1223,7 +1223,7 @@ impl TokenRepository {
                     "SELECT CAST(id AS BIGINT) AS id, \"key\" FROM tokens WHERE user_id = ",
                 );
                 query.push_bind(user_id);
-                query.push(" AND deleted_at IS NULL AND id IN (");
+                query.push(" AND deleted_at IS NULL AND id IN ");
                 push_id_list!(&mut query, ids);
                 query.push(")");
                 for row in query.build().fetch_all(pool).await? {
@@ -1238,7 +1238,7 @@ impl TokenRepository {
                     "SELECT CAST(id AS BIGINT) AS id, \"key\" FROM tokens WHERE user_id = ",
                 );
                 query.push_bind(user_id);
-                query.push(" AND deleted_at IS NULL AND id IN (");
+                query.push(" AND deleted_at IS NULL AND id IN ");
                 push_id_list!(&mut query, ids);
                 query.push(")");
                 for row in query.build().fetch_all(pool).await? {
