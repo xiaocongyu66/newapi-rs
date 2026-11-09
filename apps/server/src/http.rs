@@ -427,6 +427,39 @@ fn build_router(state: AppState) -> Router {
                 critical_guard,
             )),
     );
+    // `POST /api/token/batch`（`register_api.go:371`）：Go `tokenRoute` 组内，
+    // 仅 `UserAuth`，无关键路径限流、无缓存头。
+    let token_batch_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/token/batch",
+                post(crate::token_http::delete_token_batch),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                token_batch_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // `POST /api/token/batch/keys`（`register_api.go:372`）：Go 链
+    // `UserAuth → CriticalRateLimit → DisableCache → handler`；no-cache 头由
+    // handler 写在所有响应上，限流产生的 429/500 在其之前不带缓存头。
+    let token_batch_keys_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/token/batch/keys",
+                post(crate::token_http::get_token_keys_batch),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                token_batch_keys_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                token_batch_keys_state,
+                crate::auth::user_auth,
+            )),
+    );
     // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
     // `POST /api/user/aff_transfer` 同组，但 Go 在它前面多挂
     // `UserCriticalRateLimit("aff-transfer")` 与

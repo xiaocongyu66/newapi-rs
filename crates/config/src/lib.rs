@@ -29,6 +29,8 @@ pub struct Config {
     pub trusted_proxies: Option<String>,
     /// `ANONYMOUS_REQUEST_BODY_LIMIT_KB`；负数回退默认 512KB。
     pub anonymous_request_body_limit_kb: i64,
+    /// Go `common.CryptoSecret`：`CRYPTO_SECRET` 未设置或为空时回退 `SESSION_SECRET`。
+    crypto_secret: Option<String>,
 }
 
 /// `secure` 对应原 `SESSION_COOKIE_SECURE`；启用时来源列表非空。
@@ -111,6 +113,12 @@ impl Config {
                 Some(value)
             }
             None => None,
+        };
+        // Go `init.go`：`CRYPTO_SECRET` 非空则用之，否则回退 `SESSION_SECRET`
+        // （两者皆未设置时 Go 留下每进程随机 UUID，由服务入口生成随机密钥替代）。
+        let crypto_secret = match lookup("CRYPTO_SECRET")? {
+            Some(value) if !value.is_empty() => Some(value),
+            _ => session_secret.clone(),
         };
         let session_cookie = session_cookie_settings(
             lookup("SESSION_COOKIE_SECURE")?,
@@ -197,6 +205,7 @@ impl Config {
             global_api_rate_limit_duration_seconds,
             trusted_proxies: lookup("TRUSTED_PROXIES")?,
             anonymous_request_body_limit_kb,
+            crypto_secret,
         })
     }
 
@@ -207,6 +216,12 @@ impl Config {
     /// 未配置时返回 None；调用方负责生成进程级随机密钥并记录警告。
     pub fn session_secret(&self) -> Option<&str> {
         self.session_secret.as_deref()
+    }
+
+    /// Go `common.CryptoSecret`：两者都未设置时返回 None，由调用方生成进程级
+    /// 随机密钥（等价 Go 的随机 UUID 默认值）。
+    pub fn crypto_secret(&self) -> Option<&str> {
+        self.crypto_secret.as_deref()
     }
 
     pub fn redis_url(&self) -> Option<&str> {
@@ -451,6 +466,36 @@ mod tests {
                 .session_secret(),
             Some("a-random-secret-value")
         );
+    }
+
+    #[test]
+    fn crypto_secret_falls_back_to_session_secret_like_go() {
+        // Go `init.go`：CRYPTO_SECRET 非空优先；空值或未设置回退 SESSION_SECRET。
+        assert_eq!(
+            config(&[
+                ("SESSION_SECRET", "a-random-secret-value"),
+                ("CRYPTO_SECRET", "dedicated")
+            ])
+            .unwrap()
+            .crypto_secret(),
+            Some("dedicated")
+        );
+        assert_eq!(
+            config(&[
+                ("SESSION_SECRET", "a-random-secret-value"),
+                ("CRYPTO_SECRET", "")
+            ])
+            .unwrap()
+            .crypto_secret(),
+            Some("a-random-secret-value")
+        );
+        assert_eq!(
+            config(&[("SESSION_SECRET", "a-random-secret-value")])
+                .unwrap()
+                .crypto_secret(),
+            Some("a-random-secret-value")
+        );
+        assert_eq!(config(&[]).unwrap().crypto_secret(), None);
     }
 
     #[test]

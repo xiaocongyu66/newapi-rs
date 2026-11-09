@@ -15,6 +15,7 @@ pub mod self_user;
 pub mod session_cache;
 pub mod sessions;
 pub mod setup;
+pub mod token_cache;
 pub mod tokens;
 pub mod two_fa;
 pub mod user_auth;

@@ -5,6 +5,7 @@ use newapi_identity::auth_session::{AuthFence, SessionAuth};
 use newapi_identity::crypto::{AuthKeys, generate_session_secret};
 use newapi_identity::session_cache::RedisSessionCache;
 use newapi_identity::sessions::NoCache;
+use newapi_identity::token_cache::RedisTokenCache;
 use newapi_server::{AppState, database_error_class, install_safe_panic_hook, reload_loop, router};
 use newapi_storage::Database;
 use tokio::{net::TcpListener, sync::watch};
@@ -83,6 +84,32 @@ async fn run() -> Result<(), ()> {
             }
         },
         None => AuthFence::Disabled(NoCache::explicitly_disabled()),
+    };
+    // Go `track_token_cache.go`：配置 Redis 时挂令牌缓存；HMAC key 为
+    // `common.CryptoSecret`，未配置时回退进程级随机 SESSION_SECRET。连接失败
+    // 终止启动，与 Go 的 Redis 初始化保持同一策略。
+    let token_cache = match config.redis_url() {
+        Some(url) => {
+            let secret = config.crypto_secret().unwrap_or(secret.as_str());
+            match RedisTokenCache::connect(
+                url,
+                secret.as_bytes(),
+                config.sync_frequency.as_secs() as i64,
+            )
+            .await
+            {
+                Ok(cache) => Some(cache),
+                Err(_) => {
+                    tracing::error!(
+                        event = "token_cache_unavailable",
+                        "redis token cache connection failed"
+                    );
+                    db.close().await;
+                    return Err(());
+                }
+            }
+        }
+        None => None,
     };
     // 可信代理配置非法时必须终止启动，与 Go 一致；空值使用默认内网列表。
     let proxy_policy = match newapi_security::client_ip::ProxyPolicy::parse_trusted_proxies(
@@ -170,7 +197,8 @@ async fn run() -> Result<(), ()> {
             config.anonymous_request_body_limit_kb,
         )
         .bind_search_rate_limit(search_rate_limiter)
-        .bind_global_api_rate_limit(global_rate_limiter);
+        .bind_global_api_rate_limit(global_rate_limiter)
+        .bind_token_cache(token_cache);
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {
         Ok(listener) => listener,
         Err(_) => {
