@@ -14,7 +14,7 @@ use newapi_storage::Database;
 mod store;
 
 /// 注册收尾（Go `finishInsert`）读取的三个额度选项，默认全 0。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RegistrationSettings {
     /// Go `common.QuotaForNewUser`（constants.go:136）。
     pub quota_for_new_user: i64,
@@ -22,16 +22,6 @@ pub struct RegistrationSettings {
     pub quota_for_inviter: i64,
     /// Go `common.QuotaForInvitee`（constants.go:138）。
     pub quota_for_invitee: i64,
-}
-
-impl Default for RegistrationSettings {
-    fn default() -> Self {
-        Self {
-            quota_for_new_user: 0,
-            quota_for_inviter: 0,
-            quota_for_invitee: 0,
-        }
-    }
 }
 
 impl RegistrationSettings {

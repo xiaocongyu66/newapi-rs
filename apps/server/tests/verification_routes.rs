@@ -177,7 +177,7 @@ fn assert_no_cache_headers(headers: &HeaderMap) {
 
 /// `GET /api/verification` 契约（Go `SendEmailVerification`）。
 async fn run_verification_contract(db: Database) {
-    exec!(&db, OPTIONS);
+    // 调用方已创建 users/options 表。
     let app = state(&db).await;
 
     // ---- 校验：required/email（Go `MsgInvalidParams`）----
