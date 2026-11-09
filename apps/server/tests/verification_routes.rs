@@ -243,7 +243,6 @@ async fn run_verification_contract(db: Database) {
         json!("管理员已启用邮箱地址别名限制，您的邮箱地址由于包含特殊符号而被拒绝。")
     );
     set_option(&db, "EmailAliasRestrictionEnabled", "false").await;
-    let app = state(&db).await;
 
     // ---- Turnstile（Go `TurnstileCheck`）----
     set_option(&db, "TurnstileCheckEnabled", "true").await;

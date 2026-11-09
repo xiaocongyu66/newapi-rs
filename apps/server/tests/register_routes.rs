@@ -17,10 +17,7 @@ use axum::{
     response::Response,
     routing::post,
 };
-use newapi_identity::{
-    crypto::verify_password,
-    registration::{DEFAULT_USER_SETTING, register_email_verification_code},
-};
+use newapi_identity::{crypto::verify_password, registration::register_email_verification_code};
 use newapi_security::client_ip::ProxyPolicy;
 use newapi_server::{AppState, RateLimiter, limit::RateLimitSettings, register_http};
 use newapi_storage::Database;
@@ -405,12 +402,17 @@ async fn run_contract(db: Database) {
     assert_eq!(display_name, "newuser");
     assert_eq!(group, "default");
     assert_eq!(email, "");
-    // finishInsert 已把按角色生成的侧栏配置并入 setting。
+    // finishInsert 已把按角色生成的侧栏配置并入 setting；
+    // sidebar_modules 是 dto.UserSetting 的字符串字段，存的是被串化
+    // （带转义）的 JSON 串。
     assert_eq!(
         setting,
         format!(
             r#"{{"gotify_priority":0,"sidebar_modules":{}}}"#,
-            newapi_identity::registration::default_sidebar_config_for_role(1)
+            serde_json::to_string(
+                &newapi_identity::registration::default_sidebar_config_for_role(1)
+            )
+            .expect("sidebar config serializes")
         )
     );
     assert_eq!(aff_code.len(), 4);
