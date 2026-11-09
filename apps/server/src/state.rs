@@ -150,6 +150,9 @@ pub struct AppState {
     /// `GlobalAPIRateLimit`（mark "GA"）；未注入时不做限流（测试路径），
     /// 与 `rate_limiter` 的默认语义一致，未 bind 的 state 绝不产出 429。
     global_rate_limiter: Option<Arc<RateLimiter>>,
+    /// `GlobalWebRateLimit`（mark "GW"，web 兜底表面）；未注入时不做限流
+    /// （测试路径），语义与 `global_rate_limiter` 一致。
+    global_web_rate_limiter: Option<Arc<RateLimiter>>,
     /// Go `common.RDB` 令牌缓存；未注入时所有缓存路径降级为直通（RedisEnabled=false）。
     token_cache: Option<Arc<RedisTokenCache>>,
     /// `EmailVerificationRateLimit`（mark "EV"，2/30s）；未注入时直通
@@ -179,6 +182,7 @@ impl Default for AppState {
             rate_limiter: None,
             search_rate_limiter: None,
             global_rate_limiter: None,
+            global_web_rate_limiter: None,
             token_cache: None,
             email_verification_rate_limiter: None,
             anonymous_body_limit: anonymous_body_limit_bytes(512),
@@ -243,6 +247,13 @@ impl AppState {
 
     pub fn bind_global_api_rate_limit(mut self, limiter: RateLimiter) -> Self {
         self.global_rate_limiter = Some(Arc::new(limiter));
+        self
+    }
+
+    /// 注入全局 Web 限流（Go `GlobalWebRateLimit`，mark "GW"）；生产入口必须
+    /// 调用，未调用的测试路径保持直通，与 `bind_global_api_rate_limit` 一致。
+    pub fn bind_global_web_rate_limit(mut self, limiter: RateLimiter) -> Self {
+        self.global_web_rate_limiter = Some(Arc::new(limiter));
         self
     }
 
@@ -326,6 +337,19 @@ impl AppState {
     ) -> Result<Option<i64>, RateLimitUnavailable> {
         match self.global_rate_limiter.as_ref() {
             Some(limiter) => limiter.check("GA", client_ip, now).await,
+            None => Ok(None),
+        }
+    }
+
+    /// 全局 Web 限流：Go `GlobalWebRateLimit` 固定使用 mark "GW"，键推导与
+    /// `check_rate_limit` 完全一致；未注入限流器时直通（不记录任何状态）。
+    pub async fn check_global_web_rate_limit(
+        &self,
+        client_ip: &str,
+        now: i64,
+    ) -> Result<Option<i64>, RateLimitUnavailable> {
+        match self.global_web_rate_limiter.as_ref() {
+            Some(limiter) => limiter.check("GW", client_ip, now).await,
             None => Ok(None),
         }
     }
