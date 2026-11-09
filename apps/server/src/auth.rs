@@ -1,5 +1,6 @@
-//! Dashboard authentication boundary: reusable `UserAuth` middleware and the
-//! role gate behind Go `AdminAuth`.
+//! Dashboard authentication boundary: reusable `UserAuth` middleware, the
+//! role gate behind Go `AdminAuth`, and the two lenient middlewares
+//! `TryUserAuth` / `TokenAuthReadOnly`.
 //!
 //! Go reference: `apps/api/internal/security/authenticate.go`
 //! (`classifyDashboardCredential` + `authHelper`). Credential classification
@@ -17,7 +18,8 @@ use axum::{
 use newapi_identity::{
     CredentialKind as DashboardCredential,
     auth_session::SessionAuthError,
-    tokens::classify_dashboard,
+    login::USER_STATUS_ENABLED,
+    tokens::{TOKEN_STATUS_DISABLED, TokenRepository, classify_dashboard},
     user_auth::{
         CredentialKind, PersonalAccessTokenRepository, UserAuthError, UserAuthIdentity, authorize,
     },
@@ -40,6 +42,9 @@ const MSG_USER_BANNED: &str = "auth.user_banned";
 const MSG_USER_INFO_INVALID: &str = "auth.user_info_invalid";
 const MSG_INSUFFICIENT_PRIVILEGE: &str = "auth.insufficient_privilege";
 const MSG_DATABASE_ERROR: &str = "common.database_error";
+const MSG_TOKEN_NOT_PROVIDED: &str = "token.not_provided";
+const MSG_TOKEN_INVALID: &str = "token.invalid";
+const MSG_TOKEN_STATUS_UNAVAILABLE: &str = "token.status_unavailable";
 
 /// Authenticated dashboard identity available to handlers after [`user_auth`].
 #[derive(Clone, Debug)]
@@ -126,6 +131,274 @@ pub async fn admin_auth(
         }
         Err(failure) => render_auth_failure(failure, &language),
     }
+}
+
+/// Go `security.TryUserAuth`（`security/authenticate.go:77-89`）：宽松尝试认证，
+/// 失败不阻断请求。凭据分类与完整鉴权同源（`classifyDashboardCredential`），
+/// 但不做任何状态/角色/用户信息授权：
+/// - 无凭据或不可解析的凭据 → unmatched 且无错误，匿名继续（`authenticate.go:154-158`）；
+/// - dashboard JWT 解析/会话校验失败 → 按 `writeDashboardAuthError` 终止；
+/// - PAT 查无此行（含软删除用户）同样落到 unmatched，匿名继续；
+/// - 成功时写入 [`AuthenticatedUser`] 扩展，供后续 handler 使用。
+pub async fn try_user_auth(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let language = request_language(&request);
+    let Ok(AuthCredential::Bearer(credential) | AuthCredential::Raw(credential)) =
+        parse_authorization(request.headers())
+    else {
+        // Go 的 unmatched 分支带 nil error：不写上下文，直接 c.Next()。
+        return next.run(request).await;
+    };
+    let now = crate::http::now_seconds();
+    match resolve_optional_identity(&state, &credential, now).await {
+        Ok(Some(user)) => {
+            request.extensions_mut().insert(user);
+            next.run(request).await
+        }
+        // Go `ValidateAccessToken` 查无此行返回 (nil, nil)（store_users.go:1039-1041），
+        // classifyDashboardCredential 把它归为 unmatched：请求继续，仅无鉴权上下文。
+        Ok(None) => next.run(request).await,
+        Err(failure) => render_auth_failure(failure, &language),
+    }
+}
+
+/// Go `classifyDashboardCredential` 的 TryUserAuth 变体：只解析与验证，不做
+/// 授权判定。返回 `Ok(None)` 表示 unmatched（匿名），返回 `Err` 表示
+/// `writeDashboardAuthError` 要终止的那个失败分支（`authenticate.go:205-220`）。
+async fn resolve_optional_identity(
+    state: &AppState,
+    credential: &str,
+    now: i64,
+) -> Result<Option<AuthenticatedUser>, AuthFailure> {
+    let Some(db) = state.db() else {
+        return Err(internal_failure());
+    };
+    match classify_dashboard(credential) {
+        DashboardCredential::InternalDashboard => {
+            let Some(auth) = state.auth() else {
+                return Err(internal_failure());
+            };
+            let identity = match auth.parse_access(credential, now) {
+                Ok(identity) => identity,
+                // Go `ParseAccessToken` 区分过期与无效（authtoken.go:208/210），
+                // writeDashboardAuthError 分别给出 AUTH_TOKEN_EXPIRED 与 AUTH_UNAUTHORIZED；
+                // 但 `SessionAuth::parse_access` 已把两者折叠为 Unauthorized，本端口
+                // 与既有 `user_auth` 一律映射 AUTH_UNAUTHORIZED（遗留见交付说明）。
+                Err(_) => return Err(invalid_credential()),
+            };
+            match auth.validate(&identity, now).await {
+                Ok(_) => {}
+                Err(SessionAuthError::Storage(_))
+                | Err(SessionAuthError::BatchFailed { .. })
+                | Err(SessionAuthError::Fence) => {
+                    tracing::warn!(
+                        event = "dashboard_session_storage_error",
+                        "dashboard session validation failed"
+                    );
+                    return Err(internal_failure());
+                }
+                Err(_) => return Err(session_revoked()),
+            }
+            let profile = match UserProfileRepository::new(db.clone())
+                .by_id(identity.user_id)
+                .await
+            {
+                Ok(Some(profile)) => profile,
+                // Go `ValidateLoginSession` 把用户消失映射为 ErrLoginSessionRevoked
+                // （authenticate.go:124-127），writeDashboardAuthError 归 401。
+                Ok(None) => return Err(session_revoked()),
+                Err(error) => {
+                    tracing::warn!(
+                        event = "dashboard_user_lookup_failed",
+                        category = crate::database_error_class(&error),
+                        "dashboard user lookup failed"
+                    );
+                    return Err(internal_failure());
+                }
+            };
+            // Go `ValidateLoginSession`：用户未启用同样归 ErrLoginSessionRevoked
+            // （authenticate.go:128-130），因此 TryUserAuth 的 JWT 分支拒绝封禁用户。
+            if profile.status != USER_STATUS_ENABLED {
+                return Err(session_revoked());
+            }
+            Ok(Some(AuthenticatedUser(UserAuthIdentity {
+                user_id: profile.id,
+                username: profile.username,
+                role: profile.role,
+                status: profile.status,
+                auth_version: profile.auth_version,
+                group: profile.group,
+                credential: CredentialKind::DashboardSession,
+            })))
+        }
+        DashboardCredential::Opaque => {
+            match PersonalAccessTokenRepository::new(db.clone())
+                .by_token(credential)
+                .await
+            {
+                // PAT 分支不检查用户状态：封禁用户的 PAT 仍写入鉴权上下文，
+                // 由下游 handler 自行裁决（与 Go authenticate.go:170-181 一致）。
+                Ok(Some(user)) => Ok(Some(AuthenticatedUser(user))),
+                Ok(None) => Ok(None),
+                Err(error) => {
+                    tracing::warn!(
+                        event = "dashboard_pat_lookup_failed",
+                        category = crate::database_error_class(&error),
+                        "dashboard PAT lookup failed"
+                    );
+                    Err(internal_failure())
+                }
+            }
+        }
+    }
+}
+
+/// Go `security.TokenAuthReadOnly`（`security/authenticate.go:267-342`）：只读
+/// 查询接口的宽松令牌认证。只验证令牌 key 是否存在，不检查令牌状态（显式禁用
+/// 除外）、过期时间与额度；仍检查用户是否被封禁。失败响应体只有 success 与
+/// message，没有 code 字段（Go 用 `c.JSON` 而非 `writeDashboardAuthError`）。
+pub async fn token_auth_read_only(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let language = request_language(&request);
+    let Some(db) = state.db() else {
+        return readonly_failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            MSG_DATABASE_ERROR,
+            &language,
+        );
+    };
+    let key = match request.headers().get(AUTHORIZATION) {
+        None => {
+            return readonly_failure(StatusCode::UNAUTHORIZED, MSG_TOKEN_NOT_PROVIDED, &language);
+        }
+        Some(value) => match value.to_str() {
+            // Go 的空 header 检查是 `key == ""`，等同于 missing。
+            Ok("") => {
+                return readonly_failure(
+                    StatusCode::UNAUTHORIZED,
+                    MSG_TOKEN_NOT_PROVIDED,
+                    &language,
+                );
+            }
+            // 原始 key 查询（Go authenticate.go:273-287）：只剥这两种大小写的
+            // Bearer 前缀与 sk- 前缀，且只取首个 `-` 之前的部分。
+            Ok(raw) => readonly_key(raw),
+            // 非 UTF-8 字节永远匹配不到已存储的 key，等同 Go 的查无此行。
+            Err(_) => {
+                return readonly_failure(StatusCode::UNAUTHORIZED, MSG_TOKEN_INVALID, &language);
+            }
+        },
+    };
+    let token = match TokenRepository::new(db.clone()).by_key(&key).await {
+        Ok(Some(token)) => token,
+        // Go `gorm.ErrRecordNotFound` → 401 token.invalid（authenticate.go:291-295）。
+        Ok(None) => {
+            return readonly_failure(StatusCode::UNAUTHORIZED, MSG_TOKEN_INVALID, &language);
+        }
+        Err(error) => {
+            tracing::warn!(
+                event = "token_readonly_lookup_failed",
+                category = crate::database_error_class(&error),
+                "TokenAuthReadOnly token lookup failed"
+            );
+            return readonly_failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                MSG_DATABASE_ERROR,
+                &language,
+            );
+        }
+    };
+    // 只拒绝显式禁用的令牌；过期(3)/耗尽(4)等状态继续放行（authenticate.go:307-316）。
+    if token.status == TOKEN_STATUS_DISABLED {
+        return readonly_failure(
+            StatusCode::UNAUTHORIZED,
+            MSG_TOKEN_STATUS_UNAVAILABLE,
+            &language,
+        );
+    }
+    match UserProfileRepository::new(db).by_id(token.user_id).await {
+        Ok(Some(profile)) => {
+            if profile.status != USER_STATUS_ENABLED {
+                return readonly_failure(StatusCode::FORBIDDEN, MSG_USER_BANNED, &language);
+            }
+            request.extensions_mut().insert(ReadOnlyTokenIdentity {
+                user_id: token.user_id,
+                token_id: token.id,
+                token_key: token.key,
+            });
+            next.run(request).await
+        }
+        // Go `GetUserCache` 的任何错误（含用户消失）统一 500（authenticate.go:318-327）。
+        Ok(None) => readonly_failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            MSG_DATABASE_ERROR,
+            &language,
+        ),
+        Err(error) => {
+            tracing::warn!(
+                event = "token_readonly_user_lookup_failed",
+                category = crate::database_error_class(&error),
+                "TokenAuthReadOnly user lookup failed"
+            );
+            readonly_failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                MSG_DATABASE_ERROR,
+                &language,
+            )
+        }
+    }
+}
+
+/// Go authenticate.go:282-287 的 key 规整：Bearer/bearer 前缀 + TrimSpace、
+/// 去 sk- 前缀、首个 `-` 之前的部分。
+fn readonly_key(raw: &str) -> String {
+    let stripped = match raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))
+    {
+        Some(rest) => rest.trim(),
+        None => raw,
+    };
+    let stripped = stripped.strip_prefix("sk-").unwrap_or(stripped);
+    stripped.split('-').next().unwrap_or_default().to_owned()
+}
+
+/// [`TokenAuthReadOnly`] 写入请求的令牌身份（Go `c.Set` 的 id/token_id/
+/// token_key，authenticate.go:337-339）。token_key 是凭据，Debug 输出打码。
+#[derive(Clone)]
+pub struct ReadOnlyTokenIdentity {
+    pub user_id: i64,
+    pub token_id: i64,
+    pub token_key: String,
+}
+
+impl std::fmt::Debug for ReadOnlyTokenIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOnlyTokenIdentity")
+            .field("user_id", &self.user_id)
+            .field("token_id", &self.token_id)
+            .field("token_key", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Go `TokenAuthReadOnly` 的失败响应格式：`{success, message}`，无 code。
+fn readonly_failure(status: StatusCode, message_key: &str, language: &str) -> Response {
+    let message = newapi_i18n::translate(language, message_key, std::iter::empty::<(&str, &str)>());
+    (
+        status,
+        Json(json!({
+            "success": false,
+            "message": message,
+        })),
+    )
+        .into_response()
 }
 
 async fn authenticate(

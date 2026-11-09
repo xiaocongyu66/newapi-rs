@@ -394,6 +394,39 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // `GET /api/log/token`：Go `logRoute` 组级 CORS → `CriticalRateLimit` 之后
+    // 路由级 `TokenAuthReadOnly()`（`register_api.go:59-62`）。宽松令牌认证只验
+    // key 存在（显式禁用与封禁用户除外），失败体无 code 字段。
+    let log_token_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/log/token", get(crate::readonly_http::log_by_token))
+            .route_layer(middleware::from_fn_with_state(
+                log_token_state.clone(),
+                crate::auth::token_auth_read_only,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                log_token_state,
+                critical_guard,
+            )),
+    );
+    // `GET /api/usage/token/`：Go `usageRoute` 组级 CORS → `CriticalRateLimit`
+    // → 组级 `TokenAuthReadOnly()`（`register_api.go:375-384`）。axum 不做尾部
+    // 斜杠归一化，两种写法都注册（与 `/api/token` 一致）。
+    let usage_token_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/usage/token/", get(crate::readonly_http::token_usage))
+            .route("/api/usage/token", get(crate::readonly_http::token_usage))
+            .route_layer(middleware::from_fn_with_state(
+                usage_token_state.clone(),
+                crate::auth::token_auth_read_only,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                usage_token_state,
+                critical_guard,
+            )),
+    );
     // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
     // `POST /api/user/aff_transfer` 同组，但 Go 在它前面多挂
     // `UserCriticalRateLimit("aff-transfer")` 与
