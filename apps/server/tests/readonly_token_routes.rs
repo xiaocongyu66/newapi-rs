@@ -853,8 +853,17 @@ async fn run_contract(db: &Database) {
         assert_eq!(body["code"], serde_json::json!(true));
         assert_eq!(body["data"]["name"], serde_json::json!("pair"));
     }
-    // Unknown key: 200 + translated token.get_info_failed (CtxApiErrorI18n).
-    let response = send(&state(db), "/api/usage/token/", Some("Bearer unknownkey")).await;
+    // The handler's CtxApiErrorI18n branch (manage_tokens.go:216-221) is only
+    // reachable through the key-normalization asymmetry: the middleware
+    // resolves `sk-pairkey-def` down to the existing `pairkey`, while the
+    // handler queries the full `pairkey-def` and misses → 200 + translated
+    // token.get_info_failed (an unknown key dies at the middleware first).
+    let response = send(
+        &state(db),
+        "/api/usage/token/",
+        Some("Bearer sk-pairkey-def"),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["success"], serde_json::json!(false));
