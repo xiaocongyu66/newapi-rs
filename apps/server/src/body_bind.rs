@@ -235,8 +235,7 @@ fn read_form_values(boundary: &str, body: &[u8]) -> Result<Vec<(String, String)>
     let mut cursor = 0usize;
     let mut saw_part = false;
     loop {
-        let Some((delimiter_at, after_delimiter)) = next_delimiter(body, cursor, &dash_boundary)
-        else {
+        let Some((_, after_delimiter)) = next_delimiter(body, cursor, &dash_boundary) else {
             // Go：首条边界不匹配即 `NextPart` 错误。
             return if saw_part { Ok(values) } else { Err(()) };
         };

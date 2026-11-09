@@ -285,8 +285,8 @@ pub async fn reset_password_guard(
 
 /// Go `TurnstileCheck`（check_turnstile.go:15-50）：读 query 的
 /// `turnstile`，空 token / 校验失败 / 传输失败都拒绝（fail closed）；
-/// 开关关闭时直通。复用 register_http 同款注入槽。
-async fn turnstile_gate(State(state): State<AppState>, request: Request, next: Next) -> Response {
+/// 开关关闭时直通。复用 register_http 同款注入槽；由两个 guard 直接调用。
+async fn turnstile_gate(state: &AppState, request: Request, next: Next) -> Response {
     let auth = state.auth_settings();
     let enabled = auth.turnstile_check_enabled;
     let token = crate::turnstile::query_token(request.uri().query());
