@@ -679,10 +679,11 @@ mod finish_insert_tests {
     #[test]
     fn sidebar_config_keys_are_sorted_like_go_map_marshal() {
         let config = default_sidebar_config_for_role(ROLE_ROOT_USER);
-        // Go 的 encoding/json 对 map 按键排序：admin,chat,console,personal。
+        // Go 的 encoding/json 对 map 按键排序：admin,chat,console,personal；
+        // console 区域含 detail/enabled/log/midjourney/task/token 六键。
         assert_eq!(
             config,
-            r#"{"admin":{"channel":true,"enabled":true,"models":true,"redemption":true,"setting":true,"user":true},"chat":{"chat":true,"enabled":true,"playground":true},"console":{"console":true,"detail":true,"enabled":true,"log":true,"midjourney":true,"task":true},"personal":{"enabled":true,"personal":true,"topup":true}}"#
+            r#"{"admin":{"channel":true,"enabled":true,"models":true,"redemption":true,"setting":true,"user":true},"chat":{"chat":true,"enabled":true,"playground":true},"console":{"detail":true,"enabled":true,"log":true,"midjourney":true,"task":true,"token":true},"personal":{"enabled":true,"personal":true,"topup":true}}"#
         );
     }
 }
