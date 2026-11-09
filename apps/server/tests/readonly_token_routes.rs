@@ -377,7 +377,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "ro-abc",
+            key: "roabc",
             name: "readonly",
             status: 1,
             expired_time: -1,
@@ -390,13 +390,13 @@ async fn run_contract(db: &Database) {
     )
     .await;
     for header in [
-        "ro-abc",
-        "sk-ro-abc",
-        "ro-abc-123",
-        "sk-ro-abc-123",
-        "Bearer ro-abc",
-        "bearer ro-abc",
-        "Bearer sk-ro-abc-def",
+        "roabc",
+        "sk-roabc",
+        "roabc-123",
+        "sk-roabc-123",
+        "Bearer roabc",
+        "bearer roabc",
+        "Bearer sk-roabc-def",
     ] {
         let response = send(
             &state(db),
@@ -413,9 +413,10 @@ async fn run_contract(db: &Database) {
         assert_eq!(body["success"], serde_json::json!(true));
     }
 
-    // A key that still carries a `-` (i.e. the stored key really contains one)
-    // resolves to the pre-dash segment and misses: 401 token.invalid.
-    let response = send(&state(db), "/api/log/token", Some("Bearer ro-abc-")).await;
+    // A sent value whose pre-dash segment is not a stored key misses: the
+    // middleware only consults the segment before the first `-`
+    // (`roxyz-anything` resolves to `roxyz`), so it is 401 token.invalid.
+    let response = send(&state(db), "/api/log/token", Some("Bearer roxyz-anything")).await;
     assert_readonly_failure(response, StatusCode::UNAUTHORIZED, "token.invalid").await;
 
     // Explicitly disabled (status 2, authenticate.go:309-316): 401.
@@ -425,7 +426,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "disabled-key",
+            key: "disabledkey",
             name: "disabled",
             status: 2,
             expired_time: -1,
@@ -437,7 +438,7 @@ async fn run_contract(db: &Database) {
         },
     )
     .await;
-    let response = send(&state(db), "/api/log/token", Some("Bearer disabled-key")).await;
+    let response = send(&state(db), "/api/log/token", Some("Bearer disabledkey")).await;
     assert_readonly_failure(
         response,
         StatusCode::UNAUTHORIZED,
@@ -454,7 +455,7 @@ async fn run_contract(db: &Database) {
             db,
             &TokenSeed {
                 user_id: USER_ID,
-                key: "stale-key",
+                key: "stalekey",
                 name: "stale",
                 status,
                 expired_time: 1,
@@ -466,7 +467,7 @@ async fn run_contract(db: &Database) {
             },
         )
         .await;
-        let response = send(&state(db), "/api/usage/token/", Some("Bearer stale-key")).await;
+        let response = send(&state(db), "/api/usage/token/", Some("Bearer stalekey")).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await;
         assert_eq!(body["code"], serde_json::json!(true));
@@ -480,7 +481,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "banned-key",
+            key: "bannedkey",
             name: "banned",
             status: 1,
             expired_time: -1,
@@ -492,10 +493,10 @@ async fn run_contract(db: &Database) {
         },
     )
     .await;
-    let response = send(&state(db), "/api/log/token", Some("Bearer banned-key")).await;
+    let response = send(&state(db), "/api/log/token", Some("Bearer bannedkey")).await;
     assert_readonly_failure(response, StatusCode::FORBIDDEN, "auth.user_banned").await;
     // The middleware rejects before the usage handler runs.
-    let response = send(&state(db), "/api/usage/token/", Some("Bearer banned-key")).await;
+    let response = send(&state(db), "/api/usage/token/", Some("Bearer bannedkey")).await;
     assert_readonly_failure(response, StatusCode::FORBIDDEN, "auth.user_banned").await;
 
     // User vanished (authenticate.go:318-327 maps every GetUserCache error to
@@ -505,7 +506,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: 9999,
-            key: "orphan-key",
+            key: "orphankey",
             name: "orphan",
             status: 1,
             expired_time: -1,
@@ -517,7 +518,7 @@ async fn run_contract(db: &Database) {
         },
     )
     .await;
-    let response = send(&state(db), "/api/log/token", Some("Bearer orphan-key")).await;
+    let response = send(&state(db), "/api/log/token", Some("Bearer orphankey")).await;
     assert_readonly_failure(
         response,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -532,7 +533,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "gone-key",
+            key: "gonekey",
             name: "gone",
             status: 1,
             expired_time: -1,
@@ -546,10 +547,10 @@ async fn run_contract(db: &Database) {
     .await;
     exec(
         db,
-        "UPDATE tokens SET deleted_at=CURRENT_TIMESTAMP WHERE \"key\"='gone-key'",
+        "UPDATE tokens SET deleted_at=CURRENT_TIMESTAMP WHERE \"key\"='gonekey'",
     )
     .await;
-    let response = send(&state(db), "/api/log/token", Some("Bearer gone-key")).await;
+    let response = send(&state(db), "/api/log/token", Some("Bearer gonekey")).await;
     assert_readonly_failure(response, StatusCode::UNAUTHORIZED, "token.invalid").await;
 
     // --- handler.GetLogByKey (handle_logs.go:68-89) ---
@@ -560,7 +561,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "log-key",
+            key: "logkey",
             name: "logs",
             status: 1,
             expired_time: -1,
@@ -576,7 +577,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "other-key",
+            key: "otherkey",
             name: "other",
             status: 1,
             expired_time: -1,
@@ -595,7 +596,7 @@ async fn run_contract(db: &Database) {
         "/api/log/token?token_id=",
         "/api/log/token?token_id=abc",
     ] {
-        let response = send(&state(db), path, Some("Bearer log-key")).await;
+        let response = send(&state(db), path, Some("Bearer logkey")).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_json(response).await;
         assert_eq!(body["success"], serde_json::json!(false));
@@ -664,7 +665,7 @@ async fn run_contract(db: &Database) {
     let response = send(
         &state(db),
         &format!("/api/log/token?token_id={log_token}"),
-        Some("Bearer log-key"),
+        Some("Bearer logkey"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -718,7 +719,7 @@ async fn run_contract(db: &Database) {
     let response = send(
         &state(db),
         &format!("/api/log/token?token_id={other_token}"),
-        Some("Bearer log-key"),
+        Some("Bearer logkey"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -734,7 +735,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "usage-key",
+            key: "usagekey",
             name: "usage",
             status: 1,
             expired_time: -1,
@@ -748,7 +749,7 @@ async fn run_contract(db: &Database) {
     .await;
     // Under Go's route the trailing slash exists; both spellings behave alike.
     for path in ["/api/usage/token/", "/api/usage/token"] {
-        let response = send(&state(db), path, Some("Bearer usage-key")).await;
+        let response = send(&state(db), path, Some("Bearer usagekey")).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await;
         assert_eq!(body["code"], serde_json::json!(true));
@@ -777,7 +778,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "expiry-key",
+            key: "expirykey",
             name: "expiry",
             status: 1,
             expired_time: 123,
@@ -789,12 +790,7 @@ async fn run_contract(db: &Database) {
         },
     )
     .await;
-    let response = send(
-        &state(db),
-        "/api/usage/token/",
-        Some("Bearer sk-expiry-key"),
-    )
-    .await;
+    let response = send(&state(db), "/api/usage/token/", Some("Bearer sk-expirykey")).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["data"]["expires_at"], serde_json::json!(123));
@@ -810,7 +806,7 @@ async fn run_contract(db: &Database) {
         db,
         &TokenSeed {
             user_id: USER_ID,
-            key: "pair-key",
+            key: "pairkey",
             name: "pair",
             status: 1,
             expired_time: -1,
@@ -822,7 +818,7 @@ async fn run_contract(db: &Database) {
         },
     )
     .await;
-    for header in ["pair-key", "Bearer  pair-key", "Bearer pair-key third"] {
+    for header in ["pairkey", "Bearer  pairkey", "Bearer pairkey third"] {
         let response = send(&state(db), "/api/usage/token/", Some(header)).await;
         assert_eq!(
             response.status(),
@@ -838,7 +834,7 @@ async fn run_contract(db: &Database) {
         );
     }
     // The scheme check is case-insensitive: BEARER/bearer both reach the token.
-    for header in ["BEARER pair-key", "bearer pair-key"] {
+    for header in ["BEARER pairkey", "bearer pairkey"] {
         let response = send(&state(db), "/api/usage/token/", Some(header)).await;
         assert_eq!(
             response.status(),
@@ -850,7 +846,7 @@ async fn run_contract(db: &Database) {
         assert_eq!(body["data"]["name"], serde_json::json!("pair"));
     }
     // Unknown key: 200 + translated token.get_info_failed (CtxApiErrorI18n).
-    let response = send(&state(db), "/api/usage/token/", Some("Bearer unknown-key")).await;
+    let response = send(&state(db), "/api/usage/token/", Some("Bearer unknownkey")).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["success"], serde_json::json!(false));
