@@ -4,6 +4,8 @@
 //! Go references:
 //! - `apps/api/internal/transport/handler/handle_group.go` (`GetUserGroups`)
 //! - `apps/api/internal/identity/manage_users.go` (`GetUserModels`)
+//! - `apps/api/internal/catalog/resolve_group.go`（可用分组覆盖与自动分组）
+//! - `apps/api/internal/catalog/resolve_group_service.go`（`GetGroupsEnabledModels`）
 //! - `apps/api/internal/transport/compose/register_api.go` (route wiring)
 //!
 //! `GET /api/user/groups` is registered without `UserAuth` in Go, so
@@ -13,17 +15,21 @@
 //! optional extension is present only when the router applied
 //! [`crate::auth::user_auth`], which reproduces the Go difference.
 //!
-//! Model resolution is not ported yet: the catalog crate has no `abilities` /
-//! `channels` repository, so [`user_models`] returns the empty list Go returns
-//! when its resolver hook is unregistered. The TODO below marks the seam; no
-//! model data is fabricated.
+//! 组设置来自 `AppState::group_settings()` 快照（启动与 reload worker 装载，
+//! 对齐 Go 的 `InitOptionMap` + `SyncOptions`）：数据库写入在下一次 reload
+//! 前不可见，与 `notice` 等公共配置的快照语义一致。
+//!
+//! `GET /api/user/models` 的模型清单由 `abilities` 表决定（Go
+//! `identity.groupModels` 解析器 → `GetGroupsEnabledModels`）：仅启用分组中
+//! 的启用渠道模型，按用户组可用集合选择。
 
 use axum::{
     Json,
     extract::{Extension, State},
-    http::StatusCode,
+    http::{StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+use newapi_catalog::abilities::groups_enabled_models;
 use newapi_catalog::group_settings::{AUTO_GROUP_RATIO, GroupSettings};
 use serde_json::{Map, Value, json};
 
@@ -44,30 +50,118 @@ pub async fn user_groups(
         .as_ref()
         .map(|Extension(user)| user.0.group.as_str())
         .unwrap_or("");
-    let settings = match load_settings(&state).await {
-        Ok(settings) => settings,
-        Err(response) => return *response,
-    };
-    Json(success_body(user_groups_body(&settings, user_group))).into_response()
+    Json(success_body(user_groups_body(
+        &state.group_settings(),
+        user_group,
+    )))
+    .into_response()
 }
 
 /// `GET /api/user/models`.
 ///
-/// Go `identity.GetUserModels` reads the authenticated user, selects the groups
-/// from the `group` query parameter (`auto` expands to the ordered auto-group
-/// list), and resolves models from the `abilities` table. The selection rules
-/// and the `abilities` lookup belong to a later slice; the response shape is
-/// final and the data is the empty list.
+/// Go `identity.GetUserModels`: 读取认证用户的组，按 `group` 查询参数选择
+/// 分组（`auto` 展开为有序自动分组列表），并从 `abilities` 表解析这些分组
+/// 的启用模型。请求分组不在用户可用集合内时返回空列表，与 Go 一致。
 pub async fn user_models(
-    State(_state): State<AppState>,
-    Extension(_authenticated): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    uri: Uri,
 ) -> Response {
-    // TODO(groups-models): load `GroupSettings` here, port the
-    // `userUsableGroups`/`userAutoGroup` selection, and run
-    // `SELECT DISTINCT model FROM abilities WHERE "group" = ? AND enabled = ?`
-    // once the catalog owns an abilities repository. Go returns an empty list
-    // while its resolver hook is unregistered, which this matches.
-    Json(user_models_body(Vec::new())).into_response()
+    let user_group = authenticated.0.group.as_str();
+    let settings = state.group_settings();
+    let groups = user_models_groups(&settings, user_group, requested_group(&uri).as_deref());
+    let Some(db) = state.db() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match groups_enabled_models(&db, &groups).await {
+        Ok(models) => Json(user_models_body(models)).into_response(),
+        Err(error) => {
+            tracing::warn!(
+                event = "abilities_load_failed",
+                category = crate::database_error_class(&error),
+                "abilities load failed"
+            );
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
+/// Pure `GetUserModels` group selection, testable without routing or a
+/// database.
+///
+/// Go switch: 无参数 → 全部可用分组（Go 遍历 map 顺序随机，Rust 按键序
+/// 保证确定输出）；`auto` → 仅当 `auto` 可用时展开为自动分组列表；
+/// 其它分组 → 仅当该分组可用时选中它。
+pub fn user_models_groups(
+    settings: &GroupSettings,
+    user_group: &str,
+    requested: Option<&str>,
+) -> Vec<String> {
+    let usable = settings.user_usable_groups(user_group);
+    match requested {
+        None | Some("") => usable.keys().cloned().collect(),
+        Some("auto") => match usable.get("auto") {
+            Some(_) => settings.user_auto_group(user_group),
+            None => Vec::new(),
+        },
+        Some(group) => match usable.get(group) {
+            Some(_) => vec![group.to_owned()],
+            None => Vec::new(),
+        },
+    }
+}
+
+/// `c.Query("group")`: 缺省为 None；Go/axum 解码对齐（`+` 为空格，
+/// `%XX` 按字节解码），与 `token_http::query_pairs` 同语义但只取 `group`。
+fn requested_group(uri: &Uri) -> Option<String> {
+    let query = uri.query()?;
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .find_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (key == "group").then(|| percent_decode(value))
+        })
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                match (hex_value(bytes[index + 1]), hex_value(bytes[index + 2])) {
+                    (Some(high), Some(low)) => {
+                        out.push(high * 16 + low);
+                        index += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Pure `GetUserGroups` assembly, testable without routing or a database.
@@ -110,23 +204,6 @@ pub fn success_body(data: Value) -> Value {
     })
 }
 
-async fn load_settings(state: &AppState) -> Result<GroupSettings, Box<Response>> {
-    let Some(db) = state.db() else {
-        return Err(Box::new(StatusCode::SERVICE_UNAVAILABLE.into_response()));
-    };
-    match GroupSettings::load(&db, &GroupSettings::default()).await {
-        Ok(settings) => Ok(settings),
-        Err(error) => {
-            tracing::warn!(
-                event = "group_settings_load_failed",
-                category = crate::database_error_class(&error),
-                "group settings load failed"
-            );
-            Err(Box::new(StatusCode::SERVICE_UNAVAILABLE.into_response()))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -150,7 +227,19 @@ mod tests {
                 "vip".to_owned(),
                 BTreeMap::from([("default".to_owned(), 0.25)]),
             )]),
+            group_special_usable_group: BTreeMap::new(),
+            auto_groups: vec!["default".to_owned()],
         }
+    }
+
+    fn specials() -> BTreeMap<String, BTreeMap<String, String>> {
+        BTreeMap::from([(
+            "default".to_owned(),
+            BTreeMap::from([
+                ("+:vip".to_owned(), "VIP 分组".to_owned()),
+                ("-:unavailable".to_owned(), String::new()),
+            ]),
+        )])
     }
 
     #[test]
@@ -193,10 +282,91 @@ mod tests {
     }
 
     #[test]
-    fn models_envelope_is_an_empty_array() {
+    fn groups_reflect_the_special_usable_group_overlay() {
+        let mut settings = settings();
+        settings
+            .user_usable_groups
+            .insert("unavailable".to_owned(), "不可用分组".to_owned());
+        settings.group_ratio.insert("unavailable".to_owned(), 1.0);
+        settings.group_special_usable_group = specials();
+        let body = success_body(user_groups_body(&settings, "default"));
+        let data = body["data"].as_object().unwrap();
+        assert_eq!(data["vip"]["desc"], json!("VIP 分组"));
+        assert!(!data.contains_key("unavailable"));
+    }
+
+    #[test]
+    fn models_envelope_is_a_json_array() {
         assert_eq!(
-            user_models_body(Vec::new()),
-            json!({"success": true, "message": "", "data": []})
+            user_models_body(vec!["a".to_owned()]),
+            json!({"success": true, "message": "", "data": ["a"]})
         );
+    }
+
+    #[test]
+    fn models_select_all_usable_groups_without_a_query() {
+        let settings = settings();
+        let groups = user_models_groups(&settings, "default", None);
+        assert_eq!(
+            groups,
+            vec!["auto".to_owned(), "default".to_owned(), "vip".to_owned()]
+        );
+        // `group=` is Go's empty query: same as absent.
+        assert_eq!(user_models_groups(&settings, "default", Some("")), groups);
+    }
+
+    #[test]
+    fn models_select_one_group_when_usable() {
+        let settings = settings();
+        assert_eq!(
+            user_models_groups(&settings, "default", Some("vip")),
+            vec!["vip".to_owned()]
+        );
+        // Not usable for this user: empty selection, matching Go's nil list.
+        assert!(user_models_groups(&settings, "default", Some("free")).is_empty());
+    }
+
+    #[test]
+    fn models_expand_auto_groups_in_configured_order() {
+        // Go `TestGetUserModelsExpandsAutoGroupsInConfiguredOrder`:
+        // AutoGroups [vip, default, unavailable] filtered by usability and
+        // GroupRatio keeps [vip, default] in order; `unavailable` is removed
+        // by the special overlay.
+        let mut settings = settings();
+        settings
+            .user_usable_groups
+            .insert("unavailable".to_owned(), "不可用分组".to_owned());
+        settings.group_ratio.insert("unavailable".to_owned(), 1.0);
+        settings.group_special_usable_group = specials();
+        settings.auto_groups = vec![
+            "vip".to_owned(),
+            "default".to_owned(),
+            "unavailable".to_owned(),
+        ];
+        assert_eq!(
+            user_models_groups(&settings, "default", Some("auto")),
+            vec!["vip".to_owned(), "default".to_owned()]
+        );
+    }
+
+    #[test]
+    fn models_auto_is_empty_when_auto_not_usable() {
+        let mut settings = settings();
+        settings.user_usable_groups.remove("auto");
+        assert!(user_models_groups(&settings, "default", Some("auto")).is_empty());
+    }
+
+    #[test]
+    fn requested_group_percent_decodes() {
+        // Group names may need escaping; Go `c.Query` URL-decodes the value.
+        let uri: Uri = "/api/user/models?group=vip%20pro".parse().unwrap();
+        assert_eq!(requested_group(&uri).as_deref(), Some("vip pro"));
+        let uri: Uri = "/api/user/models?group=a+b&group=vip".parse().unwrap();
+        // The first matching pair wins, mirroring Go's single-value Query.
+        assert_eq!(requested_group(&uri).as_deref(), Some("a b"));
+        let uri: Uri = "/api/user/models".parse().unwrap();
+        assert!(requested_group(&uri).is_none());
+        let uri: Uri = "/api/user/models?other=1".parse().unwrap();
+        assert!(requested_group(&uri).is_none());
     }
 }
