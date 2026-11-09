@@ -70,6 +70,64 @@ const POSTGRES_USERS: &str = r#"CREATE TABLE users (
 
 const OPTIONS: &str = "CREATE TABLE options (\"key\" TEXT PRIMARY KEY, value TEXT)";
 
+const LOGS: &str = r#"CREATE TABLE logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
+    created_at BIGINT NOT NULL, type INTEGER, content TEXT, username TEXT,
+    token_name TEXT, model_name TEXT, quota INTEGER,
+    prompt_tokens INTEGER, completion_tokens INTEGER, use_time INTEGER,
+    is_stream INTEGER, ip TEXT, request_id VARCHAR(64), other TEXT
+)"#;
+
+const LOGS_POSTGRES: &str = r#"CREATE TABLE logs (
+    id BIGSERIAL PRIMARY KEY, user_id BIGINT,
+    created_at BIGINT NOT NULL, type BIGINT, content TEXT, username TEXT,
+    token_name TEXT, model_name TEXT, quota BIGINT,
+    prompt_tokens BIGINT, completion_tokens BIGINT, use_time BIGINT,
+    is_stream BOOLEAN, ip TEXT, request_id VARCHAR(64), other TEXT
+)"#;
+
+const TOKENS: &str = r#"CREATE TABLE tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id BIGINT NOT NULL,
+    "key" TEXT NOT NULL UNIQUE,
+    status INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL DEFAULT '',
+    created_time BIGINT NOT NULL DEFAULT 0,
+    accessed_time BIGINT NOT NULL DEFAULT 0,
+    expired_time BIGINT NOT NULL DEFAULT -1,
+    remain_quota BIGINT NOT NULL DEFAULT 0,
+    used_quota BIGINT NOT NULL DEFAULT 0,
+    unlimited_quota INTEGER NOT NULL DEFAULT 0,
+    model_limits_enabled INTEGER NOT NULL DEFAULT 0,
+    model_limits TEXT NOT NULL DEFAULT '',
+    allow_ips TEXT,
+    "group" TEXT NOT NULL DEFAULT '',
+    cross_group_retry INTEGER NOT NULL DEFAULT 0,
+    auto_groups TEXT NOT NULL DEFAULT '',
+    deleted_at TIMESTAMP
+)"#;
+
+const TOKENS_POSTGRES: &str = r#"CREATE TABLE tokens (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    "key" VARCHAR(128) NOT NULL UNIQUE,
+    status INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL DEFAULT '',
+    created_time BIGINT NOT NULL DEFAULT 0,
+    accessed_time BIGINT NOT NULL DEFAULT 0,
+    expired_time BIGINT NOT NULL DEFAULT -1,
+    remain_quota BIGINT NOT NULL DEFAULT 0,
+    used_quota BIGINT NOT NULL DEFAULT 0,
+    unlimited_quota BOOLEAN NOT NULL DEFAULT false,
+    model_limits_enabled BOOLEAN NOT NULL DEFAULT false,
+    model_limits TEXT NOT NULL DEFAULT '',
+    allow_ips TEXT,
+    "group" TEXT NOT NULL DEFAULT '',
+    cross_group_retry BOOLEAN NOT NULL DEFAULT false,
+    auto_groups TEXT NOT NULL DEFAULT '',
+    deleted_at TIMESTAMP
+)"#;
+
 const UPSERT_OPTION: &str = "INSERT INTO options (\"key\", value) VALUES ($1, $2) \
     ON CONFLICT (\"key\") DO UPDATE SET value = excluded.value";
 
@@ -204,7 +262,7 @@ fn field_error(field: &str, tag: &str) -> String {
 }
 
 async fn run_contract(db: Database) {
-    exec!(&db, OPTIONS);
+    // 调用方已创建 users/options/logs/tokens 表。
 
     // ---- switch gates ----
     set_option(&db, "RegisterEnabled", "false").await;
@@ -274,6 +332,11 @@ async fn run_contract(db: Database) {
     let body = body_json(response).await;
     assert_eq!(body, json!({"success": true, "message": ""}));
 
+    let newuser_id: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(id AS BIGINT) FROM users WHERE username = $1",
+        "newuser",
+    );
     let role: i64 = fetch_one!(
         &db,
         "SELECT CAST(role AS BIGINT) FROM users WHERE username = $1",
@@ -342,11 +405,33 @@ async fn run_contract(db: Database) {
     assert_eq!(display_name, "newuser");
     assert_eq!(group, "default");
     assert_eq!(email, "");
-    assert_eq!(setting, DEFAULT_USER_SETTING);
+    // finishInsert 已把按角色生成的侧栏配置并入 setting。
+    assert_eq!(
+        setting,
+        format!(
+            r#"{{"gotify_priority":0,"sidebar_modules":{}}}"#,
+            newapi_identity::registration::default_sidebar_config_for_role(1)
+        )
+    );
     assert_eq!(aff_code.len(), 4);
     assert!(aff_code.bytes().all(|byte| byte.is_ascii_alphanumeric()));
     assert!(verify_password(b"secret123", &password).unwrap());
     assert_eq!(deleted, 1);
+
+    // ---- finishInsert：默认额度（全 0）不写系统日志、不改 quota ----
+    let log_count: i64 = fetch_one!(
+        &db,
+        "SELECT count(*) FROM logs WHERE user_id = $1",
+        newuser_id,
+    );
+    assert_eq!(log_count, 0);
+    // Go 的 GenerateDefaultToken 默认关闭：不产生初始令牌。
+    let token_count: i64 = fetch_one!(
+        &db,
+        "SELECT count(*) FROM tokens WHERE user_id = $1",
+        newuser_id,
+    );
+    assert_eq!(token_count, 0);
 
     // ---- duplicate and soft-deleted usernames ----
     let body =
@@ -474,6 +559,120 @@ async fn run_contract(db: Database) {
     );
     assert_eq!(stored_inviter, 0);
 
+    // ---- Go `finishInsert` 的额度赠送与邀请奖励（合规门确认后）----
+    // 默认 quota 全 0、合规未确认：邀请关系已记录但 aff_* 不增长。
+    let aff_count: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(aff_count AS BIGINT) FROM users WHERE username = $1",
+        "inviter",
+    );
+    assert_eq!(aff_count, 0);
+
+    set_option(&db, "QuotaForNewUser", "100").await;
+    set_option(&db, "QuotaForInvitee", "50").await;
+    set_option(&db, "QuotaForInviter", "200").await;
+    set_option(&db, "payment_setting.compliance_confirmed", "true").await;
+    set_option(&db, "payment_setting.compliance_terms_version", "v1").await;
+    let app = state(&db).await;
+    let body = body_json(
+        send_body(
+            &app,
+            r#"{"username":"rewarded","password":"secret123","aff_code":"ABCD"}"#,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["success"], json!(true));
+
+    // 新用户额度：quota = 100（Insert 写入 QuotaForNewUser）+ 50（邀请码赠送）。
+    let quota: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(quota AS BIGINT) FROM users WHERE username = $1",
+        "rewarded",
+    );
+    assert_eq!(quota, 150);
+
+    // 系统日志：新用户两行（注册赠送 + 邀请码赠送），邀请人一行。
+    let rewarded_id: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(id AS BIGINT) FROM users WHERE username = $1",
+        "rewarded",
+    );
+    let logs: Vec<(String, String)> = match &db {
+        Database::Sqlite(pool) => {
+            sqlx::query_as("SELECT content, username FROM logs WHERE user_id = $1 ORDER BY id")
+                .bind(rewarded_id)
+                .fetch_all(pool)
+                .await
+                .expect("fixture logs")
+        }
+        Database::Postgres(pool) => {
+            sqlx::query_as("SELECT content, username FROM logs WHERE user_id = $1 ORDER BY id")
+                .bind(rewarded_id)
+                .fetch_all(pool)
+                .await
+                .expect("fixture logs")
+        }
+    };
+    assert_eq!(
+        logs.iter()
+            .map(|(content, _)| content.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "新用户注册赠送 ＄0.000200 额度",
+            "使用邀请码赠送 ＄0.000100 额度",
+        ],
+    );
+    assert_eq!(
+        logs.iter()
+            .map(|(_, username)| username.clone())
+            .collect::<Vec<_>>(),
+        vec!["rewarded"; 2]
+    );
+    let inviter_logs: i64 = fetch_one!(
+        &db,
+        "SELECT count(*) FROM logs WHERE user_id = $1 AND content LIKE '邀请用户赠送%'",
+        inviter_row,
+    );
+    assert_eq!(inviter_logs, 1);
+
+    // 邀请人：aff_count + 1，且额度奖励按 QuotaForInviter 增长。
+    let aff_count: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(aff_count AS BIGINT) FROM users WHERE username = $1",
+        "inviter",
+    );
+    assert_eq!(aff_count, 1);
+    let aff_quota: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(aff_quota AS BIGINT) FROM users WHERE username = $1",
+        "inviter",
+    );
+    assert_eq!(aff_quota, 200);
+    let aff_history: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(aff_history AS BIGINT) FROM users WHERE username = $1",
+        "inviter",
+    );
+    assert_eq!(aff_history, 200);
+
+    // ---- form-urlencoded 绑定（Go `UnmarshalBodyReusable` 的表单分支）----
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/user/register")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::ACCEPT_LANGUAGE, "zh-CN")
+        .body(Body::from(
+            "username=formuser&password=secret123".to_owned(),
+        ))
+        .unwrap();
+    let response = send(&app, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body, json!({"success": true, "message": ""}));
+    let form_count: i64 = fetch_count(&db, "formuser").await;
+    assert_eq!(form_count, 1);
+
     // ---- Turnstile enabled ----
     set_option(&db, "TurnstileCheckEnabled", "true").await;
     let app = state(&db).await;
@@ -536,6 +735,9 @@ async fn sqlite_register_routes_contract() {
         .expect("in-memory SQLite fixture");
     let db = Database::Sqlite(pool);
     exec!(&db, SQLITE_USERS);
+    exec!(&db, OPTIONS);
+    exec!(&db, LOGS);
+    exec!(&db, TOKENS);
     run_contract(db).await;
 }
 
@@ -585,6 +787,9 @@ async fn postgres_register_routes_contract() {
         .expect("connect isolated PostgreSQL pool");
     let db = Database::Postgres(pool);
     exec!(&db, POSTGRES_USERS);
+    exec!(&db, OPTIONS);
+    exec!(&db, LOGS_POSTGRES);
+    exec!(&db, TOKENS_POSTGRES);
     run_contract(db).await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA \"{schema}\" CASCADE"

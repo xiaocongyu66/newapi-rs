@@ -327,6 +327,41 @@ async fn run_contract(db: Database) {
     .await;
     assert_link_invalid(&body);
 
+    // ---- form-urlencoded 绑定（Go `UnmarshalBodyReusable` 的表单分支）----
+    exec!(
+        &db,
+        "INSERT INTO users (username,password,role,status,email,auth_version) VALUES ($1,$2,1,1,$3,$4)",
+        "formuser",
+        "fixture-hash",
+        "form@example.com",
+        1_i64,
+    );
+    register_verification_code(PASSWORD_RESET_PURPOSE, "form@example.com", TOKEN);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/user/reset")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::ACCEPT_LANGUAGE, "zh-CN")
+        .body(Body::from(
+            "email=form%40example.com&token=abcdef0123456789abcdef0123456789".to_owned(),
+        ))
+        .unwrap();
+    let response = send(&app, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(true));
+    let generated = body["data"]
+        .as_str()
+        .expect("plaintext password")
+        .to_owned();
+    assert_eq!(generated.len(), 12);
+    let stored: String = fetch_one!(
+        &db,
+        "SELECT password FROM users WHERE username = $1",
+        "formuser",
+    );
+    assert!(verify_password(generated.as_bytes(), &stored).unwrap());
+
     // ---- auth_version NULL/0 floor: Go writes 2 when current is < 1 ----
     exec!(
         &db,

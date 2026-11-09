@@ -113,6 +113,35 @@ fn build_router(state: AppState) -> Router {
                 crate::reset_http::reset_guard,
             )),
     );
+    // `GET /api/verification`（register_api.go:99）：顺序
+    // EmailVerificationRateLimit → TurnstileCheck → handler；无体上限、
+    // 无 UserAuth、无 DisableCache。
+    let verification_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/verification",
+                get(crate::verification_http::send_email_verification),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                verification_state,
+                crate::verification_http::verification_guard,
+            )),
+    );
+    // `GET /api/reset_password`（register_api.go:100）：顺序
+    // CriticalRateLimit → TurnstileCheck → handler；同样三无。
+    let reset_email_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/reset_password",
+                get(crate::verification_http::send_password_reset_email),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                reset_email_state,
+                crate::verification_http::reset_password_guard,
+            )),
+    );
     // `GET /api/user/topup/info` 与 `GET /api/user/topup/self`：Go `selfRoute`
     // 组内纯 `UserAuth`，无限流、无 DisableCache。
     let topup_state = state.clone();
