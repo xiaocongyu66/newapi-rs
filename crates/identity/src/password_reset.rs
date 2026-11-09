@@ -91,7 +91,9 @@ impl PasswordResetRepository {
     }
 
     /// Go `GetUniqueUserByEmail`：空邮箱、0 条、2 条及以上分别返回固定分类。
-    async fn unique_user_id(&self, email: &str) -> Result<i64, PasswordResetError> {
+    /// 发送重置邮件端点（`SendPasswordResetEmail`）共用此判定决定是否
+    /// 生成验证码并发送。
+    pub async fn unique_user_id(&self, email: &str) -> Result<i64, PasswordResetError> {
         let ids: Vec<i64> = match &self.db {
             Database::Sqlite(pool) => {
                 sqlx::query_scalar(FIND_USER_ID_BY_EMAIL)

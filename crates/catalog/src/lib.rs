@@ -5,8 +5,10 @@
 #![forbid(unsafe_code)]
 
 pub mod auth_settings;
+pub mod email_settings;
 pub mod group_settings;
 pub mod public_config;
+pub mod registration_settings;
 
 pub use auth_settings::AuthSettings;
 pub use public_config::PublicConfig;
