@@ -24,8 +24,10 @@
 use axum::http::{HeaderMap, header};
 use serde::de::DeserializeOwned;
 
-/// 绑定结果；失败统一为 `()`，调用方折叠成 `common.invalid_params`。
-/// `Default` 上界对应 Go 的“空体/未知 Content-Type 保持零值”分支。
+/// 绑定结果；失败统一为 `()`，调用方折叠成 `common.invalid_params`
+/// （Go 的绑定错误也只有这一种对外形态）。`Default` 上界对应 Go 的
+/// “空体/未知 Content-Type 保持零值”分支。
+#[allow(clippy::result_unit_err)]
 pub fn bind_body<T: DeserializeOwned + Default>(headers: &HeaderMap, body: &[u8]) -> Result<T, ()> {
     if body.is_empty() {
         // Go：空体保持零值，不是错误（GET/DELETE 也经此路径）。
@@ -202,17 +204,17 @@ fn parse_boundary(content_type: &str) -> Option<String> {
     }
     for param in content_type.split(';').skip(1) {
         let param = param.trim();
-        if let Some((name, value)) = param.split_once('=') {
-            if name.trim().eq_ignore_ascii_case("boundary") {
-                let value = value.trim();
-                // Go 的 ParseMediaType 去掉参数值的引号。
-                let value = value
-                    .strip_prefix('"')
-                    .and_then(|rest| rest.strip_suffix('"'))
-                    .unwrap_or(value);
-                if !value.is_empty() {
-                    return Some(value.to_owned());
-                }
+        if let Some((name, value)) = param.split_once('=')
+            && name.trim().eq_ignore_ascii_case("boundary")
+        {
+            let value = value.trim();
+            // Go 的 ParseMediaType 去掉参数值的引号。
+            let value = value
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+                .unwrap_or(value);
+            if !value.is_empty() {
+                return Some(value.to_owned());
             }
         }
     }
@@ -272,10 +274,7 @@ fn find_token_start(body: &[u8], from: usize, dash_boundary: &[u8]) -> Option<us
     if from == 0 && body.starts_with(dash_boundary) {
         return Some(0);
     }
-    let search = match body.get(from..) {
-        Some(slice) => slice,
-        None => return None,
-    };
+    let search = body.get(from..)?;
     let pattern = [&b"\r\n"[..], dash_boundary].concat();
     let offset = search
         .windows(pattern.len())
@@ -346,7 +345,7 @@ fn form_value_name(headers: &[u8]) -> Option<String> {
 fn strip_one_crlf(data: &mut Vec<u8>) {
     if data.ends_with(b"\r\n") {
         data.truncate(data.len() - 2);
-    } else if data.ends_with(&[b'\n']) {
+    } else if data.ends_with(b"\n") {
         data.truncate(data.len() - 1);
     }
 }

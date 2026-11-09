@@ -235,8 +235,10 @@ async fn run_verification_contract(db: Database) {
     // ---- 别名限制（Go 固定中文文案）----
     set_option(&db, "EmailAliasRestrictionEnabled", "true").await;
     let app = state(&db).await;
+    // 查询串里的 `+` 会按 form 编码解码成空格（Go 的 fasthttp 同样），
+    // 命中别名限制的 `+` 必须百分号编码。
     let body =
-        body_json(send(&app, verification_request("email=alias+tag@example.com")).await).await;
+        body_json(send(&app, verification_request("email=alias%2Btag@example.com")).await).await;
     assert_eq!(body["success"], json!(false));
     assert_eq!(
         body["message"],

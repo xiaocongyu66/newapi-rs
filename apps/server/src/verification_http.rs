@@ -80,7 +80,7 @@ pub async fn send_email_verification(
     let domain = parts[1];
     let settings = match email_settings(&state).await {
         Ok(settings) => settings,
-        Err(response) => return response,
+        Err(status) => return status.into_response(),
     };
     if settings.email_domain_restriction_enabled {
         let allowed = settings
@@ -294,7 +294,7 @@ async fn turnstile_gate(state: &AppState, request: Request, next: Next) -> Respo
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0);
-    let ip = request_ip(&state, request.headers(), peer);
+    let ip = request_ip(state, request.headers(), peer);
     let decision = if !enabled || token.is_none() {
         crate::turnstile::decide(enabled, token.as_deref(), "", None, None).await
     } else {
@@ -471,9 +471,11 @@ fn email_format_rejected(_settings: &EmailSettings, _email: &str) -> bool {
     false
 }
 
-async fn email_settings(state: &AppState) -> Result<EmailSettings, Response> {
+/// 装载邮箱限制选项；数据库不可用或读取失败时返回 503 状态，由
+/// 调用站点转成响应（避免 `Result<_, Response>` 的大 Err 变体）。
+async fn email_settings(state: &AppState) -> Result<EmailSettings, StatusCode> {
     let Some(db) = state.db() else {
-        return Err(StatusCode::SERVICE_UNAVAILABLE.into_response());
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
     match EmailSettings::load(&db, &EmailSettings::default()).await {
         Ok(settings) => Ok(settings),
@@ -483,7 +485,7 @@ async fn email_settings(state: &AppState) -> Result<EmailSettings, Response> {
                 category = crate::database_error_class(&error),
                 "email settings load failed"
             );
-            Err(StatusCode::SERVICE_UNAVAILABLE.into_response())
+            Err(StatusCode::SERVICE_UNAVAILABLE)
         }
     }
 }
