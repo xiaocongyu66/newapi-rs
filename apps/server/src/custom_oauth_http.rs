@@ -85,7 +85,7 @@ use std::time::Duration;
 
 use axum::{
     Json,
-    body::{Body, to_bytes},
+    body::to_bytes,
     extract::{ConnectInfo, Extension, Path, Request, State},
     http::{HeaderMap, Method, StatusCode, request::Parts},
     middleware::Next,
@@ -192,7 +192,8 @@ pub async fn require_system_settings(
     let allowed = match can(
         &CasbinRuleRepository::new(db.clone()),
         user.0.user_id,
-        user.0.role,
+        // Go 的系统角色与 Rust 策略求值同为小整数域（0/1/10/100）。
+        user.0.role as i32,
         SYSTEM_SETTINGS,
     )
     .await
@@ -393,8 +394,11 @@ pub async fn discovery(
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };
     let http = HttpDiscoveryTransport;
+    // `Extension<InjectedDiscoveryTransport>` 的两层元组：外层是 Extension，
+    // 内层才是 `Arc<dyn DiscoveryTransport>`；经 `as_ref` 借引用避免拥有值的
+    // 临时 Arc 在 match 结束时被释放。
     let transport: &dyn DiscoveryTransport = match injected.as_ref() {
-        Some(injected) => injected.0.as_ref(),
+        Some(injected) => injected.0.0.as_ref(),
         None => &http,
     };
     let outcome = discovery_flow(&bytes, transport).await;
