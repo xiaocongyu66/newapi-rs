@@ -270,9 +270,12 @@ fn where_clause(conditions: &[String]) -> String {
 
 /// 绑定动态参数并执行 count + list（事务内，与 Go 的 Begin/Commit 同构）。
 /// `Executor` 不跨数据库种类，故用宏在每个后端上实例化一次。
+///
+/// 条件片段都是内部硬编码 SQL 文本加 `$N` 占位符，keyword/status 只经绑定
+/// 参数进库，SQL 文本不含用户输入，故用 `AssertSqlSafe` 显式断言。
 macro_rules! filtered_query {
     ($transaction:expr, $count_sql:expr, $list_sql:expr, $binds:expr, $limit:expr, $offset:expr) => {{
-        let mut count = sqlx::query_scalar::<_, i64>($count_sql);
+        let mut count = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe($count_sql));
         for bind in &$binds {
             match bind {
                 FilterBind::Int(value) => count = count.bind(*value),
@@ -280,7 +283,7 @@ macro_rules! filtered_query {
             }
         }
         let total = count.fetch_one(&mut *$transaction).await?;
-        let mut list = sqlx::query($list_sql);
+        let mut list = sqlx::query(sqlx::AssertSqlSafe($list_sql));
         for bind in &$binds {
             match bind {
                 FilterBind::Int(value) => list = list.bind(*value),
@@ -366,15 +369,27 @@ impl RedemptionRepository {
         match &self.db {
             Database::Sqlite(pool) => {
                 let mut transaction = pool.begin().await?;
-                let result =
-                    filtered_query!(transaction, &count_sql, &list_sql, binds, limit, offset);
+                let result = filtered_query!(
+                    transaction,
+                    count_sql.as_str(),
+                    list_sql.as_str(),
+                    binds,
+                    limit,
+                    offset
+                );
                 transaction.commit().await?;
                 result
             }
             Database::Postgres(pool) => {
                 let mut transaction = pool.begin().await?;
-                let result =
-                    filtered_query!(transaction, &count_sql, &list_sql, binds, limit, offset);
+                let result = filtered_query!(
+                    transaction,
+                    count_sql.as_str(),
+                    list_sql.as_str(),
+                    binds,
+                    limit,
+                    offset
+                );
                 transaction.commit().await?;
                 result
             }
@@ -477,7 +492,7 @@ impl RedemptionRepository {
                 .bind(now)
                 .execute(pool)
                 .await
-                .map(|result| result.rows_affected()),
+                .map(|result| result.rows_affected() as i64),
             Database::Postgres(pool) => sqlx::query(PURGE_INVALID_SQL)
                 .bind(now)
                 .execute(pool)
