@@ -1,7 +1,7 @@
 //! HTTP contracts for the global web rate limit (Go `GlobalWebRateLimit`,
 //! mark "GW") wired over the fallback surface: any path outside `/api` and
-//! the P1 health endpoints, mirroring Go's NoRoute chain (`register_web.go` +
-//! `static.ServeStatic`). Run only in GitHub Actions; every state here is
+//! the P1 health endpoints, mirroring Go's `NoRoute` chain (`register_web.go`
+//! + `static.ServeStatic`). Run only in GitHub Actions; every state here is
 //! the default in-memory backend.
 use std::net::SocketAddr;
 
