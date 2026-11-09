@@ -870,7 +870,7 @@ async fn sqlite_readonly_token_routes_contract() {
         .connect("sqlite::memory:")
         .await
         .expect("in-memory SQLite fixture");
-    run_contract(Database::Sqlite(pool)).await;
+    run_contract(&Database::Sqlite(pool)).await;
 }
 
 #[tokio::test]
@@ -917,7 +917,7 @@ async fn postgres_readonly_token_routes_contract() {
         .connect_with(options)
         .await
         .expect("connect isolated PostgreSQL pool");
-    run_contract(Database::Postgres(pool)).await;
+    run_contract(&Database::Postgres(pool)).await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA \"{schema}\" CASCADE"
     )))

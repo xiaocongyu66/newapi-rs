@@ -20,7 +20,7 @@ use axum::{
     Json, Router,
     body::{Body, to_bytes},
     extract::Request,
-    http::{HeaderMap, Method, StatusCode, header},
+    http::{Method, StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
     routing::get,
@@ -226,15 +226,16 @@ async fn send(state: &AppState, authorization: Option<&str>) -> Response {
         .unwrap()
 }
 
-async fn send_raw(state: &AppState, headers: HeaderMap) -> Response {
-    let builder = Request::builder()
+async fn send_duplicate_headers(state: &AppState) -> Response {
+    // `Builder::header` appends, so two Authorization values reach the router.
+    let request = Request::builder()
         .method(Method::GET)
         .uri("/api/whoami")
-        .headers(headers);
-    router(state.clone())
-        .oneshot(builder.body(Body::empty()).unwrap())
-        .await
-        .unwrap()
+        .header(header::AUTHORIZATION, "Bearer good-pat")
+        .header(header::AUTHORIZATION, "Bearer other-pat")
+        .body(Body::empty())
+        .unwrap();
+    router(state.clone()).oneshot(request).await.unwrap()
 }
 
 async fn body_json(response: Response) -> Value {
@@ -320,10 +321,8 @@ async fn run_contract(db: &Database) {
     seed_user(db, 2, "banned-pat").await;
     let response = send(&state(db), Some("Bearer banned-pat")).await;
     assert_authenticated(response, "pat").await;
-    assert_eq!(
-        body_json(send(&state(db), Some("Bearer banned-pat")).await)["status"],
-        serde_json::json!(2)
-    );
+    let body = body_json(send(&state(db), Some("Bearer banned-pat")).await).await;
+    assert_eq!(body["status"], serde_json::json!(2));
 
     // --- dashboard JWT 分支（authenticate.go:159-169 + ValidateLoginSession） ---
 
@@ -437,11 +436,9 @@ async fn run_contract(db: &Database) {
     // parse_authorization stance (multiple → anonymous), while Go picks the
     // first value. Both keep the request running; only the attached identity
     // differs. Asserted here so the lenient promise survives: no 4xx.
-    let mut duplicate = HeaderMap::new();
-    duplicate.append(header::AUTHORIZATION, "Bearer good-pat".parse().unwrap());
     reset(db).await;
     seed_user(db, 1, "good-pat").await;
-    let response = send_raw(&state(db), duplicate).await;
+    let response = send_duplicate_headers(&state(db)).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     reset(db).await;
@@ -454,7 +451,7 @@ async fn sqlite_try_user_auth_contract() {
         .connect("sqlite::memory:")
         .await
         .expect("in-memory SQLite fixture");
-    run_contract(Database::Sqlite(pool)).await;
+    run_contract(&Database::Sqlite(pool)).await;
 }
 
 #[tokio::test]
@@ -501,7 +498,7 @@ async fn postgres_try_user_auth_contract() {
         .connect_with(options)
         .await
         .expect("connect isolated PostgreSQL pool");
-    run_contract(Database::Postgres(pool)).await;
+    run_contract(&Database::Postgres(pool)).await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA \"{schema}\" CASCADE"
     )))
