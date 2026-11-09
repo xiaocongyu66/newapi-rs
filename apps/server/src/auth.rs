@@ -16,7 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use newapi_identity::{
-    AuthError, CredentialKind as DashboardCredential,
+    CredentialKind as DashboardCredential,
     auth_session::SessionAuthError,
     login::USER_STATUS_ENABLED,
     tokens::{TOKEN_STATUS_DISABLED, TokenRepository, classify_dashboard},
@@ -184,8 +184,9 @@ async fn resolve_optional_identity(
             let identity = match auth.parse_access(credential, now) {
                 Ok(identity) => identity,
                 // Go `ParseAccessToken` 区分过期与无效（authtoken.go:208/210），
-                // writeDashboardAuthError 分别给出 AUTH_TOKEN_EXPIRED 与 AUTH_UNAUTHORIZED。
-                Err(AuthError::Expired) => return Err(token_expired()),
+                // writeDashboardAuthError 分别给出 AUTH_TOKEN_EXPIRED 与 AUTH_UNAUTHORIZED；
+                // 但 `SessionAuth::parse_access` 已把两者折叠为 Unauthorized，本端口
+                // 与既有 `user_auth` 一律映射 AUTH_UNAUTHORIZED（遗留见交付说明）。
                 Err(_) => return Err(invalid_credential()),
             };
             match auth.validate(&identity, now).await {
@@ -398,14 +399,6 @@ fn readonly_failure(status: StatusCode, message_key: &str, language: &str) -> Re
         })),
     )
         .into_response()
-}
-
-fn token_expired() -> AuthFailure {
-    AuthFailure::new(
-        StatusCode::UNAUTHORIZED,
-        "AUTH_TOKEN_EXPIRED",
-        MSG_NOT_LOGGED_IN,
-    )
 }
 
 async fn authenticate(

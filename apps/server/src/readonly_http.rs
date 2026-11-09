@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 
 use axum::{
     Json,
-    extract::{State, Uri},
-    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    extract::State,
+    http::{HeaderMap, StatusCode, Uri, header::AUTHORIZATION},
     response::{IntoResponse, Response},
 };
 use newapi_identity::tokens::{TokenRecord, TokenRepository};
@@ -284,10 +284,10 @@ struct LogJson<'a> {
     other: &'a str,
 }
 
-fn log_json(
-    log: &LogRecord,
-    display: &newapi_identity::self_user::QuotaDisplaySettings,
-) -> LogJson<'_> {
+fn log_json<'a>(
+    log: &'a LogRecord,
+    display: &'a newapi_identity::self_user::QuotaDisplaySettings,
+) -> LogJson<'a> {
     LogJson {
         id: log.id,
         user_id: log.user_id,
