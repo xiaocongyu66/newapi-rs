@@ -39,11 +39,7 @@ pub const ASSERTION_STATE_COLUMNS_SQLITE: &str = "id, CAST(user_id AS BIGINT) AS
 pub const ASSERTION_STATE_COLUMNS_POSTGRES: &str = "id, CAST(user_id AS BIGINT) AS user_id, \
     credential_id, public_key, attestation_type, aaguid, \
     CAST(sign_count AS BIGINT) AS sign_count, \
-    CAST(CAST(clone_warning AS INTEGER) AS BIGINT) AS clone_warning, \
-    CAST(CAST(user_present AS INTEGER) AS BIGINT) AS user_present, \
-    CAST(CAST(user_verified AS INTEGER) AS BIGINT) AS user_verified, \
-    CAST(CAST(backup_eligible AS INTEGER) AS BIGINT) AS backup_eligible, \
-    CAST(CAST(backup_state AS INTEGER) AS BIGINT) AS backup_state, \
+    clone_warning, user_present, user_verified, backup_eligible, backup_state, \
     transports, attachment, \
     CAST(EXTRACT(EPOCH FROM last_used_at) AS BIGINT) AS last_used_at, \
     CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at, \
@@ -120,6 +116,16 @@ pub struct StoredCredential {
     pub transports: Vec<String>,
     /// `platform` / `cross-platform`；Go 从注册响应的 authenticatorAttachment 取。
     pub attachment: Option<String>,
+}
+
+/// 断言（登录/二次验证）成功后需要持久化的状态（`AuthenticationResult` 的
+/// 存储子集）；按方法参数包传入以回避 clippy 方法参数上限。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssertionOutcome {
+    pub counter: u32,
+    pub user_verified: bool,
+    pub backup_eligible: bool,
+    pub backup_state: bool,
 }
 
 fn decode_sqlite(row: &sqlx::sqlite::SqliteRow) -> Result<PasskeyCredential, PasskeyStoreError> {
@@ -380,10 +386,7 @@ impl PasskeyCredentialRepository {
         &self,
         user_id: i64,
         credential_id: &[u8],
-        counter: u32,
-        user_verified: bool,
-        backup_eligible: bool,
-        backup_state: bool,
+        outcome: &AssertionOutcome,
         now: i64,
     ) -> Result<(), PasskeyStoreError> {
         if user_id <= 0 || credential_id.is_empty() {
@@ -399,13 +402,13 @@ impl PasskeyCredentialRepository {
                      last_used_at=datetime($5,'unixepoch'), updated_at=datetime($5,'unixepoch')\
                      WHERE user_id=$6 AND credential_id=$8 AND deleted_at IS NULL",
                 )
-                .bind(counter as i64)
-                .bind(user_verified)
-                .bind(backup_eligible)
-                .bind(backup_state)
+                .bind(outcome.counter as i64)
+                .bind(outcome.user_verified)
+                .bind(outcome.backup_eligible)
+                .bind(outcome.backup_state)
                 .bind(now)
                 .bind(user_id)
-                .bind(counter as i64)
+                .bind(outcome.counter as i64)
                 .bind(&encoded)
                 .execute(pool)
                 .await?
@@ -423,13 +426,13 @@ impl PasskeyCredentialRepository {
                      last_used_at=to_timestamp($5::BIGINT), updated_at=to_timestamp($5::BIGINT)\
                      WHERE user_id=$6 AND credential_id=$8 AND deleted_at IS NULL",
                 )
-                .bind(counter as i64)
-                .bind(user_verified)
-                .bind(backup_eligible)
-                .bind(backup_state)
+                .bind(outcome.counter as i64)
+                .bind(outcome.user_verified)
+                .bind(outcome.backup_eligible)
+                .bind(outcome.backup_state)
                 .bind(now)
                 .bind(user_id)
-                .bind(counter as i64)
+                .bind(outcome.counter as i64)
                 .bind(&encoded)
                 .execute(pool)
                 .await?
@@ -563,7 +566,8 @@ impl PasskeyCredential {
     /// `transports` 的未知名条目经 `#[serde(other)]` 归入 Unknown）。
     /// 公钥按存储的 COSE CBOR 字节解析后走 COSEKey 的 JSON 形状；
     /// attestation 与 registration_policy 不参与断言校验，按可重建值填入
-    /// （Go 亦不持久化注册期 UV 策略，默认 preferred 与其一致）。
+    /// （attestation 为 `ParsedAttestation` 的默认形态 `data/metadata` 均为
+    /// `None`；Go 亦不持久化注册期 UV 策略，默认 preferred 与其一致）。
     pub fn to_webauthn_credential(
         &self,
     ) -> Result<webauthn_rs::prelude::Credential, PasskeyStoreError> {
@@ -606,7 +610,7 @@ impl PasskeyCredential {
             "backup_state": self.backup_state,
             "registration_policy": "preferred",
             "extensions": {},
-            "attestation": "None",
+            "attestation": {"data": "None", "metadata": "None"},
             "attestation_format": attestation_format,
         });
         serde_json::from_value::<webauthn_rs::prelude::Credential>(json)

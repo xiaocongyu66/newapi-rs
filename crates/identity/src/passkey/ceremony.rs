@@ -70,7 +70,7 @@ impl CeremonyUser<'_> {
     pub fn name(&self) -> String {
         let name = self.username.trim();
         if name.is_empty() {
-            format!("user-{}", self.id)
+            format!("user-{self.id}")
         } else {
             name.to_owned()
         }

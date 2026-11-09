@@ -513,10 +513,12 @@ async fn three_flows(db: &Database) {
         .update_assertion_state(
             7,
             &result.cred_id(),
-            result.counter(),
-            result.user_verified(),
-            result.backup_eligible(),
-            result.backup_state(),
+            &newapi_identity::passkey::AssertionOutcome {
+                counter: result.counter(),
+                user_verified: result.user_verified(),
+                backup_eligible: result.backup_eligible(),
+                backup_state: result.backup_state(),
+            },
             NOW,
         )
         .await
@@ -638,18 +640,27 @@ async fn store_semantics(db: &Database) {
     let second_credential = registered_credential(db, &mut second, 9).await;
     assert_eq!(second_credential.cred_id, vec![0x22; 32]);
     assert_eq!(auth_version(db, 9).await, 3);
-    assert_eq!(
+    assert!(
         repository
             .by_credential_id(&[0x11; 32])
             .await
             .unwrap()
-            .is_some(),
-        false
+            .is_none()
     );
 
     // 断言状态回写：计数器前进、last_used_at 落库。
     repository
-        .update_assertion_state(9, &[0x22; 32], 5, true, false, false, NOW)
+        .update_assertion_state(
+            9,
+            &[0x22; 32],
+            &newapi_identity::passkey::AssertionOutcome {
+                counter: 5,
+                user_verified: true,
+                backup_eligible: false,
+                backup_state: false,
+            },
+            NOW,
+        )
         .await
         .expect("assertion state writes");
     let stored = repository.by_user_id(9).await.unwrap().unwrap();
@@ -663,7 +674,17 @@ async fn store_semantics(db: &Database) {
 
     // 计数器回退疑似克隆：clone_warning 置位（go-webauthn 同语义）。
     repository
-        .update_assertion_state(9, &[0x22; 32], 4, true, false, false, NOW)
+        .update_assertion_state(
+            9,
+            &[0x22; 32],
+            &newapi_identity::passkey::AssertionOutcome {
+                counter: 4,
+                user_verified: true,
+                backup_eligible: false,
+                backup_state: false,
+            },
+            NOW,
+        )
         .await
         .expect("clone warning writes");
     let stored = repository.by_user_id(9).await.unwrap().unwrap();
@@ -672,7 +693,17 @@ async fn store_semantics(db: &Database) {
     // 不存在的凭据/用户：NotFound。
     assert_eq!(
         repository
-            .update_assertion_state(9, &[0xFF; 32], 6, true, false, false, NOW)
+            .update_assertion_state(
+                9,
+                &[0xFF; 32],
+                &newapi_identity::passkey::AssertionOutcome {
+                    counter: 6,
+                    user_verified: true,
+                    backup_eligible: false,
+                    backup_state: false,
+                },
+                NOW,
+            )
             .await
             .err(),
         Some(newapi_identity::passkey::PasskeyStoreError::NotFound)

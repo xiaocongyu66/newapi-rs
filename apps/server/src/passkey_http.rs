@@ -33,7 +33,7 @@ use newapi_identity::{
     auth_flow::AuthFlowRepository,
     crypto::AuthKeys,
     login::orchestrate::{LoginFailure, LoginResponse, LoginService},
-    passkey::credential::StoredCredential,
+    passkey::credential::{AssertionOutcome, StoredCredential},
     passkey::{
         Ceremony, CeremonyUser, DiscoverableAuthentication, PasskeyAuthentication,
         PasskeyCredentialRepository, PasskeyRegistration, PasskeySettings,
@@ -1026,10 +1026,12 @@ pub async fn login_finish(
         .update_assertion_state(
             user.id,
             &result.cred_id(),
-            result.counter(),
-            result.user_verified(),
-            result.backup_eligible(),
-            result.backup_state(),
+            &AssertionOutcome {
+                counter: result.counter(),
+                user_verified: result.user_verified(),
+                backup_eligible: result.backup_eligible(),
+                backup_state: result.backup_state(),
+            },
             now,
         )
         .await
@@ -1246,10 +1248,12 @@ async fn verify_finish_inner(
         .update_assertion_state(
             user.id,
             &result.cred_id(),
-            result.counter(),
-            result.user_verified(),
-            result.backup_eligible(),
-            result.backup_state(),
+            &AssertionOutcome {
+                counter: result.counter(),
+                user_verified: result.user_verified(),
+                backup_eligible: result.backup_eligible(),
+                backup_state: result.backup_state(),
+            },
             now,
         )
         .await

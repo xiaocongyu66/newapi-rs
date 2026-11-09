@@ -28,8 +28,8 @@ redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp
 
 tokio = { workspace = true, features = ["io-util"] }
 
-# 契约测试用的软件 P-256 认证器（注册/断言签名）；与 crypto-glue 已引入的
-# p256/ecdsa 同版本，lockfile 不新增 crate。
+# 契约测试用的软件 P-256 认证器（注册/断言签名）；p256/ecdsa 与
+# webauthn-rs-core 的椭圆曲线栈同版本族，由 lockfile 统一解析。
 [dev-dependencies]
 p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 ecdsa = { version = "0.17", default-features = false, features = ["der", "digest"] }

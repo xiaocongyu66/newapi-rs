@@ -22,7 +22,10 @@ const OPTION_KEY_PASSKEY: &str = "passkey";
 const OPTION_KEY_SERVER_ADDRESS: &str = "ServerAddress";
 
 /// Go `identity.PasskeySettings`；字段名即持久化 JSON 的键名。
+/// `#[serde(default)]` 复现 Go `json.Unmarshal` 对缺省键留零值的语义（Go 的
+/// settings 注册表以已注册默认值起步，前端可只存部分字段）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PasskeySettings {
     pub enabled: bool,
     pub rp_display_name: String,

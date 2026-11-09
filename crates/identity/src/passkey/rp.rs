@@ -118,15 +118,15 @@ fn auto_detect(
         return Err(RpError::HttpsOnly(format!("{scheme}://{host}")));
     }
     let mut host = host.to_owned();
-    if host.is_empty() && !server_address.trim().is_empty() {
-        if let Some(parsed) = Url::parse(server_address.trim()).ok() {
-            // Go 取 `parsed.Host`（含端口）。
-            if let Some(parsed_host) = parsed.host_str() {
-                host = match parsed.port() {
-                    Some(port) => format!("{parsed_host}:{port}"),
-                    None => parsed_host.to_owned(),
-                };
-            }
+    if host.is_empty()
+        && let Ok(parsed) = Url::parse(server_address.trim())
+    {
+        // Go 取 `parsed.Host`（含端口）。
+        if let Some(parsed_host) = parsed.host_str() {
+            host = match parsed.port() {
+                Some(port) => format!("{parsed_host}:{port}"),
+                None => parsed_host.to_owned(),
+            };
         }
     }
     if host.is_empty() {
@@ -166,9 +166,10 @@ pub fn resolve_rp_id(settings: &PasskeySettings, origins: &[String]) -> Result<S
         return Err(RpError::NoOrigin);
     }
     let parsed = Url::parse(&origins[0]).map_err(|_| RpError::InvalidOrigin(origins[0].clone()))?;
+    let parsed_host = parsed.host_str().unwrap_or("");
     let host_with_port = match parsed.port() {
-        Some(port) => format!("{}:{port}", parsed.host_str().unwrap_or("")),
-        None => parsed.host_str().unwrap_or("").to_owned(),
+        Some(port) => format!("{parsed_host}:{port}"),
+        None => parsed_host.to_owned(),
     };
     Ok(host_without_port(&host_with_port))
 }
@@ -330,9 +331,13 @@ mod tests {
     }
 
     #[test]
-    fn build_accepts_bracketed_ipv6_with_a_configured_rp_id() {
+    fn build_ignores_bracketed_ipv6_transport_facts_when_origins_are_configured() {
+        // `WebauthnBuilder` 要求首个 origin 的域名等于 rp_id（IP 字面量恒拒，
+        // 见模块差异说明）；配置的 origin 与 rp_id 一致时，传输层事实为裸
+        // IPv6 也不参与推导（`passkey_webauthn_test.go` 的转发/Host 边界）。
         let mut settings = settings(true);
         settings.rp_id = "example.com".into();
+        settings.origins = "https://example.com:9443".into();
         build_ceremony(&settings, &facts("[2001:db8::1]:8443", true), "").unwrap();
     }
 

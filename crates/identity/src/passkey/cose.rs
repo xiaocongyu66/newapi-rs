@@ -127,13 +127,26 @@ mod tests {
     use super::*;
     use webauthn_rs::prelude::COSEEC2Key;
 
+    /// P-256 生成元点 G 的坐标。`COSEKey::try_from` 以 `validate()` 校验坐标
+    /// 必须落在曲线上（`EcdsaPointInvalid`），测试键不能是任意字节。
+    const G_X: [u8; 32] = [
+        0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4, 0x40,
+        0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8, 0x98,
+        0xc2, 0x96,
+    ];
+    const G_Y: [u8; 32] = [
+        0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e,
+        0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf,
+        0x51, 0xf5,
+    ];
+
     fn ec2_key() -> COSEKey {
         COSEKey {
             type_: COSEAlgorithm::ES256,
             key: COSEKeyType::EC_EC2(COSEEC2Key {
                 curve: ECDSACurve::SECP256R1,
-                x: vec![0x11; 32],
-                y: vec![0x22; 32],
+                x: G_X.to_vec(),
+                y: G_Y.to_vec(),
             }),
         }
     }
@@ -158,8 +171,8 @@ mod tests {
         assert_eq!(get(KTY), Some(&Value::Integer(KTY_EC2)));
         assert_eq!(get(ALG), Some(&Value::Integer(-7)));
         assert_eq!(get(CRV), Some(&Value::Integer(1)));
-        assert_eq!(get(X), Some(&Value::Bytes(vec![0x11; 32])));
-        assert_eq!(get(Y), Some(&Value::Bytes(vec![0x22; 32])));
+        assert_eq!(get(X), Some(&Value::Bytes(G_X.to_vec())));
+        assert_eq!(get(Y), Some(&Value::Bytes(G_Y.to_vec())));
     }
 
     #[test]

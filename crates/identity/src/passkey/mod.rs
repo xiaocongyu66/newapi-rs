@@ -21,8 +21,13 @@
 //!   credProtect/uvm/credProps 扩展。
 //! - 断言（login/verify finish）按 UV `required` 校验，Go 按 settings（默认
 //!   `preferred`）校验。
+//!
 //! 其余字段保持一致：rp/rpId/challenge/timeout(120s)/exclude 或 allow
 //! credentials 的结构与 base64url 编码均与 Go 相同。
+//!
+//! 另一个已知边界差异：`WebauthnBuilder` 要求首个 origin 的域名等于 `rp_id`
+//! 或以其为父域（IP 字面量 origin 恒拒），Go 的 `BuildWebAuthn` 不做该校验；
+//! 命中时按 `RpError::Configuration` 回固定文案。
 
 pub mod ceremony;
 pub mod cose;
@@ -33,8 +38,8 @@ pub mod settings;
 
 pub use ceremony::{Ceremony, CeremonyError, CeremonyUser, RegisteredCredential};
 pub use credential::{
-    ASSERTION_STATE_COLUMNS_POSTGRES, ASSERTION_STATE_COLUMNS_SQLITE, PasskeyCredential,
-    PasskeyCredentialRepository, PasskeyStoreError, StoredCredential,
+    ASSERTION_STATE_COLUMNS_POSTGRES, ASSERTION_STATE_COLUMNS_SQLITE, AssertionOutcome,
+    PasskeyCredential, PasskeyCredentialRepository, PasskeyStoreError, StoredCredential,
 };
 pub use flow::{SessionFlowError, create_session_data_flow, pop_session_data_flow};
 pub use rp::{RpError, TransportFacts, build_ceremony};
@@ -152,8 +157,8 @@ mod tests {
 
     #[test]
     fn rfc3339_matches_go_time_marshalling() {
-        // 2026-11-09T12:34:56Z（UTC，无小数位）。
-        assert_eq!(format_rfc3339(1_790_964_096), "2026-11-09T12:34:56Z");
+        // 2026-10-02T18:01:36Z（UTC，无小数位）。
+        assert_eq!(format_rfc3339(1_790_964_096), "2026-10-02T18:01:36Z");
         assert_eq!(format_rfc3339(0), "1970-01-01T00:00:00Z");
     }
 
