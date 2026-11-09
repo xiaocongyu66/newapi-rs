@@ -1068,15 +1068,15 @@ impl TokenRepository {
     /// 读出令牌明文 key 并失效（Go 的 `Token.Delete` 内含栅栏+删哈希），
     /// 随后仍按影响行数判定存在性；未注入缓存时保持单语句删除。
     pub async fn delete_for_user(&self, user_id: i64, id: i64) -> Result<bool, sqlx::Error> {
-        if let Some(cache) = self.cache.as_ref() {
-            if let Some(token) = self.by_id_for_user(user_id, id).await? {
-                if let Err(error) = cache.invalidate_for_mutation(&token.key).await {
-                    tracing::warn!(
-                        event = "token_cache_invalidate_failed",
-                        category = %error,
-                        "failed to invalidate token cache before delete"
-                    );
-                }
+        if let Some(cache) = self.cache.as_ref()
+            && let Some(token) = self.by_id_for_user(user_id, id).await?
+        {
+            if let Err(error) = cache.invalidate_for_mutation(&token.key).await {
+                tracing::warn!(
+                    event = "token_cache_invalidate_failed",
+                    category = %error,
+                    "failed to invalidate token cache before delete"
+                );
             }
         }
         let affected = match &self.db {
