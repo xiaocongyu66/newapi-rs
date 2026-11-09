@@ -47,6 +47,17 @@ const OPTIONS: &str = r#"CREATE TABLE options (
     "key" TEXT PRIMARY KEY, "value" TEXT
 )"#;
 
+// Go `catalog.Ability`（GORM AutoMigrate 的列类型）：主键为
+// (group, model, channel_id)；tag 可空。两种后端共用同一 DDL。
+const ABILITIES: &str = r#"CREATE TABLE abilities (
+    "group" VARCHAR(64) NOT NULL,
+    model VARCHAR(255) NOT NULL,
+    channel_id INTEGER NOT NULL,
+    enabled BOOLEAN NOT NULL,
+    tag VARCHAR(255),
+    PRIMARY KEY ("group", model, channel_id)
+)"#;
+
 macro_rules! backend {
     ($db:expr, $pool:ident, $body:block) => {
         match $db {
@@ -85,6 +96,7 @@ async fn exec(db: &Database, statement: &'static str) {
 async fn reset(db: &Database) {
     exec(db, "DELETE FROM options").await;
     exec(db, "DELETE FROM users").await;
+    exec(db, "DELETE FROM abilities").await;
 }
 
 async fn seed_user(db: &Database, group: &str, token: &str) {
@@ -100,6 +112,22 @@ async fn seed_user(db: &Database, group: &str, token: &str) {
         .execute(pool)
         .await
         .expect("seed user");
+    });
+}
+
+async fn seed_ability(db: &Database, group: &str, model: &str, channel: i64, enabled: bool) {
+    backend!(db, pool, {
+        sqlx::query(
+            r#"INSERT INTO abilities ("group", model, channel_id, enabled)
+                VALUES ($1, $2, $3, $4)"#,
+        )
+        .bind(group)
+        .bind(model)
+        .bind(channel)
+        .bind(enabled)
+        .execute(pool)
+        .await
+        .expect("seed ability");
     });
 }
 
@@ -162,7 +190,7 @@ fn assert_success(body: &Value) {
 }
 
 async fn run_contract(db: Database) {
-    for ddl in [USERS, OPTIONS] {
+    for ddl in [USERS, OPTIONS, ABILITIES] {
         exec(&db, ddl).await;
     }
     let app = state(&db);
@@ -197,7 +225,8 @@ async fn run_contract(db: Database) {
     assert_success(&body);
     assert_eq!(body["data"], json!({}));
 
-    // `/api/user/models` returns the resolver-less empty list.
+    // `/api/user/models` with an empty `abilities` table returns the empty
+    // list Go returns for groups without any enabled ability.
     for path in ["/api/user/models", "/api/user/models?group=default"] {
         let response = send(&app, path, Some("Bearer pat-default")).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -206,7 +235,9 @@ async fn run_contract(db: Database) {
         assert_eq!(body["data"], json!([]));
     }
 
-    // Configured options.
+    // Configured options. Group settings arrive through the reload worker
+    // (Go `InitOptionMap`/`SyncOptions`), so a database write is invisible
+    // until the snapshot is refreshed.
     set_option(
         &db,
         "GroupRatio",
@@ -220,6 +251,10 @@ async fn run_contract(db: Database) {
     )
     .await;
     set_option(&db, "GroupGroupRatio", r#"{"vip":{"default":0.25}}"#).await;
+    let response = send(&app, "/api/user/groups", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["data"], json!({}));
+    app.reload(&db).await.unwrap();
 
     // Anonymous route: user group is empty. Only usable GroupRatio keys are
     // emitted; `auto` is appended with the literal string ratio "自动".
@@ -242,6 +277,40 @@ async fn run_contract(db: Database) {
     let body = body_json(response).await;
     assert_eq!(body["data"]["default"]["ratio"].as_f64(), Some(1.0));
 
+    // Abilities are read per request (Go resolves through the catalog on every
+    // call), so a row insert is visible immediately: `group=default` selects
+    // only that group, disabled rows drop out.
+    seed_ability(&db, "default", "zz-default-only-model", 1, true).await;
+    seed_ability(&db, "default", "zz-disabled-model", 1, false).await;
+    let response = send(
+        &app,
+        "/api/user/models?group=default",
+        Some("Bearer pat-default"),
+    )
+    .await;
+    let body = body_json(response).await;
+    assert_success(&body);
+    assert_eq!(body["data"], json!(["zz-default-only-model"]));
+
+    // A usable group returns its own models; an unusable one returns nothing.
+    seed_ability(&db, "vip", "zz-vip-model", 1, true).await;
+    let response = send(
+        &app,
+        "/api/user/models?group=vip",
+        Some("Bearer pat-default"),
+    )
+    .await;
+    let body = body_json(response).await;
+    assert_eq!(body["data"], json!(["zz-vip-model"]));
+    let response = send(
+        &app,
+        "/api/user/models?group=free",
+        Some("Bearer pat-default"),
+    )
+    .await;
+    let body = body_json(response).await;
+    assert_eq!(body["data"], json!([]));
+
     // VIP user: GroupGroupRatio overrides the default group ratio.
     reset(&db).await;
     seed_user(&db, "vip", "pat-vip").await;
@@ -258,6 +327,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     set_option(&db, "GroupGroupRatio", r#"{"vip":{"default":0.25}}"#).await;
+    app.reload(&db).await.unwrap();
     let response = send(&app, "/api/user/self/groups", Some("Bearer pat-vip")).await;
     let body = body_json(response).await;
     assert_eq!(body["data"]["default"]["ratio"].as_f64(), Some(0.25));
@@ -280,6 +350,7 @@ async fn run_contract(db: Database) {
         r#"{"default":"默认分组","vip":"vip分组","auto":"自动分组"}"#,
     )
     .await;
+    app.reload(&db).await.unwrap();
     let response = send(&app, "/api/user/self/groups", Some("Bearer pat-custom")).await;
     let body = body_json(response).await;
     assert_eq!(body["data"]["custom"]["ratio"].as_f64(), Some(3.0));
@@ -288,6 +359,7 @@ async fn run_contract(db: Database) {
     // Invalid GroupRatio JSON falls back to the Go default (empty); the
     // independently configured `auto` entry is still appended.
     update_option(&db, "GroupRatio", "not json").await;
+    app.reload(&db).await.unwrap();
     let response = send(&app, "/api/user/self/groups", Some("Bearer pat-custom")).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
@@ -298,11 +370,96 @@ async fn run_contract(db: Database) {
     );
     assert_eq!(data["auto"]["ratio"], json!("自动"));
 
-    // The models shape stays an empty array under the same configuration.
+    // The models list stays empty for a user whose groups have no abilities.
     let response = send(&app, "/api/user/models", Some("Bearer pat-custom")).await;
     let body = body_json(response).await;
     assert_success(&body);
     assert_eq!(body["data"], json!([]));
+
+    // Go `TestGetUserModelsExpandsAutoGroupsInConfiguredOrder`:
+    // `group=auto` expands the ordered AutoGroups list filtered by usability,
+    // the special overlay removes `unavailable`, and models union in group
+    // order with per-group dedup.
+    reset(&db).await;
+    seed_user(&db, "default", "pat-auto").await;
+    set_option(
+        &db,
+        "GroupRatio",
+        r#"{"default":1,"vip":1,"unavailable":1}"#,
+    )
+    .await;
+    set_option(
+        &db,
+        "UserUsableGroups",
+        r#"{"auto":"自动分组","default":"默认分组","unavailable":"不可用分组"}"#,
+    )
+    .await;
+    set_option(&db, "AutoGroups", r#"["vip","default","unavailable"]"#).await;
+    set_option(
+        &db,
+        "group_ratio_setting.group_special_usable_group",
+        r#"{"default":{"+:vip":"VIP 分组","-:unavailable":""}}"#,
+    )
+    .await;
+    app.reload(&db).await.unwrap();
+    seed_ability(&db, "vip", "zz-vip-model", 1, true).await;
+    seed_ability(&db, "vip", "zz-shared-model", 1, true).await;
+    seed_ability(&db, "default", "zz-default-model", 2, true).await;
+    seed_ability(&db, "default", "zz-shared-model", 3, true).await;
+    seed_ability(&db, "unavailable", "zz-unavailable-model", 1, true).await;
+    let response = send(&app, "/api/user/models?group=auto", Some("Bearer pat-auto")).await;
+    let body = body_json(response).await;
+    assert_eq!(
+        body["data"],
+        json!(["zz-shared-model", "zz-vip-model", "zz-default-model"])
+    );
+    // The removed group is not selectable even when named directly.
+    let response = send(
+        &app,
+        "/api/user/models?group=unavailable",
+        Some("Bearer pat-auto"),
+    )
+    .await;
+    let body = body_json(response).await;
+    assert_eq!(body["data"], json!([]));
+
+    // The overlay also shapes `/api/user/self/groups`: `vip` was added by the
+    // overlay and keeps its configured description.
+    let response = send(&app, "/api/user/self/groups", Some("Bearer pat-auto")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["data"]["vip"]["desc"], json!("VIP 分组"));
+    assert_eq!(
+        body["data"]
+            .as_object()
+            .unwrap()
+            .contains_key("unavailable"),
+        false
+    );
+
+    // Snapshot contract: a later option write is invisible until the next
+    // reload, then takes effect. Both the base usable-groups map and the
+    // overlay are withdrawn here.
+    update_option(&db, "UserUsableGroups", r#"{"default":"默认分组"}"#).await;
+    update_option(&db, "group_ratio_setting.group_special_usable_group", "{}").await;
+    let response = send(&app, "/api/user/models?group=auto", Some("Bearer pat-auto")).await;
+    let body = body_json(response).await;
+    // `auto` is still usable in the stale snapshot, so the old expansion runs.
+    assert_eq!(
+        body["data"],
+        json!(["zz-shared-model", "zz-vip-model", "zz-default-model"])
+    );
+    app.reload(&db).await.unwrap();
+    // After the reload `auto` is no longer usable and `vip` is gone: only the
+    // user's own `default` group remains selectable.
+    let response = send(&app, "/api/user/models?group=auto", Some("Bearer pat-auto")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["data"], json!([]));
+    let response = send(&app, "/api/user/models?group=vip", Some("Bearer pat-auto")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["data"], json!([]));
+    let response = send(&app, "/api/user/self/groups", Some("Bearer pat-auto")).await;
+    let body = body_json(response).await;
+    assert_eq!(body["data"].as_object().unwrap().contains_key("vip"), false);
 }
 
 #[tokio::test]

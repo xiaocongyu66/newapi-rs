@@ -71,10 +71,13 @@ fn go_default_usable_groups() -> BTreeMap<String, String> {
 async fn contract(db: &Database) {
     let default = GroupSettings::default();
 
-    // Go seeds GroupRatio/GroupGroupRatio empty and UserUsableGroups with the
-    // two default groups before any persisted row is applied.
+    // Go seeds GroupRatio/GroupGroupRatio/GroupSpecialUsableGroup empty,
+    // UserUsableGroups with the two default groups, and AutoGroups with
+    // ["default"] before any persisted row is applied.
     assert!(default.group_ratio.is_empty());
     assert!(default.group_group_ratio.is_empty());
+    assert!(default.group_special_usable_group.is_empty());
+    assert_eq!(default.auto_groups, vec!["default".to_owned()]);
     assert_eq!(default.user_usable_groups, go_default_usable_groups());
 
     // A missing options table is an error, not a silent set of defaults.
@@ -108,6 +111,13 @@ async fn contract(db: &Database) {
         Some(r#"{"vip":{"default":0.4,"free":0.2}}"#),
     )
     .await;
+    insert(
+        db,
+        "group_ratio_setting.group_special_usable_group",
+        Some(r#"{"default":{"+:vip":"VIP 分组","-:free":""}}"#),
+    )
+    .await;
+    insert(db, "AutoGroups", Some(r#"["vip","default"]"#)).await;
 
     let loaded = GroupSettings::load(db, &default).await.unwrap();
     assert_eq!(
@@ -132,6 +142,20 @@ async fn contract(db: &Database) {
             "vip".to_owned(),
             BTreeMap::from([("default".to_owned(), 0.4), ("free".to_owned(), 0.2),])
         )])
+    );
+    assert_eq!(
+        loaded.group_special_usable_group,
+        BTreeMap::from([(
+            "default".to_owned(),
+            BTreeMap::from([
+                ("+:vip".to_owned(), "VIP 分组".to_owned()),
+                ("-:free".to_owned(), String::new()),
+            ])
+        )])
+    );
+    assert_eq!(
+        loaded.auto_groups,
+        vec!["vip".to_owned(), "default".to_owned()]
     );
 
     // Invalid JSON or a wrong shape falls back to the Go default for that key,
@@ -158,17 +182,44 @@ async fn contract(db: &Database) {
         let fallback = GroupSettings::load(db, &loaded).await.unwrap();
         assert!(fallback.group_group_ratio.is_empty(), "value={value:?}");
     }
+    // Go `RWMap.UnmarshalJSON` and `UpdateAutoGroupsByJsonString` both reset
+    // before decoding, so an invalid row leaves an empty value rather than the
+    // previous snapshot.
+    for value in [
+        "",
+        "not json",
+        "[]",
+        r#"{"default":{}}"#,
+        r#"{"default":["vip"]}"#,
+    ] {
+        update(db, "group_ratio_setting.group_special_usable_group", value).await;
+        let fallback = GroupSettings::load(db, &loaded).await.unwrap();
+        assert!(
+            fallback.group_special_usable_group.is_empty(),
+            "value={value:?}"
+        );
+    }
+    for value in ["", "not json", "{}", r#"["vip",1]"#] {
+        update(db, "AutoGroups", value).await;
+        let fallback = GroupSettings::load(db, &loaded).await.unwrap();
+        assert!(fallback.auto_groups.is_empty(), "value={value:?}");
+    }
 
     // Restore valid values, then prove a missing row retains the previous
     // snapshot value (the hot-reload contract).
     update(db, "GroupRatio", r#"{"default":1}"#).await;
     update(db, "UserUsableGroups", r#"{"default":"Default"}"#).await;
     update(db, "GroupGroupRatio", r#"{"default":{"vip":3}}"#).await;
+    update(
+        db,
+        "group_ratio_setting.group_special_usable_group",
+        r#"{"vip":{"+:free":"免费"}}"#,
+    )
+    .await;
+    update(db, "AutoGroups", r#"["default"]"#).await;
     let before_delete = GroupSettings::load(db, &default).await.unwrap();
     assert_eq!(before_delete.group_ratio.len(), 1);
-    execute(db, "DELETE FROM options WHERE \"key\" = 'GroupRatio'").await;
-    execute(db, "DELETE FROM options WHERE \"key\" = 'UserUsableGroups'").await;
-    execute(db, "DELETE FROM options WHERE \"key\" = 'GroupGroupRatio'").await;
+    execute(db, "DELETE FROM options").await;
     let kept = GroupSettings::load(db, &before_delete).await.unwrap();
     assert_eq!(kept, before_delete);
     let fresh = GroupSettings::load(db, &default).await.unwrap();

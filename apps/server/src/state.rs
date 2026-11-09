@@ -6,7 +6,7 @@ use std::sync::{
 use std::time::Duration;
 
 use newapi_billing::quota_display::QuotaDisplay;
-use newapi_catalog::{AuthSettings, PublicConfig};
+use newapi_catalog::{AuthSettings, PublicConfig, group_settings::GroupSettings};
 use newapi_config::SessionCookieSettings;
 use newapi_identity::auth_flow::auth_flow_key;
 use newapi_identity::auth_session::{AuthFence, SessionAuth};
@@ -134,6 +134,10 @@ pub struct AppState {
     db: Option<Database>,
     auth_settings: Arc<RwLock<AuthSettings>>,
     quota_display: Arc<RwLock<QuotaDisplay>>,
+    /// 用户组选项快照（GroupRatio/UserUsableGroups/覆盖层/AutoGroups）：
+    /// 启动与 reload worker 同频刷新，handler 只读此快照，
+    /// 对齐 Go 的 InitOptionMap + SyncOptions 装载时机。
+    group_settings: Arc<RwLock<GroupSettings>>,
     /// auth_flow 的 HMAC key：`auth-flow-v1:` + session secret，与 Go 一致。
     flow_key: Option<Arc<Vec<u8>>>,
     /// 可信代理解析策略；未注入时只信任直连 peer（测试路径）。
@@ -162,6 +166,7 @@ impl Default for AppState {
             db: None,
             auth_settings: Arc::new(RwLock::new(AuthSettings::default())),
             quota_display: Arc::new(RwLock::new(QuotaDisplay::default())),
+            group_settings: Arc::new(RwLock::new(GroupSettings::default())),
             flow_key: None,
             proxy_policy: None,
             rate_limiter: None,
@@ -327,6 +332,14 @@ impl AppState {
             .clone()
     }
 
+    /// 用户组选项快照（启动与 reload worker 装载，handler 只读）。
+    pub fn group_settings(&self) -> GroupSettings {
+        self.group_settings
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
     /// SelfUser 组装用的额度展示设置（billing 快照 → identity 算术设置）。
     pub fn quota_display(&self) -> QuotaDisplaySettings {
         let display = self
@@ -400,6 +413,20 @@ impl AppState {
                 return Err(error);
             }
         };
+        // 用户组选项与公共配置同频装载：与 Go 的 InitOptionMap/SyncOptions
+        // 一致，失败同样不发布部分状态。
+        let group_previous = self
+            .group_settings
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let group_next = match GroupSettings::load(db, &group_previous).await {
+            Ok(next) => next,
+            Err(error) => {
+                self.mark_not_ready();
+                return Err(error);
+            }
+        };
         let setup_next = match db.setup_completed().await {
             Ok(next) => next,
             Err(error) => {
@@ -415,6 +442,10 @@ impl AppState {
             .auth_settings
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = auth_next;
+        *self
+            .group_settings
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = group_next;
         *self
             .snapshot
             .write()
