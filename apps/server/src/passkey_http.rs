@@ -633,7 +633,7 @@ async fn register_begin_inner(
         username: &user.username,
         display_name: &user.display_name,
     };
-    let (options, registration) = match ceremony.begin_registration(ceremony_user, exclude) {
+    let (options, registration) = match ceremony.begin_registration(&ceremony_user, exclude) {
         Ok(value) => value,
         Err(_) => return api_key(headers, MSG_VERIFY_FAILED),
     };
@@ -1001,7 +1001,7 @@ pub async fn login_finish(
     if let Some(user_handle) = assertion_user_handle(&assertion)
         && !user_handle.is_empty()
     {
-        match newapi_identity::passkey::ceremony::user_handle_to_user_id(user_handle) {
+        match newapi_identity::passkey::ceremony::user_handle_to_user_id(&user_handle) {
             Some(handle_id) if handle_id != user.id => {
                 return api_message(MSG_HANDLE_MISMATCH);
             }
@@ -1232,10 +1232,11 @@ async fn verify_finish_inner(
         Ok(authentication) => authentication,
         Err(_) => return api_message(MSG_SESSION_EXPIRED),
     };
-    let credential = match existing.to_webauthn_credential() {
-        Ok(credential) => credential,
-        Err(_) => return api_message(MSG_NOT_BOUND),
-    };
+    // Go `ValidateLogin` 的前置：确认存储凭据可重建为校验用凭据；重建产物本身
+    // 不参与断言（允许列表已随状态持久化）。
+    if existing.to_webauthn_credential().is_err() {
+        return api_message(MSG_NOT_BOUND);
+    }
     let result = match ceremony.finish_verification(&assertion, &authentication) {
         Ok(result) => result,
         Err(_) => return api_key(headers, MSG_VERIFY_FAILED),

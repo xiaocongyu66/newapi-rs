@@ -160,8 +160,18 @@ async fn seed_user(db: &Database, id: i64, username: &str) {
     let sql = "INSERT INTO users (id, username, display_name, status, auth_version) \
                VALUES ($1,$2,$2,1,1)";
     match db {
-        Database::Sqlite(pool) => sqlx::query(sql).bind(id).bind(username).execute(pool).await,
-        Database::Postgres(pool) => sqlx::query(sql).bind(id).bind(username).execute(pool).await,
+        Database::Sqlite(pool) => sqlx::query(sql)
+            .bind(id)
+            .bind(username)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(sql)
+            .bind(id)
+            .bind(username)
+            .execute(pool)
+            .await
+            .map(|_| ()),
     }
     .expect("seed user");
 }
@@ -191,8 +201,18 @@ async fn auth_version(db: &Database, id: i64) -> i64 {
 async fn insert_option(db: &Database, key: &str, value: &str) {
     let sql = "INSERT INTO options (\"key\", \"value\") VALUES ($1,$2)";
     match db {
-        Database::Sqlite(pool) => sqlx::query(sql).bind(key).bind(value).execute(pool).await,
-        Database::Postgres(pool) => sqlx::query(sql).bind(key).bind(value).execute(pool).await,
+        Database::Sqlite(pool) => sqlx::query(sql)
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(sql)
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await
+            .map(|_| ()),
     }
     .expect("insert option");
 }
@@ -378,7 +398,7 @@ async fn registered_credential(
     let ceremony = ceremony();
     let (options, registration) = ceremony
         .begin_registration(
-            newapi_identity::passkey::CeremonyUser {
+            &newapi_identity::passkey::CeremonyUser {
                 id: user_id,
                 username: "fixture",
                 display_name: "Fixture",
@@ -434,7 +454,7 @@ async fn three_flows(db: &Database) {
     let ceremony = ceremony();
     let (options, registration) = ceremony
         .begin_registration(
-            newapi_identity::passkey::CeremonyUser {
+            &newapi_identity::passkey::CeremonyUser {
                 id: 7,
                 username: "fixture",
                 display_name: "Fixture",
@@ -571,7 +591,7 @@ async fn three_flows(db: &Database) {
     // --- 跨用户绑定：register 流的 token 不能被别的用户消费 ---
     let (_, registration_state) = ceremony
         .begin_registration(
-            newapi_identity::passkey::CeremonyUser {
+            &newapi_identity::passkey::CeremonyUser {
                 id: 7,
                 username: "fixture",
                 display_name: "Fixture",
@@ -610,7 +630,7 @@ async fn store_semantics(db: &Database) {
     let repository = PasskeyCredentialRepository::new(db.clone());
 
     // 未绑定用户查询返回 None。
-    assert_eq!(repository.by_user_id(9).await.unwrap().is_some(), false);
+    assert!(repository.by_user_id(9).await.unwrap().is_none());
 
     let mut authenticator = SoftAuthenticator::new([0x77; 32], vec![0x11; 32]);
     registered_credential(db, &mut authenticator, 9).await;
@@ -700,7 +720,7 @@ async fn settings_loading(db: &Database) {
         .expect("settings reload");
     // options 表里仍有 passkey 行（同一 fixture）；此处验证的是解析后再次
     // 读取的稳定性，而非缺行分支——缺行分支由下一组断言覆盖。
-    assert_eq!(settings.enabled, true);
+    assert!(settings.enabled);
     assert_eq!(server_address, "https://newapi.pro");
 }
 
@@ -753,7 +773,7 @@ async fn sqlite_passkey_failures_are_fixed_categories() {
     let db = sqlite_database().await;
     let ceremony = ceremony();
     // 错误的 clientData 类型（webauthn.create 误用 get）被库拒绝。
-    let user = newapi_identity::passkey::CeremonyUser {
+    let user = &newapi_identity::passkey::CeremonyUser {
         id: 5,
         username: "failures",
         display_name: "F",
