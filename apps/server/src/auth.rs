@@ -279,7 +279,7 @@ pub async fn token_auth_read_only(
         }
         Some(value) => match value.to_str() {
             // Go 的空 header 检查是 `key == ""`，等同于 missing。
-            Ok(raw) if raw.is_empty() => {
+            Ok("") => {
                 return readonly_failure(
                     StatusCode::UNAUTHORIZED,
                     MSG_TOKEN_NOT_PROVIDED,
