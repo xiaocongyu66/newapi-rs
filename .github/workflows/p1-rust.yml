@@ -106,7 +106,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: xiaocongyu66/new-api
-          ref: ec542e7050932b82a2c087004ce54131ea67a836
+          ref: a508a866cd9d84b9b540f2b1e4c2f5c6814e478a
           persist-credentials: false
           path: upstream-reference
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -240,7 +240,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: xiaocongyu66/new-api
-          ref: ec542e7050932b82a2c087004ce54131ea67a836
+          ref: a508a866cd9d84b9b540f2b1e4c2f5c6814e478a
           persist-credentials: false
           path: upstream-reference
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

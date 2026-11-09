@@ -232,7 +232,7 @@ def restore():
     return True
 
 
-UPSTREAM_SHA = "ec542e7050932b82a2c087004ce54131ea67a836"
+UPSTREAM_SHA = "a508a866cd9d84b9b540f2b1e4c2f5c6814e478a"
 
 
 def p2_oracle():
