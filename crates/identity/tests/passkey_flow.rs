@@ -30,11 +30,8 @@ use newapi_storage::Database;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{ConnectOptions, QueryBuilder};
-use webauthn_rs::prelude::{
-    DiscoverableAuthentication, PasskeyAuthentication, PasskeyRegistration,
-};
+use webauthn_rs::prelude::{DiscoverableAuthentication, PasskeyAuthentication};
 
 const NOW: i64 = 1_700_000_000;
 const SECRET: &str = "test-session-secret";
@@ -452,7 +449,7 @@ async fn three_flows(db: &Database) {
 
     // begin 的 options 形状与 RP 推导。
     let ceremony = ceremony();
-    let (options, registration) = ceremony
+    let (options, _registration) = ceremony
         .begin_registration(
             &newapi_identity::passkey::CeremonyUser {
                 id: 7,

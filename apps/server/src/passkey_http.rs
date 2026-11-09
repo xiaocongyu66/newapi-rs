@@ -365,10 +365,11 @@ async fn two_fa_enabled_result(
     };
     match TwoFaRepository::new(db).by_user_id(user_id).await {
         Ok(record) => Ok(record.is_some_and(|record| record.is_enabled)),
-        Err(error) => {
+        Err(_) => {
+            // `TwoFaError` 本就是固定分类（不携带数据库文本），类别直接落固定串。
             tracing::warn!(
                 event = "passkey_twofa_lookup_failed",
-                category = crate::database_error_class(&error),
+                category = "two_fa_storage",
                 "passkey 2FA status lookup failed"
             );
             Err(api_key(headers, MSG_DATABASE_ERROR))
