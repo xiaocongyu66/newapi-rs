@@ -340,6 +340,41 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::admin_auth,
             )),
     );
+    // 自定义 OAuth 提供商管理端（`register_api.go:342-352`）：组内
+    // `AdminAuth()` + `RequirePermission(policy.SystemSettings)`，无
+    // DisableCache、无限流。权限层 (`require_system_settings`) 叠在
+    // `admin_auth` 之后（`route_layer` 后加先执行）；根路由同时注册带尾斜线
+    // 与不带尾斜线两种形态，对齐 Fiber StrictRouting=false 的匹配行为。
+    let custom_oauth_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/custom-oauth-provider/",
+                get(crate::custom_oauth_http::list).post(crate::custom_oauth_http::create),
+            )
+            .route(
+                "/api/custom-oauth-provider",
+                get(crate::custom_oauth_http::list).post(crate::custom_oauth_http::create),
+            )
+            .route(
+                "/api/custom-oauth-provider/discovery",
+                post(crate::custom_oauth_http::discovery),
+            )
+            .route(
+                "/api/custom-oauth-provider/{id}",
+                get(crate::custom_oauth_http::get_one)
+                    .put(crate::custom_oauth_http::update)
+                    .delete(crate::custom_oauth_http::delete),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                custom_oauth_state.clone(),
+                crate::custom_oauth_http::require_system_settings,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                custom_oauth_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `PUT /api/user/self`：Go `UserAuth → CriticalRateLimit → DisableCache →
     // handler`（缓存头由 handler 写）；`DELETE /api/user/self` 仅 `UserAuth`。
     let self_put_state = state.clone();
