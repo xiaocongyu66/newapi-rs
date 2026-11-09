@@ -768,7 +768,6 @@ macro_rules! batch_delete_transaction {
             select.push_bind(user_id);
             select.push(" AND deleted_at IS NULL AND id IN ");
             push_id_list!(&mut select, ids);
-            select.push(")");
             let mut keys = Vec::new();
             for row in select.build().fetch_all(&mut *transaction).await? {
                 keys.push((
@@ -793,7 +792,6 @@ macro_rules! batch_delete_transaction {
             delete.push_bind(user_id);
             delete.push(" AND deleted_at IS NULL AND id IN ");
             push_id_list!(&mut delete, ids);
-            delete.push(")");
             delete.build().execute(&mut *transaction).await?;
             Ok(keys.len())
         }
@@ -1225,7 +1223,6 @@ impl TokenRepository {
                 query.push_bind(user_id);
                 query.push(" AND deleted_at IS NULL AND id IN ");
                 push_id_list!(&mut query, ids);
-                query.push(")");
                 for row in query.build().fetch_all(pool).await? {
                     pairs.push((
                         row.try_get::<Option<i64>, _>("id")?.unwrap_or_default(),
@@ -1240,7 +1237,6 @@ impl TokenRepository {
                 query.push_bind(user_id);
                 query.push(" AND deleted_at IS NULL AND id IN ");
                 push_id_list!(&mut query, ids);
-                query.push(")");
                 for row in query.build().fetch_all(pool).await? {
                     pairs.push((
                         row.try_get::<Option<i64>, _>("id")?.unwrap_or_default(),
