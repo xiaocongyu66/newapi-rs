@@ -35,6 +35,7 @@ pub mod topup_http;
 pub mod turnstile;
 pub mod twofa_http;
 pub mod verification_http;
+mod web_limit;
 
 pub use http::{MAX_BODY_BYTES, router};
 pub use state::{AppState, RateLimitUnavailable, RateLimiter, reload_loop};

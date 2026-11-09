@@ -187,6 +187,30 @@ async fn run() -> Result<(), ()> {
         },
         None => newapi_server::RateLimiter::memory(global_rate_limit_settings),
     };
+    // Go `GlobalWebRateLimit`（web 兜底表面，mark "GW"）：默认 120 次/180 秒，
+    // 后端选择与 GA 一致。
+    let global_web_rate_limit_settings = newapi_server::limit::RateLimitSettings {
+        enabled: config.global_web_rate_limit_enabled,
+        requests: config.global_web_rate_limit_requests,
+        window_seconds: config.global_web_rate_limit_duration_seconds,
+    };
+    let global_web_rate_limiter = match config.redis_url() {
+        Some(url) => match newapi_server::limit_redis::RedisRateLimiter::connect(url).await {
+            Ok(limiter) => {
+                newapi_server::RateLimiter::redis(global_web_rate_limit_settings, limiter)
+            }
+            Err(_) => {
+                tracing::error!(
+                    event = "rate_limit_redis_unavailable",
+                    mark = "GW",
+                    "redis rate limit connection failed"
+                );
+                db.close().await;
+                return Err(());
+            }
+        },
+        None => newapi_server::RateLimiter::memory(global_web_rate_limit_settings),
+    };
     // Go `middleware.EmailVerificationRateLimit`：固定 2 次/30 秒，与上面的
     // 限流开关无关；配置 Redis 时走 Redis 固定窗口（故障自动回退内存），
     // 否则纯进程内滑动窗口。
@@ -218,6 +242,7 @@ async fn run() -> Result<(), ()> {
         )
         .bind_search_rate_limit(search_rate_limiter)
         .bind_global_api_rate_limit(global_rate_limiter)
+        .bind_global_web_rate_limit(global_web_rate_limiter)
         .bind_token_cache(token_cache)
         .bind_email_verification_rate_limit(email_verification_limiter);
     let listener = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, config.port)).await {

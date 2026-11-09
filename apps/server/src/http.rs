@@ -670,11 +670,20 @@ fn build_router(state: AppState) -> Router {
     // 因此对全部 /api 路径（含未匹配的 /api 回退）先于 CT 执行。此层在
     // boundary 之前添加，boundary 保持最外层；非 /api 路径由中间件内部直通。
     let global_limit_state = state.clone();
+    // Go `SetWebRouter` 的 `router.Use(GlobalWebRateLimit)`（register_web.go:15）
+    // 仅覆盖其后注册的静态资源与 NoRoute 兜底链；本端口无静态资源，GW 表面
+    // 是 `/api`、`/health/*` 之外的兜底路径。两中间件的路径门互补，同一请求
+    // 至多命中一个（Go 中 GA/GW 也从不在同一请求上同时出现）。
+    let web_limit_state = state.clone();
     app.fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(
             global_limit_state,
             crate::global_limit::global_api_rate_limit,
+        ))
+        .layer(middleware::from_fn_with_state(
+            web_limit_state,
+            crate::web_limit::global_web_rate_limit,
         ))
         .with_state(state)
         .layer(middleware::from_fn(boundary))
