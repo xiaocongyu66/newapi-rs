@@ -232,14 +232,15 @@ fn parse_boundary(content_type: &str) -> Option<String> {
 fn read_form_values(boundary: &str, body: &[u8]) -> Result<Vec<(String, String)>, ()> {
     let dash_boundary: Vec<u8> = format!("--{boundary}").into_bytes();
     let mut values = Vec::new();
-    let mut cursor = 0usize;
-    let mut saw_part = false;
+    // 游标始终指向“下一个要解析的 part 之前的边界词元”的开头：
+    // 首条边界允许在 body 开头（无前导 CRLF）。
+    let mut cursor = match find_token_start(body, 0, &dash_boundary) {
+        Some(start) => start,
+        // Go：首条边界不匹配即 `NextPart` 错误。
+        None => return Err(()),
+    };
     loop {
-        let Some((_, after_delimiter)) = next_delimiter(body, cursor, &dash_boundary) else {
-            // Go：首条边界不匹配即 `NextPart` 错误。
-            return if saw_part { Ok(values) } else { Err(()) };
-        };
-        saw_part = true;
+        let after_delimiter = cursor + dash_boundary.len();
         // 结束边界 `--boundary--`：后续无效，停止解析。
         if body[after_delimiter..].starts_with(b"--") {
             break;
@@ -249,33 +250,27 @@ fn read_form_values(boundary: &str, body: &[u8]) -> Result<Vec<(String, String)>
             return Err(());
         };
         let headers = &body[part_start..header_end];
-        // 上一轮循环的 cursor..delimiter_at 是上一个 part 的数据。
-        let next_data_start = match next_delimiter(body, data_start, &dash_boundary) {
-            Some((next_delim, _)) => next_delim,
+        // part 数据延续到下一条边界词元；其前的单个 CRLF 属于分隔符。
+        let next_token = match find_token_start(body, data_start, &dash_boundary) {
+            Some(start) => start,
             None => return Err(()),
         };
         if let Some(name) = form_value_name(headers) {
-            let mut data = body[data_start..next_data_start].to_owned();
-            // 分隔符前的单个 CRLF 属于分隔符。
+            let mut data = body[data_start..next_token].to_owned();
             strip_one_crlf(&mut data);
             values.push((name, String::from_utf8_lossy(&data).into_owned()));
         }
-        cursor = next_data_start;
-        // 推进到下一条边界开头（为下一轮的“数据段起点”对齐）。
-        if body[cursor..].starts_with(b"\r\n") {
-            cursor += 2;
-        } else if body[cursor..].starts_with(b"\n") {
-            cursor += 1;
-        }
+        cursor = next_token;
     }
     Ok(values)
 }
 
-/// 找到从 `from` 开始的下一条边界：`\r\n--boundary`，或 `from == 0` 时
-/// 允许开头的 `--boundary`。返回（边界前数据终点，boundary 词元终点）。
-fn next_delimiter(body: &[u8], from: usize, dash_boundary: &[u8]) -> Option<(usize, usize)> {
+/// 找到从 `from` 开始的下一条边界词元的**开头**：`from == 0` 时允许
+/// body 直接以 `--boundary` 开始；否则按 `\r\n--boundary` 定位，词元
+/// 开头即 CRLF 之后的位置（数据段使用 `..token_start` 截取）。
+fn find_token_start(body: &[u8], from: usize, dash_boundary: &[u8]) -> Option<usize> {
     if from == 0 && body.starts_with(dash_boundary) {
-        return Some((0, dash_boundary.len()));
+        return Some(0);
     }
     let search = match body.get(from..) {
         Some(slice) => slice,
@@ -285,8 +280,7 @@ fn next_delimiter(body: &[u8], from: usize, dash_boundary: &[u8]) -> Option<(usi
     let offset = search
         .windows(pattern.len())
         .position(|w| w == pattern.as_slice())?;
-    let delimiter_at = from + offset + 2;
-    Some((delimiter_at, delimiter_at + dash_boundary.len()))
+    Some(from + offset + 2)
 }
 
 /// 跳过边界词元后的传输填充与行结束。
