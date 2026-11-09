@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.99.1"
 publish = false
-description = "P0 dependency resolution probe, not an application or service"
+description = "Dependency resolution probe (P0 stack + webauthn-rs 0.6.2 pre-validation), not an application or service"
 
 [lib]
 path = "src/lib.rs"
@@ -23,3 +23,6 @@ tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "http2", "json", "stream"] }
 sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json"] }
+# webauthn-rs passkey 切片预验证：精确锁版（同工作区风格），起步 default-features = false。
+# 最小配置若过则结论最强；若缺必需 feature，CI 日志直接暴露，第二轮再开 defaults。
+webauthn-rs = { version = "=0.6.2", default-features = false }
