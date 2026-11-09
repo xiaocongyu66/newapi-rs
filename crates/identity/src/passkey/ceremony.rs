@@ -149,9 +149,8 @@ impl Ceremony {
         let cred: Credential = passkey.into();
         let attestation_format = serde_json::to_value(&cred.attestation_format)
             .ok()
-            .and_then(|value| value.as_str())
-            .unwrap_or("none")
-            .to_owned();
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or("none".to_owned());
         let transports = cred
             .transports
             .map(|transports| transports.iter().map(|t| t.to_string()).collect())
