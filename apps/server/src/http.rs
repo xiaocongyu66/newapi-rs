@@ -483,6 +483,67 @@ fn build_router(state: AppState) -> Router {
                 crate::login_http::login_guard,
             )),
     );
+    // passkey 自管理路由（`register_api.go:158-163`）：`selfRoute` 组内
+    // 纯 UserAuth；status 无 DisableCache，四个 POST 与 DELETE 的 no-cache
+    // 头由 handler 自写（Go 的 DisableCache 中间件）。
+    let passkey_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/passkey", get(crate::passkey_http::status))
+            .route(
+                "/api/user/passkey/register/begin",
+                post(crate::passkey_http::register_begin),
+            )
+            .route(
+                "/api/user/passkey/register/finish",
+                post(crate::passkey_http::register_finish),
+            )
+            .route(
+                "/api/user/passkey/verify/begin",
+                post(crate::passkey_http::verify_begin),
+            )
+            .route(
+                "/api/user/passkey/verify/finish",
+                post(crate::passkey_http::verify_finish),
+            )
+            .route("/api/user/passkey", delete(crate::passkey_http::delete))
+            .route_layer(middleware::from_fn_with_state(
+                passkey_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // passkey 匿名登录路由（`register_api.go:135-136`）：CriticalRateLimit →
+    // DisableCache → 匿名体上限 → handler（guard 内不含 Turnstile）。
+    let passkey_login_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/passkey/login/begin",
+                post(crate::passkey_http::login_begin),
+            )
+            .route(
+                "/api/user/passkey/login/finish",
+                post(crate::passkey_http::login_finish),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                passkey_login_state,
+                crate::passkey_http::login_guard,
+            )),
+    );
+    // passkey 管理员重置（`register_api.go:219`）：adminRoute 组内纯
+    // AdminAuth，无 DisableCache、无限流。
+    let admin_passkey_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/{id}/reset_passkey",
+                delete(crate::passkey_http::admin_reset),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                admin_passkey_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // refresh/logout：Go 顺序 SessionCookieOriginGuard → CriticalRateLimit →
     // DisableCache → handler。
     let mutation_state = state.clone();

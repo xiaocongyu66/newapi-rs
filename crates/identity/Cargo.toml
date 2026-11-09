@@ -16,6 +16,10 @@ rand = "=0.8.8"
 uuid = "=1.26.1"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
+# COSE 公钥与 Go 一致按原始 CBOR 字节落库（public_key 列），serde_cbor_2 已在
+# webauthn-rs-core 的依赖树中，不额外引入新 crate。
+serde_cbor_2 = "0.13.0"
+webauthn-rs.workspace = true
 newapi-i18n.workspace = true
 newapi-storage.workspace = true
 sqlx.workspace = true
@@ -23,3 +27,9 @@ tracing.workspace = true
 redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp", "script"] }
 
 tokio = { workspace = true, features = ["io-util"] }
+
+# 契约测试用的软件 P-256 认证器（注册/断言签名）；与 crypto-glue 已引入的
+# p256/ecdsa 同版本，lockfile 不新增 crate。
+[dev-dependencies]
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
+ecdsa = { version = "0.17", default-features = false, features = ["der", "digest"] }

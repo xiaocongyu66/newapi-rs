@@ -199,8 +199,11 @@ pub async fn login_guard(
 
 /// 复刻 Go `AnonymousRequestBodyLimit`：先看声明的 Content-Length，再以
 /// `limit + 1` 预算读取实际体；超限返回裸 413（无 JSON 包）。`limit == 0`
-/// 在 Go 中是“未启用”，这里同样不设限。
-async fn read_limited_body(limit: usize, request: Request) -> Result<Request, StatusCode> {
+/// 在 Go 中是“未启用”，这里同样不设限。passkey 登录路由同用此函数。
+pub(crate) async fn read_limited_body(
+    limit: usize,
+    request: Request,
+) -> Result<Request, StatusCode> {
     if limit == 0 {
         return Ok(request);
     }
@@ -295,7 +298,8 @@ fn login_service(state: &AppState) -> Option<LoginService> {
 
 /// Go 的响应定型。`LoginFailure::Storage` 在 Go 里是 `CtxApiError(err)`（200 +
 /// 错误文本）；Rust 不以数据库文本作为客户端文案，落到固定分类。
-fn render(
+/// passkey 登录（`SetupLogin` 等价路径）复用此定型。
+pub(crate) fn render(
     state: &AppState,
     outcome: Result<LoginResponse, LoginFailure>,
     headers: &HeaderMap,
