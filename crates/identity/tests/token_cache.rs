@@ -196,7 +196,7 @@ async fn redis_init_publishes_get_reads_and_refresh_does_not_overwrite() {
     let ttl = ttl_seconds(&mut control, &data_key).await;
     assert!(ttl > 0 && ttl <= 7, "TTL 必须落在配置的 7 秒内，实际 {ttl}");
     let cached = cache.get_by_key(&key).await.expect("读取已初始化的哈希");
-    assert_eq!(cached, Some(record));
+    assert_eq!(cached, Some(record.clone()));
     // 已存在的哈希仅续期，快照不得覆盖任何字段。
     let mut ahead = record.clone();
     ahead.remain_quota = 999_999;
@@ -313,10 +313,14 @@ async fn repository_caches_by_key_and_invalidates_on_delete() {
     assert!(repository.delete_for_user(7, id).await.expect("软删除成功"));
     assert_eq!(exists(&mut control, &data_key).await, 0);
     assert!(ttl_seconds(&mut control, &fence_key).await > 0);
-    assert_eq!(
-        repository.by_key_cached(&key).await,
-        Ok(None),
-        "软删行对缓存读与库读都不可见"
+    // sqlx::Error 不实现 PartialEq，不能整体 assert_eq。
+    let after = repository
+        .by_key_cached(&key)
+        .await
+        .expect("删除后读取成功");
+    assert!(
+        after.is_none(),
+        "软删行对缓存读与库读都不可见，实际 {after:?}"
     );
     cleanup(&mut control, &fence_key).await;
 }
