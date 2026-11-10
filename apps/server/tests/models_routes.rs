@@ -874,8 +874,8 @@ async fn contract(db: &Database) {
     let fake = FakeUpstream::with_envelope(upstream, vendors);
     let response = models_http::sync_upstream_with(db, &Default::default(), b"", &fake).await;
     let body = assert_success(response).await;
-    assert_eq!(body["data"]["created_models"], json!(1));
-    assert_eq!(body["data"]["created_vendors"], json!(1));
+    assert_eq!(body["data"]["created_models"], json!(1), "{}", body);
+    assert_eq!(body["data"]["created_vendors"], json!(1), "{}", body);
     assert_eq!(body["data"]["created_list"], json!(["abilities-only"]));
     // 上游没有的 missing 名字跳过（another 不在 abilities）。
     assert_eq!(body["data"]["skipped_models"], json!([]));
@@ -931,7 +931,8 @@ async fn contract(db: &Database) {
          "vendor_name": "UpVendor", "name_rule": 3}
     ]);
     let vendors = json!([]);
-    let fake = FakeUpstream::with_envelope(upstream, vendors);
+    // 覆盖请求带 locale=en，响应 URL 必须按同一 locale 注册。
+    let fake = FakeUpstream::with_envelope_locale(upstream, vendors, "en");
     let response = models_http::sync_upstream_with(db, &Default::default(), &payload, &fake).await;
     let body = assert_success(response).await;
     assert_eq!(body["data"]["created_models"], json!(0));
