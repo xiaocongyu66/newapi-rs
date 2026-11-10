@@ -364,10 +364,10 @@ pub fn advanced_custom_error(config: &AdvancedCustomConfig) -> Option<String> {
         if let Some(error) = converter_path_error(index, incoming_path, converter) {
             return Some(error);
         }
-        if let Some(auth) = route.auth.as_ref() {
-            if let Some(error) = route_auth_error(index, auth) {
-                return Some(error);
-            }
+        if let Some(auth) = route.auth.as_ref()
+            && let Some(error) = route_auth_error(index, auth)
+        {
+            return Some(error);
         }
     }
     None
@@ -539,26 +539,33 @@ fn validate_settings_detail(
     Ok(())
 }
 
-/// Go `validateChannel`（`handle_channel.go:460-525`）。
+/// Go `validateChannel`（`handle_channel.go:460-525`）的输入：字段按
+/// `channelpkg.Channel` 的成员收敛成结构体（避免过宽的参数表）。
 ///
-/// `channel` 已是解码后的输入形态；`is_add` 对应 Go 的 `isAdd`。
-/// `base_url` 为请求里的 `base_url`（`GetBaseURL` 的 nil→"" 分支在外部处理，
-/// 校验只关心空白判定——New API 类型的内置 base URL 恰为空串）。
-pub fn validate_channel(
-    channel_type: i64,
-    base_url: &Option<String>,
-    key: &str,
-    models: &str,
-    other: &str,
-    setting: &Option<String>,
-    other_settings: &str,
-    is_add: bool,
-) -> Result<(), ValidationError> {
-    if let Err(detail) = validate_settings_detail(setting, other_settings, channel_type) {
+/// `base_url` 为请求里的 `base_url`（`GetBaseURL` 的 nil→"" 分支在外部
+/// 处理，校验只关心空白判定——New API 类型的内置 base URL 恰为空串）。
+pub struct ChannelValidationInput<'a> {
+    pub channel_type: i64,
+    pub base_url: &'a Option<String>,
+    pub key: &'a str,
+    pub models: &'a str,
+    pub other: &'a str,
+    pub setting: &'a Option<String>,
+    pub other_settings: &'a str,
+    pub is_add: bool,
+}
+
+/// Go `validateChannel`：创建（`is_add = true`）与更新共用一份校验链，
+/// 失败返回 Go 的原始错误分类。
+pub fn validate_channel(input: &ChannelValidationInput<'_>) -> Result<(), ValidationError> {
+    if let Err(detail) =
+        validate_settings_detail(input.setting, input.other_settings, input.channel_type)
+    {
         return Err(ValidationError::Settings(detail));
     }
-    if channel_type == CHANNEL_TYPE_NEW_API
-        && base_url
+    if input.channel_type == CHANNEL_TYPE_NEW_API
+        && input
+            .base_url
             .as_deref()
             .map(str::trim)
             .unwrap_or_default()
@@ -566,29 +573,29 @@ pub fn validate_channel(
     {
         return Err(ValidationError::NewApiBaseUrlRequired);
     }
-    if is_add && key.is_empty() {
+    if input.is_add && input.key.is_empty() {
         return Err(ValidationError::ChannelOrKeyEmpty);
     }
-    if is_add {
+    if input.is_add {
         // Go 遍历 `GetModels()`：`strings.Split(strings.Trim(models, ","), ",")`。
-        for model in models.trim_matches(',').split(',') {
+        for model in input.models.trim_matches(',').split(',') {
             if model.len() > 255 {
                 return Err(ValidationError::ModelNameTooLong(model.to_owned()));
             }
         }
     }
-    if channel_type == CHANNEL_TYPE_VERTEX_AI {
-        if other.is_empty() {
+    if input.channel_type == CHANNEL_TYPE_VERTEX_AI {
+        if input.other.is_empty() {
             return Err(ValidationError::VertexRegionRequired);
         }
         let map: BTreeMap<String, serde_json::Value> =
-            serde_json::from_str(other).map_err(|_| ValidationError::VertexRegionFormat)?;
-        if map.get("default").is_none() {
+            serde_json::from_str(input.other).map_err(|_| ValidationError::VertexRegionFormat)?;
+        if !map.contains_key("default") {
             return Err(ValidationError::VertexRegionDefault);
         }
     }
-    if channel_type == CHANNEL_TYPE_CODEX && (is_add || !key.trim().is_empty()) {
-        let trimmed = key.trim();
+    if input.channel_type == CHANNEL_TYPE_CODEX && (input.is_add || !input.key.trim().is_empty()) {
+        let trimmed = input.key.trim();
         if !trimmed.starts_with('{') {
             return Err(ValidationError::CodexKeyFormat);
         }

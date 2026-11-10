@@ -559,16 +559,18 @@ pub async fn update_channel(
     }
     let id = input.channel.id.unwrap_or(0);
     let channel_type = input.channel.channel_type.unwrap_or(0);
-    if let Err(error) = channels::validation::validate_channel(
-        channel_type,
-        &input.channel.base_url,
-        input.channel.key.as_deref().unwrap_or(""),
-        input.channel.models.as_deref().unwrap_or(""),
-        input.channel.other.as_deref().unwrap_or(""),
-        &input.channel.setting,
-        input.channel.settings.as_deref().unwrap_or(""),
-        false,
-    ) {
+    if let Err(error) =
+        channels::validation::validate_channel(&channels::validation::ChannelValidationInput {
+            channel_type,
+            base_url: &input.channel.base_url,
+            key: input.channel.key.as_deref().unwrap_or(""),
+            models: input.channel.models.as_deref().unwrap_or(""),
+            other: input.channel.other.as_deref().unwrap_or(""),
+            setting: &input.channel.setting,
+            other_settings: input.channel.settings.as_deref().unwrap_or(""),
+            is_add: false,
+        })
+    {
         return validation_error(&headers, error);
     }
     let repository = ChannelRepository::new(db.clone());
@@ -815,16 +817,18 @@ pub async fn add_channel(
     let models = channel.models.clone().unwrap_or_default();
     let other = channel.other.clone().unwrap_or_default();
     let other_settings = channel.settings.clone().unwrap_or_default();
-    if let Err(error) = channels::validation::validate_channel(
-        channel_type,
-        &channel.base_url,
-        &key,
-        &models,
-        &other,
-        &channel.setting,
-        &other_settings,
-        true,
-    ) {
+    if let Err(error) =
+        channels::validation::validate_channel(&channels::validation::ChannelValidationInput {
+            channel_type,
+            base_url: &channel.base_url,
+            key: &key,
+            models: &models,
+            other: &other,
+            setting: &channel.setting,
+            other_settings: &other_settings,
+            is_add: true,
+        })
+    {
         return validation_error(&headers, error);
     }
     // Go 的 `mode` 分支；非法 mode 报“不支持的添加模式”。
