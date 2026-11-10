@@ -376,7 +376,7 @@ async fn run_contract(db: Database) {
     backend!(db, pool, {
         sqlx::query("UPDATE users SET setting = $1 WHERE id = 8")
             .bind(r#"{"billing_preference":"wallet_first"}"#)
-            .execute(pool)
+            .execute(&pool)
             .await
             .expect("update user setting");
     });
