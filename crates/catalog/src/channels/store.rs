@@ -468,9 +468,10 @@ pub struct NewChannel {
 
 /// 更新时写入的非零字段集合。
 ///
-/// Go `tx.Model(channel).Updates(channel)` 只写**非零值**字段：字符串字段
-/// 空串跳过、`*T` 指 nil 跳过（指向零值的指针是有效写入）、整型 0 跳过。
-/// `None` 即这里的“跳过”；指针字段 `Some("")` 是显式写入空串。
+/// Go `tx.Model(channel).Updates(channel)` 只写**非零值**字段：普通字符串
+/// 字段空串跳过（Go 零值）、`*T` 指 nil 跳过（指向零值的指针是有效写入）、
+/// 整型 0 跳过。`None` 即这里的“跳过”；只有**指针**列字段的 `Some("")`
+/// 是显式写入空串（普通字符串列的 `Some("")` 与 `None` 等价）。
 #[derive(Clone, Debug, Default)]
 pub struct ChannelPatch {
     pub channel_type: Option<i64>,
@@ -730,9 +731,11 @@ macro_rules! rebuild_abilities {
     }};
 }
 
-/// Go `tx.Model(channel).Updates(channel)`：只写非零字段；`channel_info`
-/// 仅在非零时写入（GORM 对零值结构体字段的省略）。没有可写字段时跳过
-/// UPDATE，直接进入重载（等价于 GORM 空更新集的空操作）。
+/// Go `tx.Model(channel).Updates(channel)`：只写非零字段。普通字符串字段
+/// （`key`/`name`/`other`/`models`/`group`/`other_info`/`settings`）的空串
+/// 与 `None` 同样跳过（Go 的零值语义）；**指针**列（`base_url`/`tag` 等）
+/// 的 `Some("")` 才是显式写入空串。`channel_info` 仅在非零时写入；没有
+/// 可写字段时跳过 UPDATE，直接进入重载（等价于 GORM 空更新集的空操作）。
 macro_rules! apply_patch {
     ($tx:expr, $id:expr, $patch:expr, $info:expr) => {{
         let patch: &ChannelPatch = $patch;
@@ -747,7 +750,7 @@ macro_rules! apply_patch {
             query.push("\"type\" = ");
             query.push_bind(value);
         }
-        if let Some(value) = patch.key.clone() {
+        if let Some(value) = patch.key.clone().filter(|value: &String| !value.is_empty()) {
             if pending {
                 query.push(", ");
             }
@@ -779,7 +782,11 @@ macro_rules! apply_patch {
             query.push("base_url = ");
             query.push_bind(value);
         }
-        if let Some(value) = patch.name.clone() {
+        if let Some(value) = patch
+            .name
+            .clone()
+            .filter(|value: &String| !value.is_empty())
+        {
             if pending {
                 query.push(", ");
             }
@@ -787,7 +794,11 @@ macro_rules! apply_patch {
             query.push("name = ");
             query.push_bind(value);
         }
-        if let Some(value) = patch.other.clone() {
+        if let Some(value) = patch
+            .other
+            .clone()
+            .filter(|value: &String| !value.is_empty())
+        {
             if pending {
                 query.push(", ");
             }
@@ -795,7 +806,11 @@ macro_rules! apply_patch {
             query.push("other = ");
             query.push_bind(value);
         }
-        if let Some(value) = patch.models.clone() {
+        if let Some(value) = patch
+            .models
+            .clone()
+            .filter(|value: &String| !value.is_empty())
+        {
             if pending {
                 query.push(", ");
             }
@@ -803,7 +818,11 @@ macro_rules! apply_patch {
             query.push("models = ");
             query.push_bind(value);
         }
-        if let Some(value) = patch.group.clone() {
+        if let Some(value) = patch
+            .group
+            .clone()
+            .filter(|value: &String| !value.is_empty())
+        {
             if pending {
                 query.push(", ");
             }
@@ -835,7 +854,11 @@ macro_rules! apply_patch {
             query.push("auto_ban = ");
             query.push_bind(value);
         }
-        if let Some(value) = patch.other_info.clone() {
+        if let Some(value) = patch
+            .other_info
+            .clone()
+            .filter(|value: &String| !value.is_empty())
+        {
             if pending {
                 query.push(", ");
             }
@@ -883,7 +906,11 @@ macro_rules! apply_patch {
             query.push("remark = ");
             query.push_bind(value);
         }
-        if let Some(value) = patch.settings.clone() {
+        if let Some(value) = patch
+            .settings
+            .clone()
+            .filter(|value: &String| !value.is_empty())
+        {
             if pending {
                 query.push(", ");
             }
