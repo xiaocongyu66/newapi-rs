@@ -69,8 +69,9 @@ impl EmailSettings {
     }
 
     /// `settings.go:471-484`：按行拆分，去掉首尾空白后丢弃空行。
-    /// Go 对编译失败的行记 SysError 后跳过；Rust 侧无正则引擎（Cargo.lock
-    /// 未锁定 `regex`），语法校验同样不在此进行，原样保留每条规则文本。
+    /// Go 在应用选项时即编译每条规则（失败记 SysError 后跳过）；本快照
+    /// 只保留规则文本，编译与跳过处置推迟到匹配时（见 apps/server 的
+    /// `email_format_rejected`）。
     fn split_regex_rules(value: &str) -> Vec<String> {
         value
             .lines()

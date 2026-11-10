@@ -102,7 +102,9 @@ pub async fn send_email_verification(
         }))
         .into_response();
     }
-    if !settings.email_format_regex_rules.is_empty() && !email_format_rejected(&settings, &email) {
+    // Go `len(EmailFormatRegexCompiled) > 0` 的门禁与未命中拒绝都在
+    // `email_format_rejected` 内复刻（编译失败与空规则等同未配置）。
+    if email_format_rejected(&settings, &email) {
         return rejected(translate(&headers, "user.email_format_rejected"));
     }
     let Some(repository) = state.db().map(RegistrationRepository::new) else {
@@ -458,17 +460,33 @@ fn label_ok(label: &str) -> bool {
     }
 }
 
-/// Go 的 `EmailFormatRegexCompiled` 匹配（verify_email.go:64-76）：
-/// 任一规则命中即放行。Cargo.lock 未锁定 `regex`，本端口无正则引擎；
-/// 配置了规则时按“未命中”处理会错误拒绝全部注册，因此保守放行并
-/// 记警告，与 Go 未配置该选项的默认行为一致。正则引擎随 P7
-/// （`integrations.mail` 或依赖锁刷新）落地后补齐。
-fn email_format_rejected(_settings: &EmailSettings, _email: &str) -> bool {
-    tracing::warn!(
-        event = "email_format_regex_unsupported",
-        "EmailFormatRegex is configured but no regex engine is linked; failing open"
-    );
-    false
+/// Go 的 `EmailFormatRegexCompiled` 匹配（verify_email.go:64-76）：任一
+/// 规则命中即放行，全部不命中则拒绝。规则文本由 `EmailSettings` 按行承载，
+/// 此处逐条编译匹配。编译失败的规则对照 Go 应用选项时的处置
+/// （settings.go:480-484）记错误日志后跳过，全部规则都编译失败时等同
+/// 于未配置（放行）。Go 在应用选项时一次性编译；本端口逐请求装载设置，
+/// 编译随之逐请求进行，规则数量少、开销可忽略。
+fn email_format_rejected(settings: &EmailSettings, email: &str) -> bool {
+    let mut has_valid_rule = false;
+    let mut matched = false;
+    for rule in &settings.email_format_regex_rules {
+        match regex::Regex::new(rule) {
+            Ok(rule_regex) => {
+                has_valid_rule = true;
+                if rule_regex.is_match(email) {
+                    matched = true;
+                    break;
+                }
+            }
+            Err(error) => tracing::error!(
+                event = "email_format_regex_line_disabled",
+                rule = rule,
+                error = %error,
+                "invalid EmailFormatRegex line disabled"
+            ),
+        }
+    }
+    has_valid_rule && !matched
 }
 
 /// 装载邮箱限制选项；数据库不可用或读取失败时返回 503 状态，由
@@ -601,5 +619,50 @@ mod tests {
         }))
         .unwrap();
         assert!(body.contains("无效的邮箱地址"));
+    }
+
+    fn regex_settings(rules: &[&str]) -> EmailSettings {
+        EmailSettings {
+            email_format_regex_rules: rules.iter().map(|rule| (*rule).to_owned()).collect(),
+            ..EmailSettings::default()
+        }
+    }
+
+    #[test]
+    fn email_format_regex_allows_a_matching_rule() {
+        // Go verify_email_test.go:51 的两条规则：命中其一即放行。
+        let settings = regex_settings(&["^[0-9]+@qq\\.com$", "^[a-z]+@company\\.com$"]);
+        assert!(!email_format_rejected(&settings, "12345@qq.com"));
+        assert!(!email_format_rejected(&settings, "alice@company.com"));
+    }
+
+    #[test]
+    fn email_format_regex_rejects_when_no_rule_matches() {
+        let settings = regex_settings(&["^[0-9]+@qq\\.com$", "^[a-z]+@company\\.com$"]);
+        assert!(email_format_rejected(&settings, "alice@gmail.com"));
+        assert!(email_format_rejected(&settings, "12345@company.com"));
+    }
+
+    #[test]
+    fn email_format_regex_allows_when_unconfigured() {
+        // Go：EmailFormatRegexCompiled 为空时门禁不启用。
+        let settings = regex_settings(&[]);
+        assert!(!email_format_rejected(&settings, "alice@gmail.com"));
+    }
+
+    #[test]
+    fn email_format_regex_skips_invalid_rules_like_go_syserror() {
+        // Go settings.go:480-484：编译失败的行记 SysError 后跳过，
+        // 剩余有效规则继续参与匹配。
+        let settings = regex_settings(&["(", "@example\\.com$"]);
+        assert!(!email_format_rejected(&settings, "user@example.com"));
+        assert!(email_format_rejected(&settings, "user@other.com"));
+    }
+
+    #[test]
+    fn email_format_regex_allows_when_every_rule_is_invalid() {
+        // Go：全部规则无效时 EmailFormatRegexCompiled 为空，门禁不启用。
+        let settings = regex_settings(&["(", "["]);
+        assert!(!email_format_rejected(&settings, "user@example.com"));
     }
 }
