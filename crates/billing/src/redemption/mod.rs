@@ -361,7 +361,7 @@ impl RedemptionRepository {
         let where_sql = where_clause(&conditions);
         let count_sql = format!("SELECT COUNT(*) FROM redemptions{where_sql}");
         let list_sql = format!(
-            "{}{where_sql} ORDER BY id DESC LIMIT ${} OFFSET ${}",
+            "{} FROM redemptions{where_sql} ORDER BY id DESC LIMIT ${} OFFSET ${}",
             redemption_select!(""),
             binds.len() + 1,
             binds.len() + 2
@@ -600,8 +600,9 @@ mod tests {
         assert_eq!(one, " WHERE deleted_at IS NULL AND status = 2");
     }
 
-    /// 直接在仓储层复现 search 的 SQL 装配与执行（最小夹具），
-    /// 让 sqlx 的错误文本在失败输出里可见。
+    /// 直接在仓储层执行一次 search 的装配 SQL（最小夹具）：回归守卫，
+    /// 确保动态拼出的 list 语句保留 `FROM redemptions`（漏掉 FROM 会让
+    /// 两条后端都报 `no such column: id`）。
     const SQLITE_REDEMPTIONS_DDL: &str = r#"CREATE TABLE redemptions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
