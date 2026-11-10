@@ -16,7 +16,7 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::Request,
-    http::{HeaderMap, Method, StatusCode, header},
+    http::{Method, StatusCode, header},
     middleware,
     response::Response,
     routing::{delete, get, post, put},
@@ -344,9 +344,9 @@ async fn seed_channel(
     });
 }
 
-async fn channel_rows(db: &Database) -> Vec<(i64, String, String)> {
+async fn channel_rows(db: &Database) -> Vec<(i64, String, i64)> {
     backend!(db, pool, {
-        sqlx::query(
+        sqlx::query_as::<_, (i64, String, i64)>(
             r#"SELECT CAST(id AS BIGINT), name, CAST(status AS BIGINT) FROM channels
                ORDER BY id"#,
         )

@@ -23,7 +23,6 @@
 //! 不在本切片；审计按 Go 写入 `logs`（`channel.*` 动作）。
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 
 use axum::{
     Json,
