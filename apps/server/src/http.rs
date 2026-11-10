@@ -603,6 +603,54 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::admin_auth,
             )),
     );
+    // `GET /api/models`：Go `apiRouter.GET("/models", UserAuth(),
+    // DashboardListModels)`（`register_api.go:32`）——静态目录，挂在
+    // UserAuth 之下，与下面的 admin 组互不重叠（方法也不同）。
+    let dashboard_models_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/models", get(crate::models_http::dashboard_models))
+            .route_layer(middleware::from_fn_with_state(
+                dashboard_models_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // `/api/models*` 管理端九条（Go `modelsRoute`，`register_api.go:450-462`）：
+    // 组级 `AdminAuth()`，无路由级 RequirePermission；全部业务结果 HTTP 200
+    // + 信封（401/403 只来自鉴权链）。Go 的 `POST/PUT("/api/models/")` 带
+    // 尾斜杠，gin 的 trailing-slash 重定向让无斜杠形式也能用；axum 不做归
+    // 一化，前端（`features/models/api.ts`）只用带斜杠形式，这里只注册
+    // 带斜杠版本。
+    let models_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/models/",
+                post(crate::models_http::create_model).put(crate::models_http::update_model),
+            )
+            .route("/api/models/meta", get(crate::models_http::list_models))
+            .route("/api/models/search", get(crate::models_http::search_models))
+            .route(
+                "/api/models/missing",
+                get(crate::models_http::missing_models),
+            )
+            .route(
+                "/api/models/sync_upstream",
+                post(crate::models_http::sync_upstream),
+            )
+            .route(
+                "/api/models/sync_upstream/preview",
+                get(crate::models_http::sync_upstream_preview),
+            )
+            .route(
+                "/api/models/{id}",
+                get(crate::models_http::get_model).delete(crate::models_http::delete_model),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                models_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
     // `POST /api/user/aff_transfer` 同组，但 Go 在它前面多挂
     // `UserCriticalRateLimit("aff-transfer")` 与

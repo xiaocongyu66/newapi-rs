@@ -198,6 +198,9 @@ model.name_exists: "Model name already exists"
 model.id_missing: "Model ID is missing"
 model.get_list_failed: "Failed to get model list, please try again later"
 model.get_failed: "Failed to get upstream models"
+model.not_exists: "Model does not exist"
+model.id_format_error: "Invalid model ID format"
+model.save_failed: "Failed to save model, please try again later"
 model.reset_success: "Model ratio reset successful"
 
 # Vendor messages

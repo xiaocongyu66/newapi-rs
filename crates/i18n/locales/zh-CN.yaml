@@ -199,6 +199,9 @@ model.name_exists: "模型名称已存在"
 model.id_missing: "缺少模型 ID"
 model.get_list_failed: "获取模型列表失败，请稍后重试"
 model.get_failed: "获取上游模型失败"
+model.not_exists: "模型不存在"
+model.id_format_error: "模型ID格式错误"
+model.save_failed: "保存模型失败，请稍后重试"
 model.reset_success: "重置模型倍率成功"
 
 # Vendor messages

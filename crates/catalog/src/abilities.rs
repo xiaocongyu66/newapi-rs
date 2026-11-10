@@ -41,6 +41,33 @@ pub async fn group_enabled_models(db: &Database, group: &str) -> Result<Vec<Stri
     }
 }
 
+/// Go `GetEnabledModels`（`store_ability.go:49`）：全体启用模型的去重列表，
+/// 不分分组。`/api/models/missing` 与 sync_upstream 以此为“渠道已引用”
+/// 模型的全集。顺序约定同 [`group_enabled_models`]：加 `ORDER BY model`
+/// 让输出确定（Go 依赖数据库扫描顺序，不限稳定）。
+pub async fn enabled_models(db: &Database) -> Result<Vec<String>, sqlx::Error> {
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::query_scalar(
+                "SELECT DISTINCT model FROM abilities \
+                 WHERE enabled = ? ORDER BY model",
+            )
+            .bind(true)
+            .fetch_all(pool)
+            .await
+        }
+        Database::Postgres(pool) => {
+            sqlx::query_scalar(
+                "SELECT DISTINCT model FROM abilities \
+                 WHERE enabled = $1 ORDER BY model",
+            )
+            .bind(true)
+            .fetch_all(pool)
+            .await
+        }
+    }
+}
+
 /// Go `GetGroupsEnabledModels`：按分组列表顺序合并各组启用模型，保留首次
 /// 出现的模型（Go `seen` map 语义）。空列表产生空列表。
 pub async fn groups_enabled_models(
