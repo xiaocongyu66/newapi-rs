@@ -19,7 +19,7 @@ use axum::{
     http::{Method, StatusCode, header},
     middleware,
     response::Response,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
 };
 use newapi_config::SessionCookieSettings;
 use newapi_identity::{
