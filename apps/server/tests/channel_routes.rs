@@ -75,8 +75,13 @@ const SESSIONS: &str = r#"CREATE TABLE user_sessions (
     revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason VARCHAR(64)
 )"#;
 
-const CASBIN: &str = "CREATE TABLE casbin_rule (
+const CASBIN_SQLITE: &str = "CREATE TABLE casbin_rule (
     id INTEGER PRIMARY KEY, ptype TEXT, v0 TEXT, v1 TEXT, v2 TEXT, v3 TEXT,
+    v4 TEXT, v5 TEXT
+)";
+
+const CASBIN_POSTGRES: &str = "CREATE TABLE casbin_rule (
+    id BIGSERIAL PRIMARY KEY, ptype TEXT, v0 TEXT, v1 TEXT, v2 TEXT, v3 TEXT,
     v4 TEXT, v5 TEXT
 )";
 
@@ -225,7 +230,7 @@ async fn create_schema(db: &Database) {
             for statement in [
                 USERS_SQLITE,
                 SESSIONS,
-                CASBIN,
+                CASBIN_SQLITE,
                 LOGS_SQLITE,
                 CHANNELS_SQLITE,
                 ABILITIES_SQLITE,
@@ -237,7 +242,7 @@ async fn create_schema(db: &Database) {
             for statement in [
                 USERS_POSTGRES,
                 SESSIONS,
-                CASBIN,
+                CASBIN_POSTGRES,
                 LOGS_POSTGRES,
                 CHANNELS_POSTGRES,
                 ABILITIES_POSTGRES,
@@ -290,6 +295,33 @@ async fn seed_session(db: &Database, sid: &str, user_id: i64, at: i64) {
         .await
         .expect("seed session");
     });
+}
+
+/// Go `seedDefaultPolicies`（`identity/policy/seed.go:44-61`，由主节点
+/// `policy.Init` 在 `enforcer.go:33-61` 调用）：为内置 admin 角色写入其
+/// 基线允许权限——registry 中 `DefaultRoles` 含 `admin` 的动作，即 channel
+/// 的 read/operate/write（`identity/policy/resources_channel.go:30-43`；
+/// sensitive_write/secret_view 无默认角色）。Rust 权限端口按 `casbin_rule`
+/// 表求值、不内置默认值（`crates/identity/src/policy.rs`），夹具必须复现
+/// 这套 post-Init 起始行，否则 admin 被 RequirePermission 拦在 403。
+async fn seed_admin_baseline(db: &Database) {
+    for (resource, action) in [
+        ("channel", "read"),
+        ("channel", "operate"),
+        ("channel", "write"),
+    ] {
+        backend!(db, pool, {
+            sqlx::query(
+                "INSERT INTO casbin_rule (ptype,v0,v1,v2,v3) \
+                 VALUES ('p','role:admin',$1,$2,'allow')",
+            )
+            .bind(resource)
+            .bind(action)
+            .execute(pool)
+            .await
+            .expect("seed admin baseline");
+        });
+    }
 }
 
 /// 直接种入渠道行（不经创建端点，便于构造失败/历史状态）。
@@ -480,7 +512,7 @@ async fn run_contract(db: Database) {
     seed_session(&db, "sid-admin", 1, at).await;
     seed_session(&db, "sid-root", 2, at).await;
     seed_session(&db, "sid-common", 3, at).await;
-    bump_sequences(&db).await;
+    seed_admin_baseline(&db).await;
     let app = state(&db);
     let admin = format!("Bearer {}", jwt(1, "sid-admin", at));
     let root = format!("Bearer {}", jwt(2, "sid-root", at));
@@ -544,6 +576,8 @@ async fn run_contract(db: Database) {
         },
     )
     .await;
+    bump_sequences(&db).await;
+
     let body = assert_success(
         send(
             &app,
@@ -765,7 +799,109 @@ async fn run_contract(db: Database) {
     )
     .await;
 
+    // ---- 更新 ------------------------------------------------------
+    // 非敏感字段（name）admin 可改；响应是重载行且 key 抹空。
+    let body = assert_success(
+        send(
+            &app,
+            Method::PUT,
+            "/api/channel/",
+            Some(&admin),
+            Some(&json!({"id": 1, "name": "alpha-renamed", "models": "m1,m3"})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["data"]["name"], json!("alpha-renamed"));
+    assert_eq!(body["data"]["models"], json!("m1,m3"));
+    assert_eq!(body["data"]["key"], json!(""));
+    let abilities = ability_rows(&db, 1).await;
+    assert_eq!(
+        abilities,
+        vec![
+            ("default".to_owned(), "m1".to_owned(), true),
+            ("default".to_owned(), "m3".to_owned(), true),
+            ("vip".to_owned(), "m1".to_owned(), true),
+            ("vip".to_owned(), "m3".to_owned(), true),
+        ]
+    );
+
+    // status 字段禁止走更新端点（Go 的 MsgInvalidParams）。
+    assert_business_error(
+        send(
+            &app,
+            Method::PUT,
+            "/api/channel/",
+            Some(&admin),
+            Some(&json!({"id": 1, "status": 1})),
+        )
+        .await,
+        "common.invalid_params",
+    )
+    .await;
+
+    // 敏感字段（type）对 ChannelWrite-only 的 admin 是 handler 内拒绝：
+    // HTTP 200 + success:false（不是 403）。
+    let body = assert_business_error(
+        send(
+            &app,
+            Method::PUT,
+            "/api/channel/",
+            Some(&admin),
+            Some(&json!({"id": 1, "type": 41})),
+        )
+        .await,
+        "auth.insufficient_privilege",
+    )
+    .await;
+    assert!(body.get("code").is_none() || body["code"].is_null());
+
+    // 授予 admin 敏感写权限后同请求放行。
+    backend!(&db, pool, {
+        sqlx::query("INSERT INTO casbin_rule (ptype,v0,v1,v2,v3) VALUES ('p','user:1','channel','sensitive_write','allow')")
+            .execute(pool)
+            .await
+            .expect("grant sensitive_write");
+    });
+    let body = assert_success(
+        send(
+            &app,
+            Method::PUT,
+            "/api/channel/",
+            Some(&admin),
+            Some(&json!({"id": 1, "type": 41})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["data"]["type"], json!(41));
+    // 更新审计记录 changed_fields。
+    let audits = manage_audit_contents(&db).await;
+    assert!(
+        audits
+            .iter()
+            .any(|content| content.contains("Updated channel alpha-renamed"))
+    );
+
+    // 更新不存在的渠道。
+    assert_business_error(
+        send(
+            &app,
+            Method::PUT,
+            "/api/channel/",
+            Some(&admin),
+            Some(&json!({"id": 999, "name": "x"})),
+        )
+        .await,
+        "channel.not_exists",
+    )
+    .await;
+
     // ---- 创建 ------------------------------------------------------
+    // POST / 的路由级权限是 ChannelSensitiveWrite（register_channels.go:64），
+    // admin 基线不含它（resources_channel.go:43-53 无默认角色），因此创建
+    // 排在上一节授予 user:1 敏感写之后：这正是 Go 部署里“被显式授予
+    // 敏感写的管理员”建渠道的场景，而非 superuser 短路。
     let body = assert_success(
         send(
             &app,
@@ -931,104 +1067,6 @@ async fn run_contract(db: Database) {
     assert_eq!(multi["channel_info"]["multi_key_size"], json!(2));
     assert_eq!(multi["channel_info"]["multi_key_mode"], json!("polling"));
 
-    // ---- 更新 ------------------------------------------------------
-    // 非敏感字段（name）admin 可改；响应是重载行且 key 抹空。
-    let body = assert_success(
-        send(
-            &app,
-            Method::PUT,
-            "/api/channel/",
-            Some(&admin),
-            Some(&json!({"id": 1, "name": "alpha-renamed", "models": "m1,m3"})),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(body["data"]["name"], json!("alpha-renamed"));
-    assert_eq!(body["data"]["models"], json!("m1,m3"));
-    assert_eq!(body["data"]["key"], json!(""));
-    let abilities = ability_rows(&db, 1).await;
-    assert_eq!(
-        abilities,
-        vec![
-            ("default".to_owned(), "m1".to_owned(), true),
-            ("default".to_owned(), "m3".to_owned(), true),
-            ("vip".to_owned(), "m1".to_owned(), true),
-            ("vip".to_owned(), "m3".to_owned(), true),
-        ]
-    );
-
-    // status 字段禁止走更新端点（Go 的 MsgInvalidParams）。
-    assert_business_error(
-        send(
-            &app,
-            Method::PUT,
-            "/api/channel/",
-            Some(&admin),
-            Some(&json!({"id": 1, "status": 1})),
-        )
-        .await,
-        "common.invalid_params",
-    )
-    .await;
-
-    // 敏感字段（type）对 ChannelWrite-only 的 admin 是 handler 内拒绝：
-    // HTTP 200 + success:false（不是 403）。
-    let body = assert_business_error(
-        send(
-            &app,
-            Method::PUT,
-            "/api/channel/",
-            Some(&admin),
-            Some(&json!({"id": 1, "type": 41})),
-        )
-        .await,
-        "auth.insufficient_privilege",
-    )
-    .await;
-    assert!(body.get("code").is_none() || body["code"].is_null());
-
-    // 授予 admin 敏感写权限后同请求放行。
-    backend!(&db, pool, {
-        sqlx::query("INSERT INTO casbin_rule (ptype,v0,v1,v2,v3) VALUES ('p','user:1','channel','sensitive_write','allow')")
-            .execute(pool)
-            .await
-            .expect("grant sensitive_write");
-    });
-    let body = assert_success(
-        send(
-            &app,
-            Method::PUT,
-            "/api/channel/",
-            Some(&admin),
-            Some(&json!({"id": 1, "type": 41})),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(body["data"]["type"], json!(41));
-    // 更新审计记录 changed_fields。
-    let audits = manage_audit_contents(&db).await;
-    assert!(
-        audits
-            .iter()
-            .any(|content| content.contains("Updated channel alpha-renamed"))
-    );
-
-    // 更新不存在的渠道。
-    assert_business_error(
-        send(
-            &app,
-            Method::PUT,
-            "/api/channel/",
-            Some(&admin),
-            Some(&json!({"id": 999, "name": "x"})),
-        )
-        .await,
-        "channel.not_exists",
-    )
-    .await;
-
     // ---- 删除 ------------------------------------------------------
     assert_success(send(&app, Method::DELETE, "/api/channel/4", Some(&admin), None).await).await;
     let rows = channel_rows(&db).await;
@@ -1062,6 +1100,7 @@ async fn run_contract(db: Database) {
     assert!(!rows.iter().any(|(_, _, status)| *status == 3));
 
     // ---- 批量删除 ----------------------------------------------------
+    // 目标必须是仍存在的渠道：gamma（id 3）已被上一节“清理已禁用”删除。
     let before = channel_rows(&db).await.len();
     let body = assert_success(
         send(
@@ -1069,7 +1108,7 @@ async fn run_contract(db: Database) {
             Method::POST,
             "/api/channel/batch",
             Some(&admin),
-            Some(&json!({"ids": [3]})),
+            Some(&json!({"ids": [5]})),
         )
         .await,
     )
