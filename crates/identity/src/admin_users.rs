@@ -236,6 +236,9 @@ WHERE (id = $2 OR username LIKE $1 OR email LIKE $1 OR display_name LIKE $1)
 /// Go `GetUserById(id, false)` 的宽投影版：GORM 默认作用域排除软删除行。
 const BY_ID: &str = " WHERE id = $1 AND deleted_at IS NULL LIMIT 1";
 
+/// Go `CheckUserExistOrDeleted`：用户名存在性（含软删除行，Unscoped）。
+const USERNAME_EXISTS_UNSCOPED: &str = "SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)";
+
 /// Go `ManageUser` 的目标读取（`manage_users.go:1061`）：
 /// `dbx.DB.Unscoped().Where(&user).First(&user)`。GORM 的 struct 条件只取
 /// 非零字段，因此 `id == 0` 退化为无条件 `First`——按主键升序取第一行
@@ -627,6 +630,16 @@ impl AdminUserRepository {
                 .transpose()?
         });
         Ok(target)
+    }
+
+    /// Go `CheckUserExistOrDeleted`（`store_users.go`）：Unscoped 用户名存在性。
+    pub async fn username_exists(&self, username: &str) -> Result<bool, sqlx::Error> {
+        backend!(&self.db, pool, {
+            sqlx::query_scalar(USERNAME_EXISTS_UNSCOPED)
+                .bind(username)
+                .fetch_one(pool)
+                .await
+        })
     }
 
     /// Go `ManageUser` 的目标读取：Unscoped；`id == 0` 时按主键取第一行

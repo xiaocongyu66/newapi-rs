@@ -72,7 +72,7 @@ const DISPLAY_TWO_IN_QUOTA: i64 = 1_000_000;
 const LOG_QUOTA_500: &str = "＄0.001000 额度";
 
 const USERS_SQLITE: &str = r#"CREATE TABLE users (
-    id INTEGER PRIMARY KEY, username TEXT, display_name TEXT,
+    id INTEGER PRIMARY KEY, username TEXT UNIQUE, display_name TEXT,
     role INTEGER, status INTEGER, email TEXT, github_id TEXT, discord_id TEXT,
     oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, "group" TEXT,
     quota INTEGER, used_quota INTEGER, request_count INTEGER, aff_code TEXT,
@@ -83,7 +83,7 @@ const USERS_SQLITE: &str = r#"CREATE TABLE users (
 )"#;
 
 const USERS_POSTGRES: &str = r#"CREATE TABLE users (
-    id BIGSERIAL PRIMARY KEY, username TEXT, display_name TEXT,
+    id BIGSERIAL PRIMARY KEY, username TEXT UNIQUE, display_name TEXT,
     role BIGINT, status BIGINT, email TEXT, github_id TEXT, discord_id TEXT,
     oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, "group" TEXT,
     quota BIGINT, used_quota BIGINT, request_count BIGINT, aff_code TEXT,
@@ -1009,7 +1009,7 @@ async fn run_contract(db: Database) {
     // 口令已散列（非空、非原文）。
     let stored_hash = user_column_text(&db, newbie_id, "password").await;
     assert!(!stored_hash.is_empty() && stored_hash != "password123");
-    // 用户名唯一约束冲突 → 固定数据库错误（Go 原文回显 SQL 错误）。
+    // 用户名已存在（Go `CheckUserExistOrDeleted` → `user.exists`）。
     assert_business_message(
         send_json(
             &app,
@@ -1019,7 +1019,7 @@ async fn run_contract(db: Database) {
             &json!({"username": "newbie", "password": "password456"}),
         )
         .await,
-        &translated("common.database_error"),
+        &translated("user.exists"),
     )
     .await;
     // root 创建 admin 并写覆盖行：sensitive_write=true（基线假）→ allow，

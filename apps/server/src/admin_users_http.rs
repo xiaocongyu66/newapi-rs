@@ -81,6 +81,7 @@ const MSG_INVALID_PARAMS: &str = "common.invalid_params";
 const MSG_DATABASE_ERROR: &str = "common.database_error";
 const MSG_INPUT_INVALID: &str = "user.input_invalid";
 const MSG_NOT_EXISTS: &str = "user.not_exists";
+const MSG_EXISTS: &str = "user.exists";
 const MSG_NO_PERMISSION_SAME_LEVEL: &str = "user.no_permission_same_level";
 const MSG_NO_PERMISSION_HIGHER_LEVEL: &str = "user.no_permission_higher_level";
 const MSG_CANNOT_CREATE_HIGHER_LEVEL: &str = "user.cannot_create_higher_level";
@@ -736,6 +737,13 @@ pub async fn create_user(
     if payload.role >= admin_user.0.role {
         return api_error(&headers, MSG_CANNOT_CREATE_HIGHER_LEVEL);
     }
+    // Go：`CheckUserExistOrDeleted`（含软删除行）在插入前拦截重名。
+    let repository = AdminUserRepository::new(db.clone());
+    match repository.username_exists(&username).await {
+        Ok(true) => return api_error(&headers, MSG_EXISTS),
+        Ok(false) => {}
+        Err(error) => return database_error(&headers, &error),
+    }
     let password_hash = match hash_password(payload.password.as_bytes()) {
         Ok(hash) => hash.expose_secret().to_owned(),
         Err(_) => return api_error(&headers, MSG_DATABASE_ERROR),
@@ -754,7 +762,7 @@ pub async fn create_user(
         operator_role: admin_user.0.role,
         permissions: payload.admin_permissions.as_ref(),
     };
-    let user_id = match AdminUserRepository::new(db.clone()).create(&input).await {
+    let user_id = match repository.create(&input).await {
         Ok(user_id) => user_id,
         Err(AdminPermissionError::OnlyRootCanUpdate) => {
             return api_error_literal(MSG_ONLY_ROOT_PERMISSIONS);
