@@ -264,6 +264,65 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // 网关回调：Go `userRoute` 直下、**匿名可打**（`register_api.go:138-143`），
+    // POST 带匿名体上限，GET 无体。响应体恒为 "success"/"fail"。
+    let notify_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/epay/notify",
+                get(crate::gateway_http::epay_notify).post(crate::gateway_http::epay_notify),
+            )
+            .route(
+                "/api/user/vmq/notify",
+                get(crate::gateway_http::vmq_notify).post(crate::gateway_http::vmq_notify),
+            )
+            .route(
+                "/api/user/codepay/notify",
+                get(crate::gateway_http::codepay_notify).post(crate::gateway_http::codepay_notify),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                notify_state,
+                crate::gateway_http::notify_body_limit,
+            )),
+    );
+    // 支付发起与兑换：Go `selfRoute` 组内 `UserAuth → CriticalRateLimit`
+    // （`register_api.go:167,170,177,178`）。
+    let pay_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/user/pay", post(crate::gateway_http::request_epay))
+            .route(
+                "/api/user/vmq/pay",
+                post(crate::gateway_http::request_vmq_pay),
+            )
+            .route(
+                "/api/user/codepay/pay",
+                post(crate::gateway_http::request_codepay_pay),
+            )
+            .route("/api/user/topup", post(crate::gateway_http::topup_redeem))
+            .route_layer(middleware::from_fn_with_state(
+                pay_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                pay_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // 管理员补单：Go `adminRoute` 组内仅 `AdminAuth`（`register_api.go:209`）。
+    let complete_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/topup/complete",
+                post(crate::gateway_http::admin_topup_complete),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                complete_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `/api/user/2fa/*`：Go `selfRoute` 组内（`UserAuth`）；status 无
     // DisableCache，四个 POST 由 handler 自行写缓存头。
     let twofa_state = state.clone();

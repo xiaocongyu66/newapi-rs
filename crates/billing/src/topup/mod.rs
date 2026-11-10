@@ -24,8 +24,17 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod gateway;
 mod quote;
 mod store;
+
+pub use gateway::{
+    PROVIDER_CODEPAY, PROVIDER_EPAY, PROVIDER_STRIPE, PROVIDER_VMQ, RechargeError, RechargeOutcome,
+    RechargeParams, RechargeRecord, RedeemFailed, STATUS_EXPIRED, STATUS_FAILED, STATUS_PENDING,
+    STATUS_SUCCESS, codepay_sign, constant_time_eq, epay_sign, gateway_pay_type_code, insert_topup,
+    manual_complete_top_up, md5_hex, now_seconds, random_string, recharge_top_up, record_topup_log,
+    redeem, round2_cents, vmq_create_sign, vmq_notify_sign,
+};
 
 pub use quote::{
     CreditedQuotaRejection, TopUpQuotaRejection, amount_discount, check_capacity,
