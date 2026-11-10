@@ -10,4 +10,5 @@ mod go_options;
 pub mod qq_bot;
 pub mod quota_display;
 pub mod redemption;
+pub mod subscription;
 pub mod topup;
