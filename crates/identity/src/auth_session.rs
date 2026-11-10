@@ -10,7 +10,7 @@ use crate::sessions::{
     CreateSession, NoCache, RefreshHash, RefreshOutcome, RevocationFence, SessionError,
     SessionLimits, SessionRecord, SessionRepository,
 };
-use crate::{AuthIdentity, SecretString};
+use crate::{AuthError, AuthIdentity, SecretString};
 
 /// 只包含公开会话视图所需字段，不含 refresh 材料。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +49,10 @@ pub enum SessionAuthError {
     /// The credential was structurally valid or previously issued, but is no longer
     /// authorized for authentication. This deliberately carries no session details.
     Unauthorized,
+    /// 访问令牌签名有效但已过期（Go `authtoken.ErrAuthTokenExpired`，
+    /// `authtoken.go:207-208`）。非法令牌仍是 [`SessionAuthError::Unauthorized`]，
+    /// 调用方据此给出 AUTH_TOKEN_EXPIRED 而非 AUTH_UNAUTHORIZED。
+    TokenExpired,
     RefreshInvalid,
     SessionMismatch,
     SessionRevoked,
@@ -319,9 +323,14 @@ impl<F: RevocationFence> SessionAuth<F> {
         raw_access: &str,
         now: i64,
     ) -> Result<AuthIdentity, SessionAuthError> {
-        self.keys
-            .parse_access(raw_access, now)
-            .map_err(|_| SessionAuthError::Unauthorized)
+        self.keys.parse_access(raw_access, now).map_err(|error| {
+            // Go `parseAuthClaims`（authtoken.go:206-210）把 jwt 过期单列为
+            // ErrAuthTokenExpired，其余解析失败包装 ErrAuthTokenInvalid。
+            match error {
+                AuthError::Expired => SessionAuthError::TokenExpired,
+                _ => SessionAuthError::Unauthorized,
+            }
+        })
     }
 
     /// 按已验签访问令牌绑定的用户与 SID 注销，不依赖会话仍活跃。
@@ -373,6 +382,35 @@ impl<F: RevocationFence> SessionAuth<F> {
                 "user_revoked_others",
                 now,
             )
+            .await
+        {
+            Ok(report) => {
+                self.observe_revoke(&report);
+                Ok(report.revoked_count)
+            }
+            Err(failure) => {
+                self.observe_revoke(&failure.committed);
+                Err(SessionAuthError::BatchFailed {
+                    committed_count: failure.committed.revoked_count,
+                    error: failure.error,
+                })
+            }
+        }
+    }
+
+    /// Go `RevokeAllUserSessions`（`session_store.go:709-711`）：不排除任何 SID，
+    /// 把该用户的全部活跃会话置 revoked 并落库 RevokedAt/RevokedReason。管理员
+    /// 安全重置（passkey/2FA）在递增 auth_version 之后调用，使会话列表立即
+    /// 不再显示这些行，而不只是让旧令牌在下次校验时被拒。
+    pub async fn revoke_all(
+        &self,
+        user_id: i64,
+        reason: &str,
+        now: i64,
+    ) -> Result<u64, SessionAuthError> {
+        match self
+            .repository
+            .revoke_all(&self.fence, user_id, reason, now)
             .await
         {
             Ok(report) => {

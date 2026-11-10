@@ -79,6 +79,9 @@ pub fn session_error_code(error: &SessionAuthError) -> (u16, &'static str) {
         SessionAuthError::Unauthorized | SessionAuthError::RefreshInvalid => {
             (401, "AUTH_UNAUTHORIZED")
         }
+        // 登录路径不解析访问令牌，该变体不可达；单列以保持与
+        // writeDashboardAuthError（authenticate.go:206-207）一致的固定码。
+        SessionAuthError::TokenExpired => (401, "AUTH_TOKEN_EXPIRED"),
         SessionAuthError::SessionRevoked => (401, "AUTH_SESSION_REVOKED"),
         SessionAuthError::SessionMismatch => (409, "AUTH_SESSION_MISMATCH"),
         SessionAuthError::Race => (409, "AUTH_REFRESH_RACE"),

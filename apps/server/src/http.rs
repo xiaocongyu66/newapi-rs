@@ -1341,6 +1341,9 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response 
                 SessionAuthError::Unauthorized => {
                     auth_failure(StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED")
                 }
+                SessionAuthError::TokenExpired => {
+                    auth_failure(StatusCode::UNAUTHORIZED, "AUTH_TOKEN_EXPIRED")
+                }
                 SessionAuthError::Fence => {
                     tracing::error!(event = "auth_fence_error", "session fence failed");
                     auth_failure(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR")
@@ -1477,6 +1480,10 @@ async fn sessions(State(state): State<AppState>, headers: HeaderMap) -> Response
                 "AUTH_INTERNAL_ERROR",
             ));
         }
+        // Go UserAuth 对过期访问令牌回 AUTH_TOKEN_EXPIRED（authenticate.go:206-207）。
+        Err(SessionAuthError::TokenExpired) => {
+            return no_store(auth_failure(StatusCode::UNAUTHORIZED, "AUTH_TOKEN_EXPIRED"));
+        }
         Err(_) => {
             return no_store(auth_failure(
                 StatusCode::UNAUTHORIZED,
@@ -1525,6 +1532,8 @@ async fn session_identity(
             SessionAuthError::Storage(_)
             | SessionAuthError::BatchFailed { .. }
             | SessionAuthError::Fence => (StatusCode::INTERNAL_SERVER_ERROR, "AUTH_INTERNAL_ERROR"),
+            // Go UserAuth 对过期访问令牌回 AUTH_TOKEN_EXPIRED（authenticate.go:206-207）。
+            SessionAuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "AUTH_TOKEN_EXPIRED"),
             SessionAuthError::RefreshInvalid
             | SessionAuthError::SessionRevoked
             | SessionAuthError::SessionMismatch

@@ -519,7 +519,7 @@ async fn identify_rejects_disabled_and_soft_deleted_users_without_storage_classi
 }
 
 #[tokio::test]
-async fn identify_rejects_expired_or_malformed_access_as_unauthorized() {
+async fn identify_distinguishes_expired_from_malformed_access() {
     let (db, auth) = fixture().await;
     let first = credential();
     seed(&db, &first).await;
@@ -535,11 +535,13 @@ async fn identify_rejects_expired_or_malformed_access_as_unauthorized() {
             .is_ok(),
         "exp+4 must still be inside the upstream leeway"
     );
+    // Go `parseAuthClaims`（authtoken.go:206-210）把过期单列为
+    // ErrAuthTokenExpired，与非法令牌分开。
     assert_eq!(
         auth.identify(issued.access_token.expose_secret(), NOW + 906)
             .await
             .err(),
-        Some(SessionAuthError::Unauthorized),
+        Some(SessionAuthError::TokenExpired),
     );
     assert_eq!(
         auth.parse_access("not-a-jwt", NOW + 1).err(),
