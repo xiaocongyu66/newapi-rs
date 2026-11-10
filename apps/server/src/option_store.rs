@@ -391,7 +391,7 @@ pub(crate) fn validate_theme_customization(value: &str) -> Result<(), String> {
         (
             "preset",
             text("preset"),
-            [
+            &[
                 "default",
                 "anthropic",
                 "nailao",
@@ -405,17 +405,17 @@ pub(crate) fn validate_theme_customization(value: &str) -> Result<(), String> {
                 "lavender-dream",
             ],
         ),
-        ("font", text("font"), ["default", "sans", "serif"]),
+        ("font", text("font"), &["default", "sans", "serif"]),
         (
             "radius",
             text("radius"),
-            ["default", "none", "sm", "md", "lg", "xl"],
+            &["default", "none", "sm", "md", "lg", "xl"],
         ),
-        ("scale", text("scale"), ["default", "sm", "lg", "xl"]),
+        ("scale", text("scale"), &["default", "sm", "lg", "xl"]),
         (
             "content_layout",
             text("content_layout"),
-            ["full", "centered"],
+            &["full", "centered"],
         ),
     ];
     for (name, value, allowed) in enum_rules {

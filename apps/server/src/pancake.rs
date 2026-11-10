@@ -190,7 +190,7 @@ impl PancakeTransport for HttpPancakeTransport {
                 Ok(store_id) => store_id,
                 Err(error) => return Ok(PairOutcome::Failed(error.0)),
             };
-            match create_product(
+            let product = create_product(
                 merchant_id,
                 private_key,
                 &store_id,
@@ -198,22 +198,25 @@ impl PancakeTransport for HttpPancakeTransport {
                 "1.00",
                 return_url,
             )
-            .await
-            {
+            .await;
+            match product {
                 Ok(product_id) => Ok(PairOutcome::Complete(WaffoPancakePairResult {
                     store_id,
                     store_name: DEFAULT_STORE_NAME.to_owned(),
                     product_id,
                     product_name: DEFAULT_PRODUCT_NAME.to_owned(),
                 })),
-                Err(error) => Ok(PairOutcome::OrphanStore {
-                    store_id,
-                    store_name: DEFAULT_STORE_NAME.to_owned(),
-                    error: format!(
+                Err(error) => {
+                    let message = format!(
                         "store created at {store_id} but product creation failed: {}",
                         error.0
-                    ),
-                }),
+                    );
+                    Ok(PairOutcome::OrphanStore {
+                        store_id,
+                        store_name: DEFAULT_STORE_NAME.to_owned(),
+                        error: message,
+                    })
+                }
             }
         })
     }
