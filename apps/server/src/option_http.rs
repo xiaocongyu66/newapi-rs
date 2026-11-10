@@ -145,8 +145,10 @@ pub async fn require_system_settings(
                 "POST",
                 "/api/option/payment_compliance",
                 "option.payment_compliance",
+                403,
                 success,
-            );
+            )
+            .await;
         }
         ("POST", "/api/option/rest_model_ratio") => {
             record_option_route_audit(
@@ -156,8 +158,10 @@ pub async fn require_system_settings(
                 "POST",
                 "/api/option/rest_model_ratio",
                 "option.reset_ratio",
+                403,
                 success,
-            );
+            )
+            .await;
         }
         ("DELETE", "/api/option/channel_affinity_cache") => {
             record_option_route_audit(
@@ -167,8 +171,10 @@ pub async fn require_system_settings(
                 "DELETE",
                 "/api/option/channel_affinity_cache",
                 "option.clear_affinity_cache",
+                403,
                 success,
-            );
+            )
+            .await;
         }
         ("POST", "/api/option/waffo-pancake/pair") => {
             record_option_route_audit(
@@ -178,8 +184,10 @@ pub async fn require_system_settings(
                 "POST",
                 "/api/option/waffo-pancake/pair",
                 "generic",
+                403,
                 success,
-            );
+            )
+            .await;
         }
         ("POST", "/api/option/waffo-pancake/save") => {
             record_option_route_audit(
@@ -189,8 +197,10 @@ pub async fn require_system_settings(
                 "POST",
                 "/api/option/waffo-pancake/save",
                 "generic",
+                403,
                 success,
-            );
+            )
+            .await;
         }
         ("POST", "/api/option/waffo-pancake/subscription-product") => {
             record_option_route_audit(
@@ -200,8 +210,10 @@ pub async fn require_system_settings(
                 "POST",
                 "/api/option/waffo-pancake/subscription-product",
                 "generic",
+                403,
                 success,
-            );
+            )
+            .await;
         }
         _ => {}
     }
@@ -271,6 +283,13 @@ pub async fn update_option(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     // Go gin `BindJSON`：空体是 EOF 绑定错误。
+    if body.is_empty() {
+        return Json(json!({
+            "success": false,
+            "message": MSG_INVALID_PARAMS_BIND,
+        }))
+        .into_response();
+    }
     let request: OptionUpdateRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
         Err(_) => {
@@ -392,20 +411,20 @@ fn normalize_display_amount(
     value: &str,
     display: &newapi_identity::self_user::QuotaDisplaySettings,
 ) -> Result<(String, String), String> {
-    if let Some(base) = key.strip_suffix("_display") {
-        if is_display_amount_key(base) {
-            let amount: f64 = value
-                .trim()
-                .parse()
-                .map_err(|_| MSG_INVALID_AMOUNT.to_owned())?;
-            if !amount.is_finite() {
-                return Err(MSG_INVALID_AMOUNT.to_owned());
-            }
-            return Ok((
-                base.to_owned(),
-                quota_from_display(amount, display).to_string(),
-            ));
+    if let Some(base) = key.strip_suffix("_display")
+        && is_display_amount_key(base)
+    {
+        let amount: f64 = value
+            .trim()
+            .parse()
+            .map_err(|_| MSG_INVALID_AMOUNT.to_owned())?;
+        if !amount.is_finite() {
+            return Err(MSG_INVALID_AMOUNT.to_owned());
         }
+        return Ok((
+            base.to_owned(),
+            quota_from_display(amount, display).to_string(),
+        ));
     }
     Ok((key.to_owned(), value.to_owned()))
 }
@@ -792,7 +811,7 @@ pub async fn clear_affinity_cache(
 
     if all == "true" {
         // Go：keys 数量即 deleted；空缓存为 0。
-        record_affinity_route_audit(&state, &auth_user, &headers, true);
+        record_affinity_route_audit(&state, &auth_user, &headers, 200, true);
         return Json(json!({
             "success": true,
             "message": "",
@@ -801,7 +820,7 @@ pub async fn clear_affinity_cache(
         .into_response();
     }
     if rule_name.is_empty() {
-        record_affinity_route_audit(&state, &auth_user, &headers, false);
+        record_affinity_route_audit(&state, &auth_user, &headers, 400, false);
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "message": MSG_AFFINITY_RULE_REQUIRED })),
@@ -813,7 +832,7 @@ pub async fn clear_affinity_cache(
         .iter()
         .find(|rule| rule.name.trim() == rule_name);
     let Some(rule) = matched else {
-        record_affinity_route_audit(&state, &auth_user, &headers, false);
+        record_affinity_route_audit(&state, &auth_user, &headers, 400, false);
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "message": MSG_AFFINITY_UNKNOWN_RULE })),
@@ -821,14 +840,14 @@ pub async fn clear_affinity_cache(
             .into_response();
     };
     if !rule.include_rule_name {
-        record_affinity_route_audit(&state, &auth_user, &headers, false);
+        record_affinity_route_audit(&state, &auth_user, &headers, 400, false);
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "message": MSG_AFFINITY_RULE_NO_INCLUDE })),
         )
             .into_response();
     }
-    record_affinity_route_audit(&state, &auth_user, &headers, true);
+    record_affinity_route_audit(&state, &auth_user, &headers, 200, true);
     Json(json!({
         "success": true,
         "message": "",
@@ -844,6 +863,7 @@ fn record_affinity_route_audit(
     state: &AppState,
     auth_user: &AuthenticatedUser,
     headers: &HeaderMap,
+    status: u16,
     success: bool,
 ) {
     record_option_route_audit(
@@ -853,8 +873,10 @@ fn record_affinity_route_audit(
         "DELETE",
         "/api/option/channel_affinity_cache",
         "option.clear_affinity_cache",
+        status,
         success,
-    );
+    )
+    .await;
 }
 
 /// Go `GetChannelAffinitySetting` 的选项读取：`channel_affinity_setting`
@@ -962,8 +984,10 @@ pub async fn reset_model_ratio(
             "POST",
             "/api/option/rest_model_ratio",
             "option.reset_ratio",
+            200,
             false,
-        );
+        )
+        .await;
         return database_error_json();
     }
     if let Err(error) = state.reload(&db).await {
@@ -978,8 +1002,10 @@ pub async fn reset_model_ratio(
             "POST",
             "/api/option/rest_model_ratio",
             "option.reset_ratio",
+            200,
             false,
-        );
+        )
+        .await;
         return database_error_json();
     }
     record_option_route_audit(
@@ -989,8 +1015,10 @@ pub async fn reset_model_ratio(
         "POST",
         "/api/option/rest_model_ratio",
         "option.reset_ratio",
+        200,
         true,
-    );
+    )
+    .await;
     Json(json!({
         "success": true,
         "message": MSG_RESET_RATIO_SUCCESS,
@@ -1070,8 +1098,10 @@ pub async fn confirm_payment_compliance(
             "POST",
             "/api/option/payment_compliance",
             "option.payment_compliance",
+            200,
             false,
-        );
+        )
+        .await;
         return database_error_json();
     }
     if let Err(error) = state.reload(&db).await {
@@ -1086,8 +1116,10 @@ pub async fn confirm_payment_compliance(
             "POST",
             "/api/option/payment_compliance",
             "option.payment_compliance",
+            200,
             false,
-        );
+        )
+        .await;
         return database_error_json();
     }
     tracing::info!(
@@ -1100,8 +1132,10 @@ pub async fn confirm_payment_compliance(
         "POST",
         "/api/option/payment_compliance",
         "option.payment_compliance",
+        200,
         true,
-    );
+    )
+    .await;
     Json(json!({
         "success": true,
         "message": "",
@@ -1281,8 +1315,9 @@ pub async fn waffo_pair(
     };
     // Go 兜底审计：waffo-pancake 路由未登记 action，落 generic。
     record_option_route_audit(
-        &state, &auth_user, &headers, "POST", route, "generic", success,
-    );
+        &state, &auth_user, &headers, "POST", route, "generic", 200, success,
+    )
+    .await;
     response
 }
 
@@ -1329,8 +1364,10 @@ pub async fn waffo_save(
             "POST",
             "/api/option/waffo-pancake/save",
             "generic",
+            200,
             false,
-        );
+        )
+        .await;
         return waffo_error(MSG_SAVE_FAILED);
     }
     let mut values: BTreeMap<String, String> = BTreeMap::new();
@@ -1357,8 +1394,10 @@ pub async fn waffo_save(
             "POST",
             "/api/option/waffo-pancake/save",
             "generic",
+            200,
             false,
-        );
+        )
+        .await;
         return waffo_error(MSG_SAVE_FAILED);
     }
     if let Err(error) = state.reload(&db).await {
@@ -1373,8 +1412,10 @@ pub async fn waffo_save(
             "POST",
             "/api/option/waffo-pancake/save",
             "generic",
+            200,
             false,
-        );
+        )
+        .await;
         return waffo_error(MSG_SAVE_FAILED);
     }
     record_option_route_audit(
@@ -1384,8 +1425,10 @@ pub async fn waffo_save(
         "POST",
         "/api/option/waffo-pancake/save",
         "generic",
+        200,
         true,
-    );
+    )
+    .await;
     Json(json!({
         "message": "success",
         "data": {
@@ -1496,8 +1539,10 @@ pub async fn waffo_subscription_product(
         "POST",
         "/api/option/waffo-pancake/subscription-product",
         "generic",
+        200,
         success,
-    );
+    )
+    .await;
     response
 }
 
@@ -1571,51 +1616,39 @@ fn waffo_error(message: &str) -> Response {
 
 /// Go 兜底审计（写方法、AdminAuth 组、handler 未手动埋点）。三个固定
 /// action 之外（waffo-pancake 写路径）落 `generic`。Go 把写入丢进
-/// `gopool.Go`，这里以 tokio spawn 等价；失败仅告警。
-fn record_option_route_audit(
+/// `gopool.Go`，但响应与写入的可观察顺序无保证；本端口内联 `await`，
+/// 保证 handler 返回前审计已落库（测试断言依赖该顺序）。失败仅告警。
+async fn record_option_route_audit(
     state: &AppState,
     auth_user: &AuthenticatedUser,
     headers: &HeaderMap,
     method: &'static str,
     route: &'static str,
     action: &'static str,
+    status: u16,
     success: bool,
 ) {
     let Some(db) = state.db() else {
         return;
     };
-    let user_id = auth_user.0.user_id;
-    let username = auth_user.0.username.clone();
-    let role = auth_user.0.role;
-    let auth_method = match auth_user.0.credential {
-        CredentialKind::DashboardSession => "session",
-        CredentialKind::PersonalAccessToken => "access_token",
-    };
+    let operator = audit_operator(auth_user);
     let ip = request_ip(state, headers);
-    tokio::spawn(async move {
-        let operator = AuditOperator {
-            user_id,
-            username: &username,
-            role,
-            auth_method,
-        };
-        record_route_audit(
-            &db,
-            RouteAudit {
-                operator: &operator,
-                action,
-                method,
-                route,
-                path: route,
-                status: 200,
-                success,
-                route_params: Vec::new(),
-                ip: &ip,
-                now: crate::http::now_seconds(),
-            },
-        )
-        .await;
-    });
+    record_route_audit(
+        &db,
+        RouteAudit {
+            operator: &operator,
+            action,
+            method,
+            route,
+            path: route,
+            status,
+            success,
+            route_params: Vec::new(),
+            ip: &ip,
+            now: crate::http::now_seconds(),
+        },
+    )
+    .await;
 }
 
 /// Go `auditAuthMethod`：PAT → `access_token`，会话 → `session`。

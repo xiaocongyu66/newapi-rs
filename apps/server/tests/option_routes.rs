@@ -23,6 +23,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use newapi_config::SessionCookieSettings;
+use newapi_identity::AuthIdentity;
+use newapi_identity::auth_session::{AuthFence, SessionAuth};
+use newapi_identity::crypto::AuthKeys;
+use newapi_identity::sessions::NoCache;
+use newapi_security::client_ip::ProxyPolicy;
 use newapi_server::option_http::{
     affinity_cache_stats, clear_affinity_cache, confirm_payment_compliance, get_options,
     require_system_settings, reset_model_ratio, smtp_pool_status, update_option, waffo_catalog,
@@ -32,7 +38,7 @@ use newapi_server::pancake::{
     DEFAULT_PRODUCT_NAME, DEFAULT_STORE_NAME, InjectedPancakeTransport, PairOutcome, PancakeError,
     PancakeTransport, WaffoPancakeCatalog, WaffoPancakeCatalogProduct, WaffoPancakeCatalogStore,
 };
-use newapi_server::{AppState, auth as server_auth};
+use newapi_server::{AppState, RateLimiter, auth as server_auth, limit::RateLimitSettings};
 use newapi_storage::Database;
 use serde_json::{Value, json};
 use sqlx::{
@@ -177,6 +183,84 @@ fn state(db: &Database) -> AppState {
     AppState::default().bind_runtime(db.clone(), SECRET)
 }
 
+/// 会话鉴权形态的 state：`payment_compliance` 拒绝 access token，写路径
+/// 契约测试需要 dashboard JWT（admin_2fa_routes 同款装置）。
+fn session_state(db: &Database) -> AppState {
+    let auth = Arc::new(SessionAuth::with_fence(
+        db.clone(),
+        AuthKeys::new(SECRET),
+        AuthFence::Disabled(NoCache::explicitly_disabled()),
+    ));
+    AppState::default()
+        .bind_auth(
+            auth,
+            SessionCookieSettings {
+                secure: false,
+                trusted_origins: Vec::new(),
+            },
+        )
+        .bind_runtime(db.clone(), SECRET)
+        .bind_transport(
+            ProxyPolicy::parse_trusted_proxies(None).expect("proxy policy"),
+            RateLimiter::memory(RateLimitSettings {
+                enabled: false,
+                requests: 1,
+                window_seconds: 60,
+            }),
+            512,
+        )
+}
+
+/// admin_2fa_routes 同款 dashboard JWT 铸造。
+fn jwt(user_id: i64, sid: &str, uv: i64, sv: i64, issued_at: i64) -> String {
+    AuthKeys::new(SECRET)
+        .issue_access(
+            &AuthIdentity {
+                user_id,
+                sid: sid.to_owned(),
+                user_auth_version: uv,
+                session_version: sv,
+            },
+            issued_at,
+        )
+        .expect("issue access token")
+        .token
+        .expose_secret()
+        .to_owned()
+}
+
+async fn seed_session(db: &Database, sid: &str, user_id: i64, uv: i64, sv: i64, at: i64) {
+    backend!(db, pool, {
+        sqlx::query(
+            r#"INSERT INTO user_sessions
+                (sid,user_id,version,user_auth_version,status,refresh_hash,
+                 previous_refresh_hash,previous_valid_until,login_method,ip,
+                 user_agent,created_at,last_active_at,expires_at,revoked_at,revoked_reason)
+                VALUES ($1,$2,$3,$4,'active','fixture-hash',NULL,0,'password','',
+                        '',$5,$5,$6,0,'')"#,
+        )
+        .bind(sid)
+        .bind(user_id)
+        .bind(sv)
+        .bind(uv)
+        .bind(at)
+        .bind(at + 3600)
+        .execute(pool)
+        .await
+        .expect("seed session");
+    });
+}
+
+const SESSIONS_TABLE: &str = r#"CREATE TABLE user_sessions (
+    sid VARCHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL,
+    version BIGINT NOT NULL DEFAULT 1, user_auth_version BIGINT NOT NULL,
+    status VARCHAR(16) NOT NULL, refresh_hash CHAR(64) NOT NULL,
+    previous_refresh_hash VARCHAR(64), previous_valid_until BIGINT NOT NULL DEFAULT 0,
+    login_method VARCHAR(32) NOT NULL, ip VARCHAR(64), user_agent TEXT,
+    created_at BIGINT, last_active_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
+    revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason VARCHAR(64)
+)"#;
+
 async fn exec(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         sqlx::query(statement)
@@ -199,6 +283,7 @@ async fn create_schema(db: &Database) {
                 CASBIN_POSTGRES,
                 OPTIONS_POSTGRES,
                 LOGS_POSTGRES,
+                SESSIONS_TABLE,
             ] {
                 exec(db, statement).await;
             }
@@ -525,6 +610,14 @@ fn translated(key: &str) -> String {
     newapi_i18n::translate("en", key, std::iter::empty::<(&str, &str)>())
 }
 
+/// 测试用当前秒；会话过期窗口为 +3600，取整秒即可。
+fn crate_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 fn admin_auth() -> String {
     format!("Bearer {PAT_ADMIN}")
 }
@@ -700,7 +793,7 @@ async fn run_get_options_contract(db: Database) {
         "EpayKey",
         "VmqKey",
         "CodePayKey",
-        "proxy_config",
+        "WaffoPancakePrivateKey",
     ] {
         assert!(!map.contains_key(sensitive), "{sensitive} must be hidden");
     }
@@ -1080,6 +1173,13 @@ async fn run_subresource_contract(db: Database) {
         .filter(|row| row.action == "option.clear_affinity_cache")
         .collect();
     assert_eq!(delete_audits.len(), 4, "{delete_audits:?}");
+    // 顺序：缺参(400) → 未知规则(400) → 命中规则(200) → all=true(200)。
+    for (index, expected) in [(0, 400), (1, 400), (2, 200), (3, 200)] {
+        assert_eq!(
+            delete_audits[index].status, expected,
+            "row {index}: {delete_audits:?}"
+        );
+    }
     assert!(!delete_audits[0].success, "400 分支 success=false");
     assert!(delete_audits[2].success, "200 分支 success=true");
 
@@ -1171,7 +1271,11 @@ async fn run_compliance_contract(db: Database) {
     seed_user(&db, 3, "fixture-root", 100, Some(PAT_ROOT)).await;
     seed_user(&db, 4, "fixture-pat", 10, Some(PAT_ADMIN_ALLOWED)).await;
     seed_policy(&db, 4, "").await;
-    let app = state(&db);
+    // Go `c.GetBool("use_access_token")` 对 PAT 为真 → 一律 403；写路径用
+    // dashboard JWT（admin_2fa_routes 同款会话装置）。
+    let app = session_state(&db);
+    let now = crate_now();
+    seed_session(&db, "sid-option-root", 3, 1, 1, now).await;
 
     // PAT 一律 403。
     let response = send(
@@ -1189,7 +1293,7 @@ async fn run_compliance_contract(db: Database) {
         json!(MSG_SESSION_ONLY)
     );
 
-    let root = format!("Bearer {PAT_ROOT}");
+    let root = format!("Bearer {}", jwt(3, "sid-option-root", 1, 1, now));
     // 未确认 → 拒绝。
     let response = send(
         &app,
@@ -1363,6 +1467,21 @@ async fn run_waffo_contract(db: Database) {
     assert_eq!(body["data"]["orphan_store"], json!(true), "{body}");
     assert_eq!(body["data"]["store_id"], json!("STO_8"), "{body}");
 
+    // subscription-product：未完成网关绑定（无 StoreID）。
+    let response = send(
+        &app,
+        Method::POST,
+        "/api/option/waffo-pancake/subscription-product",
+        Some(root.as_str()),
+        Some(r#"{"name":"plan","amount":"5"}"#),
+        Some(transport(vec![])),
+    )
+    .await;
+    assert_eq!(
+        body_json(response).await["data"],
+        json!(MSG_PANCAKE_NOT_BOUND)
+    );
+
     // save：必填校验。
     let response = send(
         &app,
@@ -1425,21 +1544,6 @@ async fn run_waffo_contract(db: Database) {
             "{payload}"
         );
     }
-
-    // subscription-product：未完成网关绑定（无 StoreID）。
-    let response = send(
-        &app,
-        Method::POST,
-        "/api/option/waffo-pancake/subscription-product",
-        Some(root.as_str()),
-        Some(r#"{"name":"plan","amount":"5"}"#),
-        Some(transport(vec![])),
-    )
-    .await;
-    assert_eq!(
-        body_json(response).await["data"],
-        json!(MSG_PANCAKE_NOT_BOUND)
-    );
 
     // subscription-product：凭据齐备后铸品成功（StoreID 来自 save）。
     let response = send(

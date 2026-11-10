@@ -633,10 +633,10 @@ pub(crate) fn completion_ratio_info(
     override_map: &BTreeMap<String, f64>,
 ) -> (f64, bool) {
     let formatted = format_matching_model_name(name);
-    if formatted.contains('/') {
-        if let Some(ratio) = override_map.get(&formatted) {
-            return (*ratio, false);
-        }
+    if formatted.contains('/')
+        && let Some(ratio) = override_map.get(&formatted)
+    {
+        return (*ratio, false);
     }
     let (hardcoded, locked) = hardcoded_completion_ratio(&formatted);
     if locked {

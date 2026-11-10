@@ -221,14 +221,14 @@ pub(crate) fn visible_options(
         }
         options.push((key.clone(), value.clone()));
         // Go：金额键补 display 兄弟键，仅当原值能按整数解析。
-        if is_display_amount_key(key) {
-            if let Ok(raw) = value.trim().parse::<i64>() {
-                let amount = display.to_display(raw);
-                options.push((
-                    format!("{key}_display"),
-                    crate::option_defaults::go_format_float(amount),
-                ));
-            }
+        if is_display_amount_key(key)
+            && let Ok(raw) = value.trim().parse::<i64>()
+        {
+            let amount = display.to_display(raw);
+            options.push((
+                format!("{key}_display"),
+                crate::option_defaults::go_format_float(amount),
+            ));
         }
         if COMPLETION_RATIO_META_OPTION_KEYS.contains(&key.as_str()) {
             ratio_values.insert(key.clone(), value.clone());
@@ -652,10 +652,10 @@ fn validate_announcements(value: &str) -> Result<(), String> {
         if exceeds_max_characters(&content, 500) {
             return Err(format!("第{index}个公告的内容长度不能超过500字符"));
         }
-        if let Some(extra) = announcement.get("extra").and_then(Value::as_str) {
-            if exceeds_max_characters(extra, 100) {
-                return Err(format!("第{index}个公告的说明长度不能超过100字符"));
-            }
+        if let Some(extra) = announcement.get("extra").and_then(Value::as_str)
+            && exceeds_max_characters(extra, 100)
+        {
+            return Err(format!("第{index}个公告的说明长度不能超过100字符"));
         }
     }
     Ok(())
