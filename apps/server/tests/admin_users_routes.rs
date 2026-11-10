@@ -539,7 +539,7 @@ async fn audit_logs(db: &Database) -> Vec<(i64, i64, String, String, String)> {
 async fn user_column_text(db: &Database, id: i64, column: &str) -> String {
     backend!(db, pool, {
         let sql = format!("SELECT COALESCE({column}, '') FROM users WHERE id = {id}");
-        sqlx::query_scalar(&sql)
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql.clone()))
             .fetch_one(pool)
             .await
             .expect("user text column")
@@ -550,7 +550,7 @@ async fn user_column_i64(db: &Database, id: i64, column: &str) -> i64 {
     backend!(db, pool, {
         let sql =
             format!("SELECT CAST(COALESCE({column}, 0) AS BIGINT) FROM users WHERE id = {id}");
-        sqlx::query_scalar(&sql)
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql.clone()))
             .fetch_one(pool)
             .await
             .expect("user int column")
@@ -560,7 +560,7 @@ async fn user_column_i64(db: &Database, id: i64, column: &str) -> i64 {
 async fn row_count(db: &Database, table: &str, predicate: &str) -> i64 {
     backend!(db, pool, {
         let sql = format!("SELECT COUNT(*) FROM {table} WHERE {predicate}");
-        sqlx::query_scalar(&sql)
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql.clone()))
             .fetch_one(pool)
             .await
             .expect("row count")

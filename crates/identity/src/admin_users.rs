@@ -431,10 +431,11 @@ macro_rules! tx_bump_auth_version {
             .bind($user_id)
             .execute(&mut *($tx))
             .await?;
-        sqlx::query_scalar(SELECT_AUTH_VERSION)
+        let next: i64 = sqlx::query_scalar(SELECT_AUTH_VERSION)
             .bind($user_id)
             .fetch_one(&mut *($tx))
-            .await?
+            .await?;
+        next
     }};
 }
 
@@ -551,10 +552,11 @@ impl AdminUserRepository {
         let total: i64 = backend!(&self.db, pool, {
             sqlx::query_scalar(LIST_COUNT).fetch_one(pool).await?
         });
+        // 动态部分仅为白名单排序列（SORT_COLUMNS），无注入面。
         let sql = format!("{USER_SELECT}{}{LIST_PAGE_TAIL}", sort.clause());
         // 行解码必须在 backend! 分支内完成：SqliteRow/PgRow 的类型不跨臂。
         let items: Vec<AdminUserRow> = backend!(&self.db, pool, {
-            let rows = sqlx::query(&sql)
+            let rows = sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
                 .bind(limit)
                 .bind(offset)
                 .fetch_all(pool)
@@ -581,7 +583,7 @@ impl AdminUserRepository {
         let keyword_id = keyword.parse::<i64>().ok();
         let count_sql = format!("SELECT COUNT(*) FROM users {SEARCH_BASE}");
         let total: i64 = backend!(&self.db, pool, {
-            sqlx::query_scalar(&count_sql)
+            sqlx::query_scalar(sqlx::AssertSqlSafe(count_sql.clone()))
                 .bind(&pattern)
                 .bind(keyword_id)
                 .bind(group)
@@ -595,7 +597,7 @@ impl AdminUserRepository {
             sort.clause()
         );
         let items: Vec<AdminUserRow> = backend!(&self.db, pool, {
-            let rows = sqlx::query(&sql)
+            let rows = sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
                 .bind(&pattern)
                 .bind(keyword_id)
                 .bind(group)
@@ -616,7 +618,7 @@ impl AdminUserRepository {
     pub async fn admin_by_id(&self, user_id: i64) -> Result<Option<AdminUserRow>, sqlx::Error> {
         let sql = format!("{USER_SELECT}{BY_ID}");
         let target: Option<AdminUserRow> = backend!(&self.db, pool, {
-            sqlx::query(&sql)
+            sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
                 .bind(user_id)
                 .fetch_optional(pool)
                 .await?
@@ -635,7 +637,7 @@ impl AdminUserRepository {
             format!("{USER_SELECT} WHERE id = $1 LIMIT 1")
         };
         let target: Option<AdminUserRow> = backend!(&self.db, pool, {
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
             if id != 0 {
                 query = query.bind(id);
             }
