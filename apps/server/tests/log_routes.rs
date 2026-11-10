@@ -380,7 +380,7 @@ async fn assert_list_success(
 ) -> Value {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
-    assert_eq!(body["success"], json!(true));
+    assert_eq!(body["success"], json!(true), "list call failed: {body}");
     assert_eq!(body["message"], json!(""));
     assert_eq!(body["data"]["total"], json!(expected_total));
     assert_eq!(
@@ -814,7 +814,7 @@ async fn run_affinity_contract(db: &Database) {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
-    assert_eq!(body["success"], json!(true));
+    assert_eq!(body["success"], json!(true), "list call failed: {body}");
     assert_eq!(body["message"], json!(""));
     assert_eq!(
         body["data"],
