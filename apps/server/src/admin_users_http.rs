@@ -972,7 +972,7 @@ async fn revoke_after_admin_change(
     headers: &HeaderMap,
 ) -> Result<(), Box<Response>> {
     let Some(auth) = state.auth() else {
-        return Err(api_error(headers, MSG_DATABASE_ERROR));
+        return Err(Box::new(api_error(headers, MSG_DATABASE_ERROR)));
     };
     match auth.revoke_all(user_id, reason, now).await {
         Ok(_) => Ok(()),
@@ -983,7 +983,7 @@ async fn revoke_after_admin_change(
                 "failed to revoke user sessions after admin change"
             );
             let _ = error;
-            Err(api_error(headers, MSG_DATABASE_ERROR))
+            Err(Box::new(api_error(headers, MSG_DATABASE_ERROR)))
         }
     }
 }
