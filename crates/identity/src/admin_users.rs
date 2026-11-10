@@ -622,7 +622,7 @@ impl AdminUserRepository {
                 .bind(user_id)
                 .fetch_optional(pool)
                 .await?
-                .map(|row| row!(row))
+                .map(|row| -> Result<AdminUserRow, sqlx::Error> { row!(row) })
                 .transpose()?
         });
         Ok(target)
@@ -644,7 +644,7 @@ impl AdminUserRepository {
             query
                 .fetch_optional(pool)
                 .await?
-                .map(|row| row!(row))
+                .map(|row| -> Result<AdminUserRow, sqlx::Error> { row!(row) })
                 .transpose()?
         });
         Ok(target)
