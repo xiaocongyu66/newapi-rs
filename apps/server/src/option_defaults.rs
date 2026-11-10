@@ -733,7 +733,7 @@ mod tests {
         assert!(!json.contains("15.0"));
         assert!(json.contains("\"gpt-4-gizmo-*\":15"));
         assert!(json.contains("\"deepseek-chat\":0.135"));
-        assert!(json.contains("\"glm-4v\":3.4246575342465753"));
+        assert!(json.contains("\"glm-4v\":3.4246575342465757"));
     }
 
     /// Go `getHardcodedCompletionModelRatio` 的代表性分支。
