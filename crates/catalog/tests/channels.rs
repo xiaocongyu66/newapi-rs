@@ -707,7 +707,7 @@ async fn postgres_channel_store_contract() {
         .connect_with(options.disable_statement_logging())
         .await
         .unwrap();
-    contract(&Database::Postgres(pool)).await;
+    contract(&Database::Postgres(pool.clone())).await;
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA \"{schema}\" CASCADE"
