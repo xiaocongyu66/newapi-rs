@@ -648,12 +648,14 @@ mod tests {
             .expect("seed row");
         }
         let repository = RedemptionRepository::new(Database::Sqlite(pool));
+        // `ap%` 只命中 apple（alpha 以 "al" 开头）。
         let (records, total) = repository
             .search("ap", RedemptionStatusFilter::None, 0, 10, 1_000_000)
             .await
             .expect("search must succeed against the fixture");
-        assert_eq!(total, 2);
-        assert_eq!(records.len(), 2);
+        assert_eq!(total, 1);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].name, "apple");
         // 数字 keyword 走 `id = ? OR name LIKE ?` 分支（id=30 为 used）。
         let (records, total) = repository
             .search("30", RedemptionStatusFilter::Used, 0, 10, 1_000_000)

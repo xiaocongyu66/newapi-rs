@@ -620,22 +620,36 @@ async fn run_contract(db: Database) {
     assert_eq!(body["data"]["page_size"], json!(100));
 
     // ---- 搜索（SearchRedemptions）-----------------------------------------
-    // name 前缀匹配（未转义 LIKE，Go 行为）。
+    // name 前缀匹配（未转义 LIKE，Go 行为）：`a%` 命中 apple 与 alpha。
     let response = send(
         &app,
         Method::GET,
-        "/api/redemption/search?keyword=ap",
+        "/api/redemption/search?keyword=a",
         Some(&admin),
         None,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::OK, "search(ap) status");
+    assert_eq!(response.status(), StatusCode::OK, "search(a) status");
     let body = body_json(response).await;
-    assert_eq!(body["data"]["total"], json!(2), "search(ap) body: {body}");
+    assert_eq!(body["data"]["total"], json!(2), "search(a) body: {body}");
     let items = body["data"]["items"].as_array().expect("items");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["id"], json!(20));
     assert_eq!(items[1]["id"], json!(10));
+    // 更精确的前缀：`ap%` 只命中 apple。
+    let body = body_json(
+        send(
+            &app,
+            Method::GET,
+            "/api/redemption/search?keyword=ap",
+            Some(&admin),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["data"]["total"], json!(1));
+    assert_eq!(body["data"]["items"][0]["id"], json!(20));
     // 可解析为 int 的 keyword 命中 `id = ? OR name LIKE ?`（id=20）。
     let body = body_json(
         send(
