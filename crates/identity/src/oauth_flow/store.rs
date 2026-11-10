@@ -71,6 +71,12 @@ impl From<sqlx::Error> for StoreError {
     }
 }
 
+impl From<StoreError> for crate::oauth_flow::OAuthFlowError {
+    fn from(_: StoreError) -> Self {
+        Self::Storage
+    }
+}
+
 /// OAuth 用户的查找或创建输入；`bind_column` 为空表示 generic 提供商
 /// （绑定落 user_oauth_bindings，与用户行同事务创建）。
 pub struct NewOAuthUser<'a> {

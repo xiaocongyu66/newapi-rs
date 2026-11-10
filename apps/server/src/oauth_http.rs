@@ -1448,7 +1448,7 @@ async fn session_reference(
     if pending.user_id <= 0 || pending.session_id.trim().is_empty() {
         return SessionReference::Invalid;
     }
-    let user = match &db {
+    let user: Result<Option<(i64, i64)>, sqlx::Error> = match &db {
         newapi_storage::Database::Sqlite(pool) => {
             sqlx::query_as(
                 "SELECT CAST(status AS BIGINT), CAST(auth_version AS BIGINT) FROM users \
@@ -1478,7 +1478,7 @@ async fn session_reference(
     if status != 1 {
         return SessionReference::UserDisabled;
     }
-    let session = match &db {
+    let session: Result<Option<(String, i64, i64, i64)>, sqlx::Error> = match &db {
         newapi_storage::Database::Sqlite(pool) => {
             sqlx::query_as(
                 "SELECT status, CAST(revoked_at AS BIGINT), CAST(expires_at AS BIGINT), \
