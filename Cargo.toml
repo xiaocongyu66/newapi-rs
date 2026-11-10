@@ -22,6 +22,8 @@ rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_r
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
 sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json"] }
+# 邮箱格式正则门（任务 #45）：复刻 Go regexp.MatchString 的任一命中放行语义。
+regex = "=1.13.1"
 # passkey 切片（方案 A）：CI 探针（run 42554243782）已验证 0.6.2 在钉版工具链
 # 下可解析可编译。三个 feature 为业务必需：conditional-ui 提供匿名可发现登录
 # 仪式（否则 start_discoverable_authentication 不存在）；danger-allow-state-
