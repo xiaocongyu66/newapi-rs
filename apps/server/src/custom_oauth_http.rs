@@ -241,7 +241,7 @@ pub async fn require_system_settings(
         )
         .await;
     }
-    api_error(&headers, MSG_INSUFFICIENT_PRIVILEGE)
+    api_forbidden(&headers, MSG_INSUFFICIENT_PRIVILEGE)
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +570,11 @@ fn parse_create_request(body: &[u8]) -> Option<CreateRequest> {
     }
 }
 
+/// `#[serde(default)]` 复刻 Go `json.Unmarshal` 的零值语义：缺省字段按
+/// `Default` 填充（字符串空串、布尔 false、整数 0），与 gin 的
+/// `binding:"required"` 无关——必填集合由 `create_flow` 显式检查。
 #[derive(Debug, Default, Deserialize)]
+#[serde(default)]
 struct CreateRequest {
     name: String,
     slug: String,
@@ -1158,6 +1162,19 @@ fn api_error(headers: &HeaderMap, key: &str) -> Response {
         "message": translate(headers, key),
     }))
     .into_response()
+}
+
+/// Go `RequirePermission` 的拒绝分支（`authenticate.go:230-233`）：HTTP 403 +
+/// `{"success": false, "message": <i18n>}`，无 `code`、无 `data`。
+fn api_forbidden(headers: &HeaderMap, key: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "success": false,
+            "message": translate(headers, key),
+        })),
+    )
+        .into_response()
 }
 
 fn database_error(headers: &HeaderMap, error: &sqlx::Error) -> Response {

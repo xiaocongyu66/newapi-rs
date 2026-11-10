@@ -968,10 +968,14 @@ async fn run_crud_contract(db: Database) {
     .into_iter()
     .enumerate()
     {
+        // access_policy 是文本列：Go 的 `AccessPolicy string` 要求载荷里是
+        // 转义后的 JSON 字符串，才能命中 `validateCustomOAuthProvider` 的解析
+        // 分支（裸 JSON 值会在 BindJSON 阶段因类型不符被拒）。
+        let policy_json = serde_json::to_string(policy).expect("policy JSON string");
         let body = format!(
             r#"{{"name":"Policy","slug":"policy-{index}","client_id":"c","client_secret":"s",
                  "authorization_endpoint":"a","token_endpoint":"t","user_info_endpoint":"u",
-                 "access_policy":{policy}}}"#
+                 "access_policy":{policy_json}}}"#
         );
         assert_business_message(
             post_with(
@@ -988,10 +992,11 @@ async fn run_crud_contract(db: Database) {
     // 合法策略落库并原样回显（JSON 字符串列）。
     let valid_policy =
         r#"{"logic":"and","conditions":[{"field":"email","op":"eq","value":"a@b"}]}"#;
+    let valid_policy_json = serde_json::to_string(valid_policy).expect("policy JSON string");
     let body = format!(
         r#"{{"name":"Policy OK","slug":"policy-ok","client_id":"c","client_secret":"s",
             "authorization_endpoint":"a","token_endpoint":"t","user_info_endpoint":"u",
-            "access_policy":{valid_policy}}}"#
+            "access_policy":{valid_policy_json}}}"#
     );
     let policy_ok = assert_message(
         post_with(

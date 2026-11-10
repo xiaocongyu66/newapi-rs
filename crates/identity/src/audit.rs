@@ -442,10 +442,12 @@ pub async fn record_route_audit(db: &Database, audit: RouteAudit<'_>) {
     let mut op = Map::new();
     op.insert("action".to_owned(), Value::String(action.to_owned()));
     if action == "generic" {
-        // Go 的兜底分支只给未登记 action 带上 method/route，前端据此展示
-        // "METHOD route"；已登记 action 的 `op` 不带 params 键。
-        op.insert("method".to_owned(), Value::String(method.to_owned()));
-        op.insert("route".to_owned(), Value::String(route.to_owned()));
+        // Go `buildOpField`：未登记 action 的 method/route 装进 `op.params`
+        //（前端据此展示 "METHOD route"）；已登记 action 的 `op` 只有 `action`。
+        let mut params = Map::new();
+        params.insert("method".to_owned(), Value::String(method.to_owned()));
+        params.insert("route".to_owned(), Value::String(route.to_owned()));
+        op.insert("params".to_owned(), Value::Object(params));
     }
     let admin_info = admin_info_object(operator);
     let mut audit_info = Map::new();
