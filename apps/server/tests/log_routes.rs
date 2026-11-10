@@ -512,15 +512,15 @@ async fn run_admin_list_contract(db: &Database) {
     )
     .await;
 
-    // LIKE 模式校验（3 个通配符超限）→ 200 + 固定翻译文案（Go 走
-    // CtxApiError 的 200 分支）。
+    // LIKE 模式校验（连续 % 触发 Go `ValidateLikePattern` 的首要分支）→
+    // 200 + 固定翻译文案（Go 走 CtxApiError 的 200 分支）。
     let response = send(&state, "/api/log/?model_name=%25%25%25x", ADMIN_PAT).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(false));
     assert_eq!(
         body["message"],
-        json!(translated("token.search_wildcard_limit"))
+        json!(translated("token.search_consecutive_wildcard"))
     );
 
     // 分页别名与封顶：p=2&size=1 取第 2 新的行；page_size=999 封顶 100。
@@ -708,14 +708,15 @@ async fn run_admin_stat_contract(db: &Database, now: i64) {
     assert_eq!(body["data"]["rpm"], json!(0));
     assert_eq!(body["data"]["tpm"], json!(0));
 
-    // LIKE 模式校验在统计端是 400（Go 显式 Bad Request 分支）。
+    // LIKE 模式校验在统计端是 400（Go 显式 Bad Request 分支）；连续 %
+    // 命中 Go `ValidateLikePattern` 的首要分支。
     let response = send(&state, "/api/log/stat?model_name=%25%25%25x", ADMIN_PAT).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(false));
     assert_eq!(
         body["message"],
-        json!(translated("token.search_wildcard_limit"))
+        json!(translated("token.search_consecutive_wildcard"))
     );
 
     reset(db).await;
