@@ -1496,7 +1496,7 @@ async fn run_contract(db: Database) {
         let demote_reason: String = sqlx::query_scalar(
             "SELECT revoked_reason FROM user_sessions WHERE sid = 'sid-common4'",
         )
-        .fetch_one(&*pool)
+        .fetch_one(&pool)
         .await
         .expect("demote reason");
         assert_eq!(demote_reason, "admin_demote");
