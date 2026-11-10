@@ -841,14 +841,17 @@ async fn run_contract(db: Database) {
     .await;
 
     // 敏感字段（type）对 ChannelWrite-only 的 admin 是 handler 内拒绝：
-    // HTTP 200 + success:false（不是 403）。
+    // HTTP 200 + success:false（不是 403）。type 用 3 而非 41：Vertex（41）
+    // 的部署地区校验先于敏感检查（Go validateChannel 早于
+    // channelHasSensitiveChanges，handle_channel.go:946-981），会把本场景
+    // 变成地区错误而非权限拒绝。
     let body = assert_business_error(
         send(
             &app,
             Method::PUT,
             "/api/channel/",
             Some(&admin),
-            Some(&json!({"id": 1, "type": 41})),
+            Some(&json!({"id": 1, "type": 3})),
         )
         .await,
         "auth.insufficient_privilege",
@@ -869,12 +872,12 @@ async fn run_contract(db: Database) {
             Method::PUT,
             "/api/channel/",
             Some(&admin),
-            Some(&json!({"id": 1, "type": 41})),
+            Some(&json!({"id": 1, "type": 3})),
         )
         .await,
     )
     .await;
-    assert_eq!(body["data"]["type"], json!(41));
+    assert_eq!(body["data"]["type"], json!(3));
     // 更新审计记录 changed_fields。
     let audits = manage_audit_contents(&db).await;
     assert!(
