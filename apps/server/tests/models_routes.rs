@@ -388,7 +388,7 @@ async fn seed_model(db: &Database, id: i64, name: &str, name_rule: i64, sync_off
     backend!(db, pool, {
         sqlx::query(
             "INSERT INTO models (id, model_name, name_rule, sync_official, updated_time) \
-             VALUES (?,?,?,?,0)",
+             VALUES ($1,$2,$3,$4,0)",
         )
         .bind(id)
         .bind(name)
@@ -419,7 +419,13 @@ struct FakeUpstream {
 
 impl FakeUpstream {
     fn with_envelope(models: Value, vendors: Value) -> Self {
-        let (models_url, vendors_url) = models_http::upstream_urls("");
+        Self::with_envelope_locale(models, vendors, "")
+    }
+
+    /// 按请求 locale 注册响应 URL（`upstream_urls(locale)` 与
+    /// handler 内的取 URL 逻辑同源）。
+    fn with_envelope_locale(models: Value, vendors: Value, locale: &str) -> Self {
+        let (models_url, vendors_url) = models_http::upstream_urls(locale);
         Self {
             responses: BTreeMap::from([
                 (models_url, serde_json::to_vec(&models).unwrap()),
@@ -1014,7 +1020,7 @@ async fn contract(db: &Database) {
          "tags": "up-tag", "vendor_name": "OtherVendor", "name_rule": 1, "status": 3},
         {"model_name": "abilities-only-2"}
     ]);
-    let fake = FakeUpstream::with_envelope(upstream, json!([]));
+    let fake = FakeUpstream::with_envelope_locale(upstream, json!([]), "en");
     let response = models_http::sync_upstream_preview_with(
         db,
         &Default::default(),

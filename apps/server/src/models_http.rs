@@ -160,41 +160,39 @@ impl UpstreamFetch for HttpUpstream {
     }
 }
 
-fn fetch_once<'a>(
+async fn fetch_once<'a>(
     client: &'a reqwest::Client,
     url: &'a str,
     max_bytes: usize,
-) -> impl Future<Output = Result<Vec<u8>, UpstreamFetchError>> + Send + 'a {
-    async move {
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|_| UpstreamFetchError::Transport)?;
-        if !response.status().is_success() {
-            // Go 对非 200/304 也按可重试错误处理（resp.Status 文本）。
-            return Err(UpstreamFetchError::Status);
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > max_bytes as u64)
-        {
+) -> Result<Vec<u8>, UpstreamFetchError> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| UpstreamFetchError::Transport)?;
+    if !response.status().is_success() {
+        // Go 对非 200/304 也按可重试错误处理（resp.Status 文本）。
+        return Err(UpstreamFetchError::Status);
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(UpstreamFetchError::BodyTooLarge);
+    }
+    let mut body: Vec<u8> = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| UpstreamFetchError::Transport)?
+    {
+        if body.len() + chunk.len() > max_bytes {
             return Err(UpstreamFetchError::BodyTooLarge);
         }
-        let mut body: Vec<u8> = Vec::new();
-        let mut response = response;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| UpstreamFetchError::Transport)?
-        {
-            if body.len() + chunk.len() > max_bytes {
-                return Err(UpstreamFetchError::BodyTooLarge);
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(body)
+        body.extend_from_slice(&chunk);
     }
+    Ok(body)
 }
 
 fn upstream_client() -> Option<&'static reqwest::Client> {
@@ -355,10 +353,8 @@ pub(crate) fn parse_upstream<T: serde::de::DeserializeOwned>(
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Err(UpstreamFetchError::Decode);
     }
-    if let Ok(envelope) = serde_json::from_slice::<serde_json::Value>(bytes) {
-        if envelope.is_null() {
-            return Ok(Vec::new());
-        }
+    if serde_json::from_slice::<serde_json::Value>(bytes).is_ok_and(|envelope| envelope.is_null()) {
+        return Ok(Vec::new());
     }
     if let Ok(envelope) = serde_json::from_slice::<UpstreamEnvelope<T>>(bytes) {
         return Ok(envelope.data.unwrap_or_default());
@@ -1758,7 +1754,9 @@ mod tests {
         };
         let vendor_names = BTreeMap::from([(5, "OpenAI".to_owned())]);
         // 全部一致（trim 后）→ 空冲突。
-        assert!(conflicts_for(&[local.clone()], &model_by_name, &vendor_names).is_empty());
+        assert!(
+            conflicts_for(std::slice::from_ref(&local), &model_by_name, &vendor_names).is_empty()
+        );
         // status：local=1、upstream=0 → choose(0,1)=1 一致；upstream 值取原始 0。
         let mut local = local;
         local.description = "different".to_owned();
