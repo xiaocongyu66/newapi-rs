@@ -126,17 +126,18 @@ async fn reset(db: &Database) {
 }
 
 /// 直接以 SQL 种入一行渠道（绕过仓储，制造任意状态）。
-async fn seed_channel(
-    db: &Database,
+struct SeedChannel<'a> {
     id: i64,
     channel_type: i64,
     status: i64,
-    name: &str,
-    key: &str,
-    models: &str,
-    group: &str,
-    tag: Option<&str>,
-) {
+    name: &'a str,
+    key: &'a str,
+    models: &'a str,
+    group: &'a str,
+    tag: Option<&'a str>,
+}
+
+async fn seed_channel(db: &Database, seed: &SeedChannel<'_>) {
     let info = serde_json::to_string(&ChannelInfo::default()).unwrap();
     match db {
         Database::Sqlite(pool) => {
@@ -147,14 +148,14 @@ async fn seed_channel(
                      status_code_mapping, balance)
                     VALUES (?,?,?,?,?,?,?,?,?,'','','','','',0)"#,
             )
-            .bind(id)
-            .bind(channel_type)
-            .bind(key)
-            .bind(status)
-            .bind(name)
-            .bind(models)
-            .bind(group)
-            .bind(tag)
+            .bind(seed.id)
+            .bind(seed.channel_type)
+            .bind(seed.key)
+            .bind(seed.status)
+            .bind(seed.name)
+            .bind(seed.models)
+            .bind(seed.group)
+            .bind(seed.tag)
             .bind(&info)
             .execute(pool)
             .await
@@ -168,14 +169,14 @@ async fn seed_channel(
                      status_code_mapping, balance)
                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'','','','','',0)"#,
             )
-            .bind(id)
-            .bind(channel_type)
-            .bind(key)
-            .bind(status)
-            .bind(name)
-            .bind(models)
-            .bind(group)
-            .bind(tag)
+            .bind(seed.id)
+            .bind(seed.channel_type)
+            .bind(seed.key)
+            .bind(seed.status)
+            .bind(seed.name)
+            .bind(seed.models)
+            .bind(seed.group)
+            .bind(seed.tag)
             .bind(&info)
             .execute(pool)
             .await
@@ -309,62 +310,72 @@ async fn contract(db: &Database) {
     // ---- 列表：过滤 / 排序 / 分页 / 标签 -------------------------------
     seed_channel(
         db,
-        10,
-        1,
-        CHANNEL_STATUS_ENABLED,
-        "list-a",
-        "k",
-        "m1",
-        "default,vip",
-        Some("beta"),
+        &SeedChannel {
+            id: 10,
+            channel_type: 1,
+            status: CHANNEL_STATUS_ENABLED,
+            name: "list-a",
+            key: "k",
+            models: "m1",
+            group: "default,vip",
+            tag: Some("beta"),
+        },
     )
     .await;
     seed_channel(
         db,
-        11,
-        41,
-        CHANNEL_STATUS_ENABLED,
-        "list-b",
-        "k",
-        "m1",
-        "default",
-        Some("alpha"),
+        &SeedChannel {
+            id: 11,
+            channel_type: 41,
+            status: CHANNEL_STATUS_ENABLED,
+            name: "list-b",
+            key: "k",
+            models: "m1",
+            group: "default",
+            tag: Some("alpha"),
+        },
     )
     .await;
     seed_channel(
         db,
-        12,
-        1,
-        CHANNEL_STATUS_AUTO_DISABLED,
-        "list-c",
-        "k",
-        "m1",
-        "default",
-        Some("alpha"),
+        &SeedChannel {
+            id: 12,
+            channel_type: 1,
+            status: CHANNEL_STATUS_AUTO_DISABLED,
+            name: "list-c",
+            key: "k",
+            models: "m1",
+            group: "default",
+            tag: Some("alpha"),
+        },
     )
     .await;
     seed_channel(
         db,
-        13,
-        1,
-        CHANNEL_STATUS_ENABLED,
-        "list-d",
-        "k",
-        "m1",
-        "vip",
-        None,
+        &SeedChannel {
+            id: 13,
+            channel_type: 1,
+            status: CHANNEL_STATUS_ENABLED,
+            name: "list-d",
+            key: "k",
+            models: "m1",
+            group: "vip",
+            tag: None,
+        },
     )
     .await;
     seed_channel(
         db,
-        14,
-        1,
-        CHANNEL_STATUS_ENABLED,
-        "list-e",
-        "k",
-        "m1",
-        "unrelated",
-        Some("beta"),
+        &SeedChannel {
+            id: 14,
+            channel_type: 1,
+            status: CHANNEL_STATUS_ENABLED,
+            name: "list-e",
+            key: "k",
+            models: "m1",
+            group: "unrelated",
+            tag: Some("beta"),
+        },
     )
     .await;
 

@@ -310,18 +310,19 @@ async fn bump_sequences(db: &Database) {
     }
 }
 
-async fn seed_channel(
-    db: &Database,
+struct SeedChannel<'a> {
     id: i64,
     channel_type: i64,
     status: i64,
-    name: &str,
-    key: &str,
-    models: &str,
-    group: &str,
-    tag: Option<&str>,
-    channel_info: &str,
-) {
+    name: &'a str,
+    key: &'a str,
+    models: &'a str,
+    group: &'a str,
+    tag: Option<&'a str>,
+    channel_info: &'a str,
+}
+
+async fn seed_channel(db: &Database, seed: &SeedChannel<'_>) {
     backend!(db, pool, {
         sqlx::query(
             r#"INSERT INTO channels
@@ -329,15 +330,15 @@ async fn seed_channel(
                  settings,other,other_info,base_url,status_code_mapping,balance)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'','','','','',0)"#,
         )
-        .bind(id)
-        .bind(channel_type)
-        .bind(key)
-        .bind(status)
-        .bind(name)
-        .bind(models)
-        .bind(group)
-        .bind(tag)
-        .bind(channel_info)
+        .bind(seed.id)
+        .bind(seed.channel_type)
+        .bind(seed.key)
+        .bind(seed.status)
+        .bind(seed.name)
+        .bind(seed.models)
+        .bind(seed.group)
+        .bind(seed.tag)
+        .bind(seed.channel_info)
         .execute(pool)
         .await
         .expect("seed channel");
@@ -500,41 +501,47 @@ async fn run_contract(db: Database) {
     // ---- 种入数据后的列表 / 过滤 / 排序 ----------------------------
     seed_channel(
         &db,
-        1,
-        1,
-        1,
-        "alpha",
-        "sk-secret-list",
-        "m1",
-        "default,vip",
-        Some("beta"),
-        "{}",
+        &SeedChannel {
+            id: 1,
+            channel_type: 1,
+            status: 1,
+            name: "alpha",
+            key: "sk-secret-list",
+            models: "m1",
+            group: "default,vip",
+            tag: Some("beta"),
+            channel_info: "{}",
+        },
     )
     .await;
     seed_channel(
         &db,
-        2,
-        41,
-        1,
-        "beta",
-        "sk-secret-list",
-        "m2",
-        "default",
-        Some("alpha"),
-        "{}",
+        &SeedChannel {
+            id: 2,
+            channel_type: 41,
+            status: 1,
+            name: "beta",
+            key: "sk-secret-list",
+            models: "m2",
+            group: "default",
+            tag: Some("alpha"),
+            channel_info: "{}",
+        },
     )
     .await;
     seed_channel(
         &db,
-        3,
-        1,
-        3,
-        "gamma",
-        "sk-secret-list",
-        "m1",
-        "default",
-        None,
-        "{}",
+        &SeedChannel {
+            id: 3,
+            channel_type: 1,
+            status: 3,
+            name: "gamma",
+            key: "sk-secret-list",
+            models: "m1",
+            group: "default",
+            tag: None,
+            channel_info: "{}",
+        },
     )
     .await;
     let body = assert_success(
