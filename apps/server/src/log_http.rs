@@ -889,6 +889,7 @@ async fn log_count<DB: sqlx::Database>(
 ) -> Result<i64, LogReadError>
 where
     for<'c> &'c str: sqlx::ColumnIndex<DB::Row>,
+    <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
     i64: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB> + for<'t> sqlx::Decode<'t, DB>,
     String: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB>,
 {
@@ -912,6 +913,7 @@ async fn log_page<DB: sqlx::Database>(
 ) -> Result<Vec<LogRow>, LogReadError>
 where
     for<'c> &'c str: sqlx::ColumnIndex<DB::Row>,
+    <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
     i64: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB> + for<'t> sqlx::Decode<'t, DB>,
     String: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB> + for<'t> sqlx::Decode<'t, DB>,
     bool: sqlx::Type<DB> + for<'t> sqlx::Decode<'t, DB>,
@@ -995,6 +997,7 @@ async fn channel_names<DB: sqlx::Database>(
 ) -> Result<HashMap<i64, String>, sqlx::Error>
 where
     for<'c> &'c str: sqlx::ColumnIndex<DB::Row>,
+    <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
     i64: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB> + for<'t> sqlx::Decode<'t, DB>,
     String: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB> + for<'t> sqlx::Decode<'t, DB>,
 {
@@ -1034,6 +1037,7 @@ async fn admin_stat<DB: sqlx::Database>(
 ) -> Result<LogStat, LogReadError>
 where
     for<'c> &'c str: sqlx::ColumnIndex<DB::Row>,
+    <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
     i64: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB> + for<'t> sqlx::Decode<'t, DB>,
     String: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB>,
 {
@@ -1082,6 +1086,7 @@ async fn self_token_stat<DB: sqlx::Database>(
 ) -> Result<i64, LogReadError>
 where
     for<'c> &'c str: sqlx::ColumnIndex<DB::Row>,
+    <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
     i64: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB> + for<'t> sqlx::Decode<'t, DB>,
     String: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB>,
 {
