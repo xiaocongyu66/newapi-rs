@@ -182,7 +182,7 @@ pub fn resolve_sort(sort_by: &str, sort_order: &str) -> AdminUserSort {
         .unwrap_or("id");
     AdminUserSort {
         column,
-        ascending: sort_order.trim().to_ascii_lowercase() == "asc",
+        ascending: sort_order.trim().eq_ignore_ascii_case("asc"),
     }
 }
 
@@ -569,6 +569,7 @@ impl AdminUserRepository {
     }
 
     /// Go `SearchUsers`：过滤、计数、分页读，全部 Unscoped。
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         keyword: &str,
@@ -654,7 +655,7 @@ impl AdminUserRepository {
     /// 成功返回新用户 id；邮箱恒为空串（Go `cleanUser` 不带邮箱）。
     pub async fn create(&self, input: &AdminCreateInput<'_>) -> Result<i64, AdminPermissionError> {
         let aff_code = random_aff_code();
-        let mut user_id;
+        let user_id;
         backend!(&self.db, pool, {
             let mut tx = pool.begin().await?;
             user_id = sqlx::query_scalar(INSERT_ADMIN_USER)
