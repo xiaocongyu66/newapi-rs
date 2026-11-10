@@ -96,7 +96,16 @@ pub async fn list_logs(State(state): State<AppState>, uri: Uri, headers: HeaderM
                 category = crate::database_error_class(&error),
                 "admin log query failed"
             );
-            api_error(&headers, MSG_DATABASE_ERROR)
+            // TODO-REMOVE: temporary diagnosis, surfaces the sqlx error payload.
+            let detail = format!("{error}");
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "success": false,
+                    "message": detail,
+                })),
+            )
+                .into_response()
         }
     }
 }
