@@ -18,9 +18,11 @@
 //!    只有 options 表里已存在的行会出现。
 //! 2. catalog/payment/usage/egress/ratio 五个 hook 种子族同样缺席。
 
+use std::collections::BTreeMap;
+
 /// Go `SeedOptionMap` 的传统键种子：`(键, 默认值)`。顺序无关，写入
 /// `BTreeMap` 后由数据库覆盖层合并。
-pub(crate) const SEED_OPTIONS: [(&str, &str); 92] = [
+pub(crate) const SEED_OPTIONS: [(&str, &str); 94] = [
     ("FileUploadPermission", "0"),
     ("FileDownloadPermission", "0"),
     ("ImageUploadPermission", "0"),

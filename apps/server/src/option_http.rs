@@ -31,8 +31,8 @@ use std::collections::BTreeMap;
 use axum::{
     Json,
     body::Bytes,
-    extract::{Extension, Request, State},
-    http::{HeaderMap, StatusCode},
+    extract::{ConnectInfo, Extension, Request, State},
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use newapi_billing::topup::TopUpSettings;
@@ -784,7 +784,7 @@ pub async fn affinity_cache_stats(
 pub async fn clear_affinity_cache(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
-    uri: axum::extract::Uri,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
     let Some(db) = state.db() else {
@@ -1153,7 +1153,7 @@ async fn resolve_waffo_creds(
 pub async fn waffo_catalog(
     State(state): State<AppState>,
     Extension(_auth_user): Extension<AuthenticatedUser>,
-    uri: axum::extract::Uri,
+    uri: Uri,
     headers: HeaderMap,
     injected: Option<Extension<InjectedPancakeTransport>>,
 ) -> Response {
@@ -1162,16 +1162,16 @@ pub async fn waffo_catalog(
     };
     let merchant_id = query_value(&uri, "merchant_id");
     let private_key = query_value(&uri, "private_key");
-    let (merchant_id, private_key) = match resolve_waffo_creds(&db, merchant_id, private_key).await
-    {
-        Ok(pair) => pair,
-        Err(_) => return waffo_error(MSG_CATALOG_FETCH_FAILED),
-    };
+    let (merchant_id, private_key) =
+        match resolve_waffo_creds(&db, &merchant_id, &private_key).await {
+            Ok(pair) => pair,
+            Err(_) => return waffo_error(MSG_CATALOG_FETCH_FAILED),
+        };
     if merchant_id.trim().is_empty() || private_key.trim().is_empty() {
         return waffo_error(MSG_CREDITS_NOT_CONFIGURED);
     }
     let transport: &dyn PancakeTransport = match injected.as_ref() {
-        Some(injected) => injected.0.as_ref(),
+        Some(injected) => injected.0.0.as_ref(),
         None => &HttpPancakeTransport,
     };
     match transport.catalog(&merchant_id, &private_key).await {
@@ -1221,7 +1221,7 @@ pub async fn waffo_pair(
         return waffo_error(MSG_CREDITS_NOT_CONFIGURED);
     }
     let transport: &dyn PancakeTransport = match injected.as_ref() {
-        Some(injected) => injected.0.as_ref(),
+        Some(injected) => injected.0.0.as_ref(),
         None => &HttpPancakeTransport,
     };
     let route = "/api/option/waffo-pancake/pair";
@@ -1454,7 +1454,7 @@ pub async fn waffo_subscription_product(
         return waffo_error(MSG_PANCAKE_NOT_BOUND);
     }
     let transport: &dyn PancakeTransport = match injected.as_ref() {
-        Some(injected) => injected.0.as_ref(),
+        Some(injected) => injected.0.0.as_ref(),
         None => &HttpPancakeTransport,
     };
     let (response, success) = match transport
@@ -1532,7 +1532,7 @@ pub async fn waffo_subscription_product_options(
         return waffo_error(MSG_PANCAKE_NOT_BOUND);
     }
     let transport: &dyn PancakeTransport = match injected.as_ref() {
-        Some(injected) => injected.0.as_ref(),
+        Some(injected) => injected.0.0.as_ref(),
         None => &HttpPancakeTransport,
     };
     let catalog: WaffoPancakeCatalog = match transport.catalog(&merchant_id, &private_key).await {

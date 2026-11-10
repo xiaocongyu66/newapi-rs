@@ -22,8 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::option_defaults::{
     COMPLETION_RATIO_META_OPTION_KEYS, DISPLAY_AMOUNT_KEYS, INVITE_REWARD_OPTION_KEYS,
-    SEED_OPTIONS, completion_ratio_info, default_model_ratio_json, format_matching_model_name,
-    parse_http_status_code_ranges,
+    SEED_OPTIONS, completion_ratio_info,
 };
 
 /// Go `settings.RetiredThemeOptionKey`。
