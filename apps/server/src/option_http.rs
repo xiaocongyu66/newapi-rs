@@ -951,7 +951,10 @@ pub async fn reset_model_ratio(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let default_str = crate::option_defaults::default_model_ratio_json();
-    if upsert_option(&db, "ModelRatio", &default_str).await.is_err() {
+    if upsert_option(&db, "ModelRatio", &default_str)
+        .await
+        .is_err()
+    {
         record_option_route_audit(
             &state,
             &auth_user,
