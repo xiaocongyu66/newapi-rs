@@ -1334,7 +1334,7 @@ pub async fn list_user_insights(
         page = 1;
     }
     let mut page_size = parse_i64(query_value(&uri, "page_size").as_deref()).unwrap_or(20);
-    if page_size < 1 || page_size > 100 {
+    if !(1..=100).contains(&page_size) {
         page_size = 20;
     }
     let category = query_value(&uri, "category")
@@ -1400,13 +1400,11 @@ pub async fn list_user_insights(
         .iter()
         .filter_map(|view| view["user_id"].as_i64())
         .collect();
-    match fetch_users_by_ids(&db, &ids).await {
-        Ok(users) => enrich_with_user_status(&mut views, &users),
-        Err(_) => {}
+    if let Ok(users) = fetch_users_by_ids(&db, &ids).await {
+        enrich_with_user_status(&mut views, &users);
     }
-    match fetch_client_bans_by_users(&db, &ids).await {
-        Ok(bans) => enrich_with_user_client_bans(&mut views, &bans),
-        Err(_) => {}
+    if let Ok(bans) = fetch_client_bans_by_users(&db, &ids).await {
+        enrich_with_user_client_bans(&mut views, &bans);
     }
 
     Json(json!({
@@ -1447,13 +1445,11 @@ pub async fn get_user_insight_detail(
     };
     let mut views = vec![profile_view(&row)];
     let ids = [user_id];
-    match fetch_users_by_ids(&db, &ids).await {
-        Ok(users) => enrich_with_user_status(&mut views, &users),
-        Err(_) => {}
+    if let Ok(users) = fetch_users_by_ids(&db, &ids).await {
+        enrich_with_user_status(&mut views, &users);
     }
-    match fetch_client_bans_by_users(&db, &ids).await {
-        Ok(bans) => enrich_with_user_client_bans(&mut views, &bans),
-        Err(_) => {}
+    if let Ok(bans) = fetch_client_bans_by_users(&db, &ids).await {
+        enrich_with_user_client_bans(&mut views, &bans);
     }
     success(Some(views.remove(0)))
 }
