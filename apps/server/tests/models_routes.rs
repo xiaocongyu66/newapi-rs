@@ -21,7 +21,7 @@ use axum::{
     http::{Method, StatusCode, header},
     middleware,
     response::Response,
-    routing::{delete, get, post, put},
+    routing::{get, post},
 };
 use newapi_config::SessionCookieSettings;
 use newapi_identity::{
@@ -42,7 +42,7 @@ use serde_json::{Value, json};
 use sqlx::{
     ConnectOptions,
     postgres::{PgConnectOptions, PgPoolOptions},
-    sqlite::SqlitePoolOptions,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tower::ServiceExt;
 
