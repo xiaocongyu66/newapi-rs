@@ -556,6 +556,50 @@ fn build_router(state: AppState) -> Router {
                 critical_guard,
             )),
     );
+    // `/api/log` 读取端（`register_api.go:49-57`）：Go 在 `logRoute` 组内先注册
+    // 7 条路由、后挂 CORS/CriticalRateLimit，因此鉴权链只有路由级的
+    // AdminAuth/UserAuth（`/api/log/self/search` 另挂 SearchRateLimit，与
+    // `/api/token/search` 相同）。`/search` 与列表在 Go 是同一 handler 的转发，
+    // 两种尾斜杠形态都注册（axum 不做归一化）。
+    let log_admin_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/log/", get(crate::log_http::list_logs))
+            .route("/api/log", get(crate::log_http::list_logs))
+            .route("/api/log/search", get(crate::log_http::list_logs))
+            .route("/api/log/stat", get(crate::log_http::logs_stat))
+            .route(
+                "/api/log/channel_affinity_usage_cache",
+                get(crate::log_http::channel_affinity_usage_cache),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                log_admin_state,
+                crate::auth::admin_auth,
+            )),
+    );
+    let log_self_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/log/self", get(crate::log_http::list_user_logs))
+            .route("/api/log/self/stat", get(crate::log_http::logs_self_stat))
+            .route_layer(middleware::from_fn_with_state(
+                log_self_state,
+                crate::auth::user_auth,
+            )),
+    );
+    let log_self_search_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/log/self/search", get(crate::log_http::list_user_logs))
+            .route_layer(middleware::from_fn_with_state(
+                log_self_search_state.clone(),
+                search_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                log_self_search_state,
+                crate::auth::user_auth,
+            )),
+    );
     // `GET /api/usage/token/`：Go `usageRoute` 组级 CORS → `CriticalRateLimit`
     // → 组级 `TokenAuthReadOnly()`（`register_api.go:375-384`）。axum 不做尾部
     // 斜杠归一化，两种写法都注册（与 `/api/token` 一致）。

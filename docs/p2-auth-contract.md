@@ -332,3 +332,15 @@ Go `billing.AddRedemption` 的管理审计记的是 `logger.LogQuota(redemption.
 **2. `quota_from_scaled` 的 `i32::MIN` 端点（开端点→闭端点，一行修复）**
 
 Go `saturateQuota` 对两侧边界都用闭端点：`value >= MaxQuota` 与 `value <= MinQuota`（`apps/api/internal/common/quota_math.go:77-80`），故 `QuotaFromDecimalStrict`（`quota_math.go:152`）**拒绝 -2147483648**（下界含等号）。Rust `crates/billing/src/topup/quote.rs` 的 `quota_from_scaled` 此前只有 `quota < i32::MIN` 才拒绝（开端点），-2147483648 被当作可表示值接受。已改为 `quota <= i128::from(i32::MIN)` 闭端点，上界 `>= MaxQuota` 原本已是闭端点，未动；并补单测 `quota_from_scaled_rejects_both_closed_int32_bounds`：`i32::MAX` 与 `i32::MIN` 均拒绝、各自内侧一值（`MaxQuota - 1`、`i32::MIN + 1`）仍可表示。`validate_credited_quota`/`check_capacity` 已有 `<= 0` 拒绝，负值端不受影响。
+
+### 8.10 2026-11-10 `/api/log` 读取切片：group 过滤的上游原始缺陷登记 + self/stat 越权聚合按安全立场修复（远程证据待回填）
+
+本节登记 `apps/server/src/log_http.rs`（`/api/log` 七条读取路由切片）对 Go oracle 的两处裁决记录。
+
+**1. group 过滤的 `logs.logs.group` 双前缀（Go 侧原始缺陷，Rust 采用可工作形式，供上游反馈）**
+
+Go 迁移版 `usage.GetAllLogsInternal` 与 `GetUserLogsInternal`（`apps/api/internal/usage/store_log.go:899`、`store_log.go:992`）用包内常量 `logGroupCol = "logs.group"`（`store_log.go:833`）拼条件 `"logs." + logGroupCol + " = ?"`，产出 **`logs.logs.group = ?`**——常量本身已含 `logs.` 前缀，再叠加一次，SQL 必错（PG `missing FROM-clause entry`、SQLite `no such column`）。同文件未迁移的 `GetAllLogs`/`GetUserLogs`（`store_log.go:544`、`store_log.go:635`）用 `dbx.LogGroupCol()`（返回 `"group"` 的带引号列名，`dbx/dbx.go:60`、`dbx/dbx_test.go:64`）拼 `logs."group"`，语义正确；`SumUsedQuotaInternal`（`store_log.go:1051`）的裸表查询同样正确。即正确形态在同文件三处并存，仅 `*Internal` 两处是双前缀缺陷。Rust 侧按可工作形式实现 `logs."group"`（与 Go 未迁移变体及统计端一致），契约测试 `apps/server/tests/log_routes.rs` 的 `?group=default`（命中）/`?group=vip`（零命中）断言锁定该语义——group 过滤在两后端都必须可用而非报错。
+
+**2. `GetLogsSelfStat` 越权聚合（Go 重构回归，Rust 按安全立场修复）**
+
+Go 原始实现（one-api `e4f7ac408`，2023-06）以会话 `username := c.GetString("username")` 限定自助统计口径；`1bd571ec9`（usage capability 迁移）重写 handler 时恒传 `""`：现行为 `usage.SumUsedTokenInternal(logType, start, end, modelName, "", tokenName)`（`apps/api/internal/transport/handler/handle_logs.go:120` → `store_log.go:1084`），过滤只剩 token_name/model_name/时间窗/type=2，**无任何用户限定**——任意登录用户可读取全站消费 token 聚合，属跨用户数据泄露。本端口按安全立场恢复会话限定：`GET /api/log/self/stat` 恒加 `user_id = 会话用户`（`log_http.rs` 的 `self_token_stat`），与同切片 `GetUserLogsInternal`（恒定 `logs.user_id = ?`，`store_log.go:968`）及自助列表行为一致。契约测试 `run_self_stat_contract` 造两个用户（USER_A 100+50、USER_B 7+3）+ 一条 type=1 行（888_888），断言 USER_A 得 150、USER_B 得 10、type=1 不计——任何回到 Go 全局口径的回归都会让断言失败。其余行为（响应体无 `message`、`data` 仅 `token` 键、查询错误静默返 0）逐字保留 Go 形态。
