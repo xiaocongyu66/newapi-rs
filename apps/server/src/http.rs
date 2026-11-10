@@ -644,6 +644,48 @@ fn build_router(state: AppState) -> Router {
             )),
     );
 
+    // `/api/user-insight/*`：Go insightRoute = apiRouter.Group("/user-insight")
+    // （`register_api.go:227-241`），组级只有 `security.AdminAuth()` 一道，
+    // 无限流、无 DisableCache。Fiber 非严格路由使无尾斜杠的 `/api/user-insight`
+    // 等价于 `/api/user-insight/`，两种形态都注册（与 `/api/redemption` 一致）。
+    let user_insight_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user-insight/",
+                get(crate::user_insight_http::list_user_insights),
+            )
+            .route(
+                "/api/user-insight",
+                get(crate::user_insight_http::list_user_insights),
+            )
+            .route(
+                "/api/user-insight/summary",
+                get(crate::user_insight_http::get_user_insight_summary),
+            )
+            .route(
+                "/api/user-insight/client-catalog",
+                get(crate::user_insight_http::get_client_catalog),
+            )
+            .route(
+                "/api/user-insight/client-ban",
+                post(crate::user_insight_http::set_global_client_ban),
+            )
+            .route(
+                "/api/user-insight/{id}",
+                get(crate::user_insight_http::get_user_insight_detail)
+                    .delete(crate::user_insight_http::purge_user_insight_handler),
+            )
+            .route(
+                "/api/user-insight/{id}/client-ban",
+                post(crate::user_insight_http::toggle_user_client_ban_handler),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                user_insight_state,
+                crate::auth::admin_auth,
+            )),
+    );
+
     // `/api/channel*` 基础 CRUD（Go `register_channels.go` 的前八条）：
     // 组级 `AdminAuth()` 之后是路由级 `RequirePermission(...)`——permission
     // 403 在 handler 入口的 `channel_http::require_permission` 复现（401/403
