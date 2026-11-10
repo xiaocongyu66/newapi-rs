@@ -419,6 +419,16 @@ async fn seed_one_column(db: &Database, table: &str, user_id: i64) {
     });
 }
 
+async fn user_id_of(db: &Database, username: &str) -> i64 {
+    backend!(db, pool, {
+        sqlx::query_scalar("SELECT CAST(id AS BIGINT) FROM users WHERE username = $1")
+            .bind(username)
+            .fetch_one(pool)
+            .await
+            .expect("user id by username")
+    })
+}
+
 async fn seed_token(db: &Database, user_id: i64, key: &str) {
     backend!(db, pool, {
         sqlx::query("INSERT INTO tokens (user_id, \"key\") VALUES ($1, $2)")
@@ -965,9 +975,19 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert!(body.get("data").is_none());
-    // 按 id 读取新行（seed 行最大 id=9，序列同步后新行 id=10）。
-    let body =
-        assert_success(send(&app, Method::GET, "/api/user/10", Some(&admin), None).await).await;
+    // 按 id 读取新行（PG 序列在回滚/失败的插入中也消耗，id 不固定，按用户名查）。
+    let newbie_id = user_id_of(&db, "newbie").await;
+    let body = assert_success(
+        send(
+            &app,
+            Method::GET,
+            &format!("/api/user/{newbie_id}"),
+            Some(&admin),
+            None,
+        )
+        .await,
+    )
+    .await;
     assert_eq!(body["data"]["username"], json!("newbie"));
     assert_eq!(
         body["data"]["display_name"],
@@ -987,7 +1007,7 @@ async fn run_contract(db: Database) {
         )
     );
     // 口令已散列（非空、非原文）。
-    let stored_hash = user_column_text(&db, 10, "password").await;
+    let stored_hash = user_column_text(&db, newbie_id, "password").await;
     assert!(!stored_hash.is_empty() && stored_hash != "password123");
     // 用户名唯一约束冲突 → 固定数据库错误（Go 原文回显 SQL 错误）。
     assert_business_message(
@@ -1021,26 +1041,28 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert!(body.get("data").is_none());
+    let perm_admin_id = user_id_of(&db, "perm-admin").await;
+    let perm_admin_subject = format!("user:{perm_admin_id}");
+    let rule_count = |predicate: String| {
+        let db = &db;
+        async move { row_count(db, "casbin_rule", &predicate).await }
+    };
     assert_eq!(
-        row_count(&db, "casbin_rule", "v0 = 'user:11' AND v1 = 'channel'").await,
+        rule_count(format!("v0 = '{perm_admin_subject}' AND v1 = 'channel'")).await,
         2,
         "allow sensitive_write + deny read"
     );
     assert_eq!(
-        row_count(
-            &db,
-            "casbin_rule",
-            "v0 = 'user:11' AND v1 = 'channel' AND v2 = 'sensitive_write' AND v3 = 'allow'"
-        )
+        rule_count(format!(
+            "v0 = '{perm_admin_subject}' AND v1 = 'channel' AND v2 = 'sensitive_write' AND v3 = 'allow'"
+        ))
         .await,
         1
     );
     assert_eq!(
-        row_count(
-            &db,
-            "casbin_rule",
-            "v0 = 'user:11' AND v1 = 'channel' AND v2 = 'read' AND v3 = 'deny'"
-        )
+        rule_count(format!(
+            "v0 = '{perm_admin_subject}' AND v1 = 'channel' AND v2 = 'read' AND v3 = 'deny'"
+        ))
         .await,
         1
     );
@@ -1683,12 +1705,12 @@ async fn run_contract(db: Database) {
             Method::POST,
             "/api/user/manage",
             &pat,
-            &json!({"id": 10, "action": "disable"}),
+            &json!({"id": newbie_id, "action": "disable"}),
         )
         .await,
     )
     .await;
-    assert_eq!(user_column_i64(&db, 10, "status").await, 2);
+    assert_eq!(user_column_i64(&db, newbie_id, "status").await, 2);
 
     // ---- id=0 的 GORM struct 条件退化（按主键取第一行） -------------------------
     // Go `ManageUser` 对 id=0 的 `Unscoped().Where(&user).First(&user)` 退化为

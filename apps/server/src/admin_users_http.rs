@@ -741,11 +741,14 @@ pub async fn create_user(
         Err(_) => return api_error(&headers, MSG_DATABASE_ERROR),
     };
     let finish_settings = load_finish_insert_settings(&state).await;
+    // Go：GORM `default:1` 让零值 role 落库为普通用户（JSON 缺省 role=0 时
+    // 插入语句省略该列，数据库默认值生效）。
+    let role = if payload.role == 0 { 1 } else { payload.role };
     let input = AdminCreateInput {
         username: &username,
         password_hash: &password_hash,
         display_name: &display_name,
-        role: payload.role,
+        role,
         quota: finish_settings.quota_for_new_user,
         created_at: now,
         operator_role: admin_user.0.role,
