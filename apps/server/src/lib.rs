@@ -9,6 +9,7 @@ pub mod amount_http;
 pub mod auth;
 pub mod body_bind;
 pub mod boundary_mw;
+pub mod channel_http;
 pub mod checkin_http;
 mod global_limit;
 pub mod groups_http;

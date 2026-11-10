@@ -6,6 +6,7 @@
 
 pub mod abilities;
 pub mod auth_settings;
+pub mod channels;
 pub mod email_settings;
 pub mod group_settings;
 pub mod public_config;
