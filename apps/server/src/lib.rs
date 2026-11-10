@@ -12,6 +12,7 @@ pub mod boundary_mw;
 pub mod channel_http;
 pub mod checkin_http;
 pub mod custom_oauth_http;
+pub mod gateway_http;
 mod global_limit;
 pub mod groups_http;
 mod http;
