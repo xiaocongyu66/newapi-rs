@@ -37,6 +37,7 @@ pub mod token_http;
 pub mod topup_http;
 pub mod turnstile;
 pub mod twofa_http;
+pub mod user_insight_http;
 pub mod verification_http;
 mod web_limit;
 
