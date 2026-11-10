@@ -502,6 +502,20 @@ async fn assert_business_error(response: Response, key: &str) -> Value {
     body
 }
 
+/// 带参数的 i18n 业务错误（如 `channel.model_name_too_long` 的 `{{.Model}}`）。
+async fn assert_business_error_args(response: Response, key: &str, args: &[(&str, &str)]) -> Value {
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(false), "{}", body);
+    assert_eq!(
+        body["message"],
+        json!(newapi_i18n::translate("en", key, args.iter().cloned())),
+        "{}",
+        body
+    );
+    body
+}
+
 async fn run_contract(db: Database) {
     create_schema(&db).await;
     reset(&db).await;
@@ -982,7 +996,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     let long_model = "a".repeat(256);
-    assert_business_error(
+    assert_business_error_args(
         send(
             &app,
             Method::POST,
@@ -990,11 +1004,17 @@ async fn run_contract(db: Database) {
             Some(&admin),
             Some(&json!({
                 "mode": "single",
-                "channel": {"type": 1, "key": "k", "models": long_model, "name": "x"},
+                "channel": {
+                    "type": 1,
+                    "key": "k",
+                    "models": long_model.as_str(),
+                    "name": "x"
+                },
             })),
         )
         .await,
         "channel.model_name_too_long",
+        &[("Model", long_model.as_str())],
     )
     .await;
 
