@@ -521,6 +521,30 @@ async fn run_contract(db: Database) {
     // ---- 鉴权链：AdminAuth 的 401/403 -------------------------------
     assert_auth_failures(&app, "/api/channel/", &common).await;
 
+    // TEMPORARY DIAGNOSTIC: remove once the list failure is understood.
+    {
+        use newapi_catalog::channels::{
+            ChannelListFilter, ChannelRepository, ChannelSort, store::resolve_sort,
+        };
+        let repository = ChannelRepository::new(db.clone());
+        match repository
+            .list(
+                &ChannelListFilter {
+                    group: newapi_catalog::channels::store::normalize_group_filter(""),
+                    status: newapi_catalog::channels::StatusFilter::All,
+                    channel_type: None,
+                },
+                resolve_sort("", ""),
+                0,
+                10,
+            )
+            .await
+        {
+            Ok(rows) => eprintln!("DIAG direct list ok: {} rows", rows.len()),
+            Err(error) => eprintln!("DIAG direct list error: {error:?}"),
+        }
+    }
+
     // ---- 列表：空库信封 -------------------------------------------
     let body =
         assert_success(send(&app, Method::GET, "/api/channel/", Some(&admin), None).await).await;
