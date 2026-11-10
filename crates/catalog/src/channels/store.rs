@@ -256,13 +256,10 @@ impl ChannelListFilter {
 
     /// 在 `WHERE` 之后追加过滤片段；`leading_and` 表示前面已有条件，
     /// 第一个条件前不再重复 `AND`（两后端共用，`push_bind` 自动编号占位符）。
-    fn push_where<'q, DB: sqlx::Database>(
-        &self,
-        query: &mut sqlx::QueryBuilder<'q, DB>,
-        leading_and: bool,
-    ) where
-        i64: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
-        String: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    fn push_where<DB: sqlx::Database>(&self, query: &mut sqlx::QueryBuilder<DB>, leading_and: bool)
+    where
+        i64: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB>,
+        String: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB>,
     {
         let mut pushed = false;
         if let Some(group) = self.group.as_deref() {
