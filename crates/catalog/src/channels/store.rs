@@ -53,7 +53,12 @@ pub const MASKED_CHANNEL_KEY: &str = "";
 /// `multi_key_disabled_reason` / `multi_key_disabled_time` 带 omitempty，
 /// 其余字段始终序列化（`multi_key_status_list` 为 nil 时输出 null）。
 /// map 的整数键序列化为 JSON 字符串键（Go `map[int]int` 的行为）。
+///
+/// Go 的 `Scan` 走 `json.Unmarshal`，缺字段落下零值而非报错（`store_channel.go:
+/// 175-178`），历史行里常见的 `"{}"` 因此仍是全零结构体；`#[serde(default)]`
+/// 复刻这一宽松语义，只对真正的非法 JSON 上抛解码错误。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChannelInfo {
     pub is_multi_key: bool,
     pub multi_key_size: i64,
@@ -110,11 +115,8 @@ fn parse_channel_info(json: &str) -> Result<ChannelInfo, sqlx::Error> {
     if json.is_empty() {
         return Ok(ChannelInfo::default());
     }
-    serde_json::from_str(json).map_err(|_| {
-        // TEMPORARY DIAGNOSTIC: remove once the channel list failure is understood.
-        eprintln!("DIAG bad channel_info string: {json:?}");
-        sqlx::Error::Decode("channel_info is not valid JSON".into())
-    })
+    serde_json::from_str(json)
+        .map_err(|_| sqlx::Error::Decode("channel_info is not valid JSON".into()))
 }
 
 /// 行解码：`key` 列可能不在 SELECT 列表中（对应 `Omit("key")`），

@@ -1352,8 +1352,6 @@ fn validation_error(headers: &HeaderMap, error: ValidationError) -> Response {
 }
 
 fn database_error(headers: &HeaderMap, error: &sqlx::Error, key: &str) -> Response {
-    // TEMPORARY DIAGNOSTIC: remove once the channel list failure is understood.
-    eprintln!("DIAG channel database_error: key={key} error={error:?}");
     tracing::warn!(
         event = "channel_database_operation_failed",
         category = crate::database_error_class(error),
