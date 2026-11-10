@@ -95,7 +95,7 @@ const ABILITIES_POSTGRES: &str = r#"CREATE TABLE abilities (
     PRIMARY KEY ("group", model, channel_id)
 )"#;
 
-async fn execute(db: &Database, statement: &str) {
+async fn execute(db: &Database, statement: &'static str) {
     match db {
         Database::Sqlite(pool) => {
             sqlx::query(statement).execute(pool).await.unwrap();

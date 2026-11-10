@@ -213,7 +213,7 @@ fn state(db: &Database) -> AppState {
         )
 }
 
-async fn exec(db: &Database, statement: &str) {
+async fn exec(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         sqlx::query(statement).execute(pool).await.expect("fixture");
     });
@@ -299,10 +299,10 @@ async fn seed_session(db: &Database, sid: &str, user_id: i64, at: i64) {
 async fn bump_sequences(db: &Database) {
     if let Database::Postgres(pool) = db {
         for table in ["channels", "logs"] {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 r#"SELECT setval(pg_get_serial_sequence('"{table}"', 'id'),
                        COALESCE((SELECT MAX(id) FROM "{table}"), 0) + 1, false)"#
-            ))
+            )))
             .execute(pool)
             .await
             .expect("bump sequence");

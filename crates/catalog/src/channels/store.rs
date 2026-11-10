@@ -690,7 +690,7 @@ macro_rules! add_abilities {
             query.push(" ON CONFLICT DO NOTHING");
             query.build().execute(&mut *$tx).await?;
         }
-        Ok(())
+        Ok::<(), sqlx::Error>(())
     }};
 }
 
@@ -904,7 +904,7 @@ macro_rules! apply_patch {
             query.push_bind($id);
             query.build().execute(&mut *$tx).await?;
         }
-        Ok(())
+        Ok::<(), sqlx::Error>(())
     }};
 }
 
@@ -912,14 +912,14 @@ macro_rules! apply_patch {
 /// `tx.First(channel, "id = ?", channel.Id)`。
 macro_rules! reload_channel {
     ($tx:expr, $id:expr) => {{
-        let sql = format!("SELECT {CHANNEL_COLUMNS_ALL} FROM channels WHERE id = $1");
-        let row = sqlx::query(&sql)
-            .bind($id)
-            .fetch_optional(&mut *$tx)
-            .await?;
+        let mut query = sqlx::QueryBuilder::new("SELECT ");
+        query.push(CHANNEL_COLUMNS_ALL);
+        query.push(" FROM channels WHERE id = ");
+        query.push_bind($id);
+        let row = query.build().fetch_optional(&mut *$tx).await?;
         match row {
-            Some(ref row) => Ok(Some(channel_row!(row)?)),
-            None => Ok(None),
+            Some(ref row) => Ok(Some(channel_row!(row))),
+            None => Ok::<Option<ChannelRow>, sqlx::Error>(None),
         }
     }};
 }
@@ -941,7 +941,7 @@ macro_rules! delete_in {
         }
         query.push(")");
         let result = query.build().execute(&mut *$tx).await?;
-        Ok(result.rows_affected() as i64)
+        Ok::<i64, sqlx::Error>(result.rows_affected() as i64)
     }};
 }
 
@@ -1032,7 +1032,7 @@ impl ChannelRepository {
             let rows = query.build().fetch_all(pool).await?;
             let mut channels = Vec::with_capacity(rows.len());
             for row in &rows {
-                channels.push(channel_row!(row)?);
+                channels.push(channel_row!(row));
             }
             Ok(channels)
         })
@@ -1102,7 +1102,7 @@ impl ChannelRepository {
             let rows = query.build().fetch_all(pool).await?;
             let mut channels = Vec::with_capacity(rows.len());
             for row in &rows {
-                channels.push(channel_row!(row)?);
+                channels.push(channel_row!(row));
             }
             Ok(channels)
         })
@@ -1178,7 +1178,7 @@ impl ChannelRepository {
             let rows = query.build().fetch_all(pool).await?;
             let mut channels = Vec::with_capacity(rows.len());
             for row in &rows {
-                channels.push(channel_row!(row)?);
+                channels.push(channel_row!(row));
             }
             Ok(channels)
         })
@@ -1191,11 +1191,14 @@ impl ChannelRepository {
         } else {
             CHANNEL_COLUMNS_NO_KEY
         };
-        let sql = format!("SELECT {columns} FROM channels WHERE id = $1");
         backend!(&self.db, pool, {
-            let row = sqlx::query(&sql).bind(id).fetch_optional(pool).await?;
+            let mut query = sqlx::QueryBuilder::new("SELECT ");
+            query.push(columns);
+            query.push(" FROM channels WHERE id = ");
+            query.push_bind(id);
+            let row = query.build().fetch_optional(pool).await?;
             match row {
-                Some(ref row) => Ok(Some(channel_row!(row)?)),
+                Some(ref row) => Ok(Some(channel_row!(row))),
                 None => Ok(None),
             }
         })
@@ -1299,8 +1302,8 @@ impl ChannelRepository {
             deleted += backend!(&self.db, pool, {
                 let mut transaction = pool.begin().await?;
                 let outcome: Result<i64, sqlx::Error> = async {
-                    let count = delete_in!(transaction, "channels", "id", chunk).await?;
-                    delete_in!(transaction, "abilities", "channel_id", chunk).await?;
+                    let count = delete_in!(transaction, "channels", "id", chunk)?;
+                    delete_in!(transaction, "abilities", "channel_id", chunk)?;
                     Ok(count)
                 }
                 .await;
