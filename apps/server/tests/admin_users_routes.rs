@@ -608,6 +608,7 @@ async fn run_contract(db: Database) {
     seed_session(&db, "sid-admin", 1, at).await;
     seed_session(&db, "sid-root", 4, at).await;
     seed_session(&db, "sid-common", 5, at).await;
+    seed_session(&db, "sid-guest", 9, at).await;
     seed_session(&db, "sid-target", 2, at).await;
     seed_rule(&db, "user:2", "channel", "read", "allow").await;
     seed_qq(&db, 2, "qq-open-2").await;
