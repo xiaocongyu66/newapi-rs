@@ -463,12 +463,12 @@ macro_rules! tx_clear_user_authorization {
 /// 返回 `authzTouched`（Go 据此 ReloadPolicy；Rust 无内存 enforcer，等价
 /// 为无操作，此处仅保留返回形状）。
 macro_rules! tx_apply_permission_overrides {
-    ($tx:expr, $operator_role:expr, $target_role:expr, $permissions:expr) => {{
+    ($tx:expr, $user_id:expr, $operator_role:expr, $target_role:expr, $permissions:expr) => {{
         let touched;
         match $permissions {
             None => {
                 if $target_role < ROLE_ADMIN_USER && $operator_role == ROLE_ROOT_USER {
-                    tx_clear_user_authorization!($tx, $target_role);
+                    tx_clear_user_authorization!($tx, $user_id);
                     touched = true;
                 } else {
                     touched = false;
@@ -479,10 +479,10 @@ macro_rules! tx_apply_permission_overrides {
                     return Err(AdminPermissionError::OnlyRootCanUpdate);
                 }
                 if $target_role < ROLE_ADMIN_USER {
-                    tx_clear_user_authorization!($tx, $target_role);
+                    tx_clear_user_authorization!($tx, $user_id);
                     touched = true;
                 } else {
-                    let subject = user_subject($target_role);
+                    let subject = user_subject($user_id);
                     for (resource_name, actions) in permissions.iter() {
                         let Some(resource) = catalog_resource(resource_name) else {
                             continue;
@@ -682,7 +682,13 @@ impl AdminUserRepository {
                 .bind(crate::registration::DEFAULT_USER_SETTING)
                 .fetch_one(&mut *tx)
                 .await?;
-            tx_apply_permission_overrides!(tx, input.operator_role, input.role, input.permissions);
+            tx_apply_permission_overrides!(
+                tx,
+                user_id,
+                input.operator_role,
+                input.role,
+                input.permissions
+            );
             tx.commit().await?;
         });
         Ok(user_id)
@@ -736,6 +742,7 @@ impl AdminUserRepository {
             }
             tx_apply_permission_overrides!(
                 tx,
+                input.user_id,
                 input.operator_role,
                 input.target_role,
                 input.permissions
