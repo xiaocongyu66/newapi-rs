@@ -284,6 +284,23 @@ async fn reset(db: &Database) {
     exec(db, "DELETE FROM users").await;
 }
 
+/// PG 的 BIGSERIAL 不因显式 id 插入而前进；把序列推到已种 id 之后，
+/// 否则经 API 创建的第一行会与种入行主键冲突（SQLite AUTOINCREMENT
+/// 无此问题，直接跳过）。与 `channel_routes.rs` 同一修法。
+async fn bump_sequences(db: &Database) {
+    if let Database::Postgres(pool) = db {
+        for table in ["models", "vendors", "channels"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                r#"SELECT setval(pg_get_serial_sequence('"{table}"', 'id'),
+                       COALESCE((SELECT MAX(id) FROM "{table}"), 0) + 1, false)"#
+            )))
+            .execute(pool)
+            .await
+            .expect("bump sequence");
+        }
+    }
+}
+
 async fn seed_user(db: &Database, id: i64, username: &str, role: i64) {
     backend!(db, pool, {
         sqlx::query(
@@ -527,6 +544,7 @@ async fn contract(db: &Database) {
     );
     create_schema(db).await;
     reset(db).await;
+    bump_sequences(db).await;
     seed_user(db, 1, "admin-one", 10).await;
     seed_user(db, 3, "common-one", 1).await;
     let at = now();
