@@ -164,6 +164,8 @@ const MSG_TELEGRAM_DISABLED: &str = "管理员未开启通过 Telegram 登录以
 const MSG_BIND_NEEDS_LOGIN: &str = "绑定操作需要登录";
 const MSG_WECHAT_ALREADY_BOUND: &str = "该微信账号已被绑定";
 const MSG_TELEGRAM_REPLAYED: &str = "该登录凭据已被使用";
+const MSG_WECHAT_REGISTER_DISABLED: &str = "管理员关闭了新用户注册";
+const MSG_TELEGRAM_NOT_BOUND: &str = "该 Telegram 账户未绑定";
 
 fn auth_flows_ddl(db: &Database) -> &'static str {
     match db {
@@ -395,7 +397,7 @@ async fn send_injected(
         None => builder.body(Body::empty()),
     };
     let mut request = builder.unwrap();
-    request.extensions_mut().extension(injected(transport));
+    request.extensions_mut().insert(injected(transport));
     router(state.clone()).oneshot(request).await.unwrap()
 }
 
@@ -584,8 +586,9 @@ async fn run_provider_disabled_contract(db: Database) {
         None,
     )
     .await;
+    let status = response.status();
     let body = body_json(response).await;
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(body["success"], json!(false));
     assert!(
         body["message"].as_str().unwrap().contains("GitHub"),
@@ -655,7 +658,7 @@ async fn run_provider_login_contract(db: Database) {
         .body(Body::empty())
         .unwrap();
     let mut request = request;
-    request.extensions_mut().extension(injected(FakeTransport {
+    request.extensions_mut().insert(injected(FakeTransport {
         responses: std::sync::Mutex::new(vec![
             (
                 "https://github.com/login/oauth/access_token".to_owned(),
@@ -713,7 +716,6 @@ async fn run_wechat_login_contract(db: Database) {
         ),
     )
     .await;
-    let response = router(app.clone()).oneshot(response).await.unwrap();
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(false), "{body}");
 
@@ -732,7 +734,6 @@ async fn run_wechat_login_contract(db: Database) {
     )
     .await;
     set_option(&db, "RegisterEnabled", "false").await;
-    let response = router(app.clone()).oneshot(response).await.unwrap();
     assert_eq!(
         body_json(response).await["message"],
         json!(MSG_WECHAT_REGISTER_DISABLED)
@@ -753,7 +754,6 @@ async fn run_wechat_login_contract(db: Database) {
         ),
     )
     .await;
-    let response = router(app.clone()).oneshot(response).await.unwrap();
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(true), "{body}");
     assert_eq!(body["data"]["session"]["login_method"], json!("wechat"));
@@ -773,7 +773,6 @@ async fn run_wechat_login_contract(db: Database) {
         ),
     )
     .await;
-    let response = router(app.clone()).oneshot(response).await.unwrap();
     assert_eq!(body_json(response).await["success"], json!(true));
 }
 
@@ -834,7 +833,6 @@ async fn run_wechat_bind_contract(db: Database) {
         ),
     )
     .await;
-    let response = router(app.clone()).oneshot(response).await.unwrap();
     assert_eq!(
         body_json(response).await["message"],
         json!(MSG_WECHAT_ALREADY_BOUND)
@@ -854,7 +852,6 @@ async fn run_wechat_bind_contract(db: Database) {
         ),
     )
     .await;
-    let response = router(app.clone()).oneshot(response).await.unwrap();
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(true), "{body}");
     assert_eq!(body["message"], json!(""));
