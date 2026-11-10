@@ -247,6 +247,27 @@ impl PolicySnapshot {
     }
 }
 
+/// Go `roleBaselineAllows(e, BuiltInRoleAdmin, permission)`
+/// （`policy/override.go:145`）：管理员角色的基线放行结果。Go 从 enforcer 里
+/// 读 `role:admin` 的显式 p 行，而这些行正是由注册表 `default_roles` 种子
+/// 生成的（`policy/seed.go:seedDefaultPolicies` → `PermissionsForRole`），
+/// 因此这里直接读注册表，与已种子化部署的 enforcer 等价。
+pub fn admin_baseline_allows(permission: Permission) -> bool {
+    CATALOG
+        .iter()
+        .filter(|resource| resource.resource == permission.resource)
+        .flat_map(|resource| resource.actions)
+        .find(|action| action.action == permission.action)
+        .is_some_and(|action| action.default_roles.contains(&ADMIN_ROLE))
+}
+
+/// 用户级覆盖写库需要的注册表资源查找；未知资源返回 `None`。
+pub fn catalog_resource(resource: &str) -> Option<&'static ResourceDefinition> {
+    CATALOG
+        .iter()
+        .find(|definition| definition.resource == resource)
+}
+
 /// 任一显式 deny 即拒绝；否则存在 allow 时放行；没有规则返回 None。
 fn effect_from_rows<'a>(values: impl Iterator<Item = &'a str>) -> Option<RuleEffect> {
     let mut allow = false;

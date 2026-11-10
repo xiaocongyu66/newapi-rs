@@ -4,6 +4,7 @@
 #![recursion_limit = "256"]
 
 pub mod admin_twofa_http;
+pub mod admin_users_http;
 pub mod aff_http;
 pub mod amount_http;
 pub mod auth;
