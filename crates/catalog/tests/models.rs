@@ -422,9 +422,13 @@ async fn contract(db: &Database) {
 
     let (rows, total) = repository.search("", "", None, None, 0, 10).await.unwrap();
     // 软删除的 99 不计；排序 id DESC。
-    assert_eq!(total, 4);
+    // 存活 5 行：m-zero、m-explicit、gpt-alpha、gpt-beta、claude；99 已软删。
+    assert_eq!(total, 5);
     let names: Vec<&str> = rows.iter().map(|row| row.model_name.as_str()).collect();
-    assert_eq!(names, vec!["claude", "gpt-beta", "gpt-alpha", "m-explicit"]);
+    assert_eq!(
+        names,
+        vec!["gpt-beta", "claude", "gpt-alpha", "m-explicit", "m-zero"]
+    );
 
     let (rows, total) = repository
         .search("gpt", "", None, None, 0, 10)
@@ -466,13 +470,14 @@ async fn contract(db: &Database) {
         .search("", "", None, Some(0), 0, 10)
         .await
         .unwrap();
-    assert_eq!(total, 1); // gpt-beta
+    // m-zero 与 gpt-beta 都是 sync_official=0。
+    assert_eq!(total, 2);
 
     // 分页：LIMIT/OFFSET。
     let (rows, total) = repository.search("", "", None, None, 1, 2).await.unwrap();
-    assert_eq!(total, 4);
+    assert_eq!(total, 5);
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].model_name, "gpt-beta");
+    assert_eq!(rows[0].model_name, "claude");
 
     // ---- 更新：整列覆写含零值；updated_time 刷新 --------------------
     repository
