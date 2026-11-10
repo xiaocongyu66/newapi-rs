@@ -523,9 +523,7 @@ async fn run_contract(db: Database) {
 
     // TEMPORARY DIAGNOSTIC: remove once the list failure is understood.
     {
-        use newapi_catalog::channels::{
-            ChannelListFilter, ChannelRepository, ChannelSort, store::resolve_sort,
-        };
+        use newapi_catalog::channels::{ChannelListFilter, ChannelRepository, store::resolve_sort};
         let repository = ChannelRepository::new(db.clone());
         match repository
             .list(
