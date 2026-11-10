@@ -68,7 +68,7 @@ pub fn verify_telegram_authorization(
     // Go：secret = SHA256(bot token)，再以其为 key 做 HMAC-SHA256。
     let secret = Sha256::digest(bot_token.as_bytes());
     let expected = crypto::mac(&secret, joined.as_bytes());
-    let Ok(provided) = hex_decode(hash) else {
+    let Some(provided) = hex_decode(hash) else {
         return Err(TelegramVerifyError);
     };
     if !crypto::equal(&provided, &expected) {
@@ -149,7 +149,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 mod tests {

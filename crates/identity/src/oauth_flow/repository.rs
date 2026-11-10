@@ -20,7 +20,7 @@
 //! 互转，绝不把 BIGINT 直接写进这些列。
 
 use newapi_storage::Database;
-use sqlx::{QueryBuilder, Row};
+use sqlx::QueryBuilder;
 
 use crate::SecretString;
 use crate::auth_flow::token::{generate_token, token_hash};
@@ -127,27 +127,31 @@ impl Dialect {
     }
 }
 
-/// 通用行投影；两个后端的别名一致。
-fn record_flow<R: sqlx::Row>(row: R) -> Result<OAuthFlow, sqlx::Error> {
-    Ok(OAuthFlow {
-        id: row.try_get("id")?,
-        purpose: row.try_get("purpose")?,
-        provider: row
-            .try_get::<Option<String>, _>("provider")?
-            .unwrap_or_default(),
-        intent: row
-            .try_get::<Option<String>, _>("intent")?
-            .unwrap_or_default(),
-        user_id: row.try_get::<Option<i64>, _>("user_id")?.unwrap_or(0),
-        session_id: row
-            .try_get::<Option<String>, _>("session_id")?
-            .unwrap_or_default(),
-        payload: row
-            .try_get::<Option<String>, _>("payload")?
-            .unwrap_or_default(),
-        expires_at: row.try_get("expires_at")?,
-        consumed_at: row.try_get::<Option<i64>, _>("consumed_at")?,
-    })
+/// 行投影宏（两个后端别名一致）；在具体行类型处展开——泛型 `R: Row` 上
+/// 的 `try_get` 无法满足 `Decode/Type` 绑定（sqlx 0.9 泛型约束）。
+macro_rules! flow_row {
+    ($row:expr) => {{
+        let row = $row;
+        Ok::<OAuthFlow, sqlx::Error>(OAuthFlow {
+            id: row.try_get("id")?,
+            purpose: row.try_get("purpose")?,
+            provider: row
+                .try_get::<Option<String>, _>("provider")?
+                .unwrap_or_default(),
+            intent: row
+                .try_get::<Option<String>, _>("intent")?
+                .unwrap_or_default(),
+            user_id: row.try_get::<Option<i64>, _>("user_id")?.unwrap_or(0),
+            session_id: row
+                .try_get::<Option<String>, _>("session_id")?
+                .unwrap_or_default(),
+            payload: row
+                .try_get::<Option<String>, _>("payload")?
+                .unwrap_or_default(),
+            expires_at: row.try_get("expires_at")?,
+            consumed_at: row.try_get::<Option<i64>, _>("consumed_at")?,
+        })
+    }};
 }
 
 /// Go `AuthFlow` 的行投影；`user_id` 为 0 / `session_id` 为空串表示匿名
@@ -187,274 +191,41 @@ pub struct OAuthFlowMatch<'a> {
 }
 
 /// 追加 `provider` / `intent` / `user_id` / `session_id` 的非零值过滤。
-fn push_optional_match<'a, DB: sqlx::Database>(
-    query: &mut QueryBuilder<'a, DB>,
+fn push_optional_match_sqlite<'a>(
+    query: &mut QueryBuilder<sqlx::Sqlite>,
     matching: &OAuthFlowMatch<'a>,
 ) {
-    if !matching.provider.is_empty() {
-        query.push(" AND provider=").push_bind(matching.provider);
-    }
-    if !matching.intent.is_empty() {
-        query.push(" AND intent=").push_bind(matching.intent);
-    }
-    if matching.user_id != 0 {
-        query.push(" AND user_id=").push_bind(matching.user_id);
-    }
-    if !matching.session_id.is_empty() {
-        query
-            .push(" AND session_id=")
-            .push_bind(matching.session_id);
-    }
+    push_optional_match_impl!(query, matching);
 }
 
-/// 持有连接池与 auth-flow HMAC key；key 不实现 Debug。
-#[derive(Clone)]
-pub struct OAuthFlowRepository {
-    db: Database,
-    key: Vec<u8>,
+/// 追加非零值过滤（PG）。
+fn push_optional_match_postgres<'a>(
+    query: &mut QueryBuilder<sqlx::Postgres>,
+    matching: &OAuthFlowMatch<'a>,
+) {
+    push_optional_match_impl!(query, matching);
 }
 
-impl OAuthFlowRepository {
-    /// key 必须与 [`crate::auth_flow`] 的 key 一致（`auth_flow_key(secret)`）。
-    pub fn new(db: Database, key: impl Into<Vec<u8>>) -> Self {
-        Self {
-            db,
-            key: key.into(),
+/// 非零值过滤的共享体（宏展开到具体后端；泛型 `DB: Database` 上的
+/// push_bind 无法满足 Encode 绑定）。
+macro_rules! push_optional_match_impl {
+    ($query:expr, $matching:expr) => {{
+        if !$matching.provider.is_empty() {
+            $query.push(" AND provider=").push_bind($matching.provider);
         }
-    }
-
-    /// Go `CreateAuthFlow`：purpose 非空且未过期即插入，返回原始 token。
-    /// `expires_at <= now` 与空 purpose 归为 FlowInvalid（Go
-    /// `ErrAuthFlowInvalid`；HTTP 层三个 flow 错误同码）。
-    pub async fn create(
-        &self,
-        input: CreateOAuthFlow,
-        now: i64,
-    ) -> Result<SecretString, TelegramFlowError> {
-        if input.purpose.trim().is_empty() || input.expires_at <= now {
-            return Err(TelegramFlowError::FlowInvalid);
+        if !$matching.intent.is_empty() {
+            $query.push(" AND intent=").push_bind($matching.intent);
         }
-        let raw = generate_token()?;
-        let hash = token_hash(&self.key, raw.expose_secret());
-        let dialect = Dialect::of(&self.db);
-        backend!(&self.db, pool, {
-            let mut insert = QueryBuilder::new(
-                "INSERT INTO auth_flows (token_hash,purpose,provider,intent,user_id,session_id,payload,expires_at,consumed_at,created_at) VALUES (",
-            );
-            insert
-                .push_bind(hash.as_str())
-                .push(",")
-                .push_bind(input.purpose)
-                .push(",")
-                .push_bind(&input.provider)
-                .push(",")
-                .push_bind(&input.intent)
-                .push(",")
-                .push_bind(input.user_id)
-                .push(",")
-                .push_bind(&input.session_id)
-                .push(",")
-                .push_bind(&input.payload)
-                .push(",");
-            push_timestamp!(insert, dialect, input.expires_at);
-            insert.push(",NULL,");
-            push_timestamp!(insert, dialect, now);
-            insert.push(")");
-            insert.build().execute(pool).await?;
-        });
-        Ok(raw)
-    }
-
-    /// Go `GetAuthFlow`：只读校验，已消费优先于过期判定。三个 Go 错误码
-    /// （Invalid/Expired/Consumed）在 HTTP 层同码（Telegram:
-    /// `TELEGRAM_BIND_FLOW_INVALID`；OAuth: `oauth.state_invalid`），
-    /// 统一折叠为 [`TelegramFlowError::FlowInvalid`]。
-    pub async fn get(
-        &self,
-        token: &str,
-        matching: OAuthFlowMatch<'_>,
-        now: i64,
-    ) -> Result<OAuthFlow, TelegramFlowError> {
-        if token.is_empty() || matching.purpose.is_empty() {
-            return Err(TelegramFlowError::FlowInvalid);
+        if $matching.user_id != 0 {
+            $query.push(" AND user_id=").push_bind($matching.user_id);
         }
-        let hash = token_hash(&self.key, token);
-        let flow = self.fetch_flow(&hash, &matching).await?;
-        classify_existing(flow, now)
-    }
-
-    /// Go `ConsumeAuthFlow`：条件 UPDATE 的原子消费，唯一赢家读回。
-    pub async fn consume(
-        &self,
-        token: &str,
-        matching: OAuthFlowMatch<'_>,
-        now: i64,
-    ) -> Result<OAuthFlow, TelegramFlowError> {
-        if token.is_empty() || matching.purpose.is_empty() {
-            return Err(TelegramFlowError::FlowInvalid);
+        if !$matching.session_id.is_empty() {
+            $query
+                .push(" AND session_id=")
+                .push_bind($matching.session_id);
         }
-        let hash = token_hash(&self.key, token);
-        let affected = self.consume_update(&hash, &matching, now).await?;
-        if affected == 1 {
-            let mut flow = self
-                .fetch_flow(&hash, &matching)
-                .await?
-                .ok_or(TelegramFlowError::Storage)?;
-            flow.consumed_at = Some(now);
-            return Ok(flow);
-        }
-        // 未命中：重读区分不存在与已存在但不可消费；对 HTTP 层等价。
-        let existing = self.fetch_flow(&hash, &matching).await?;
-        match existing {
-            None => Err(TelegramFlowError::FlowInvalid),
-            Some(flow) => classify_existing(flow, now),
-        }
-    }
+    }};
 
-    /// Go `ClaimExternalAuthAssertion`（非事务变体）：断言防重放的独立提交。
-    pub async fn claim_assertion(
-        &self,
-        assertion: &str,
-        expires_at: i64,
-        now: i64,
-    ) -> Result<(), TelegramFlowError> {
-        let dialect = Dialect::of(&self.db);
-        let key = self.key.as_slice();
-        backend!(&self.db, pool, {
-            claim_assertion_body!(
-                pool,
-                dialect,
-                PURPOSE_TELEGRAM_ASSERTION,
-                assertion,
-                expires_at,
-                now,
-                key
-            )
-        })
-    }
-
-    /// Go `TelegramBind` 的事务主体：消费 flow → 断言防重放 → 用户/会话/
-    /// 外部身份/绑定列的检查与更新，全部在一个数据库事务内提交或回滚。
-    /// SQLite 用 `BEGIN IMMEDIATE` 保证读改写原子；PG 用默认隔离 +
-    /// `FOR UPDATE` 行锁（Go `LockForUpdate`）。事务随 `Err` 提前返回由
-    /// sqlx 安排回滚（与 setup 切片同一约定）。
-    pub async fn consume_telegram_bind(
-        &self,
-        token: &str,
-        matching: OAuthFlowMatch<'_>,
-        telegram_id: &str,
-        assertion: &str,
-        assertion_expires_at: i64,
-        now: i64,
-    ) -> Result<String, TelegramFlowError> {
-        if token.is_empty() || matching.purpose.is_empty() {
-            return Err(TelegramFlowError::FlowInvalid);
-        }
-        let hash = token_hash(&self.key, token);
-        let key = self.key.as_slice();
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-                let outcome = telegram_bind_body!(
-                    &mut *tx,
-                    Dialect::Sqlite,
-                    key,
-                    hash.as_str(),
-                    &matching,
-                    telegram_id,
-                    assertion,
-                    assertion_expires_at,
-                    now
-                );
-                match outcome {
-                    Ok(value) => {
-                        tx.commit().await?;
-                        Ok(value)
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-            Database::Postgres(pool) => {
-                let mut tx = pool.begin().await?;
-                let outcome = telegram_bind_body!(
-                    &mut *tx,
-                    Dialect::Postgres,
-                    key,
-                    hash.as_str(),
-                    &matching,
-                    telegram_id,
-                    assertion,
-                    assertion_expires_at,
-                    now
-                );
-                match outcome {
-                    Ok(value) => {
-                        tx.commit().await?;
-                        Ok(value)
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-        }
-    }
-
-    /// 按 token 摘要 + 匹配条件读单条 flow；不存在返回 `None`。
-    async fn fetch_flow(
-        &self,
-        hash: &str,
-        matching: &OAuthFlowMatch<'_>,
-    ) -> Result<Option<OAuthFlow>, TelegramFlowError> {
-        let dialect = Dialect::of(&self.db);
-        let row = backend!(&self.db, pool, {
-            let mut query = QueryBuilder::new("SELECT ");
-            query
-                .push(dialect.columns())
-                .push(" FROM auth_flows WHERE token_hash=")
-                .push_bind(hash)
-                .push(" AND purpose=")
-                .push_bind(matching.purpose);
-            push_optional_match(&mut query, matching);
-            query.build().fetch_optional(pool).await?
-        });
-        row.map(record_flow).transpose().map_err(sqlx::Error::into)
-    }
-
-    /// Go 的条件 UPDATE：`consumed_at = now WHERE … AND consumed_at IS NULL
-    /// AND expires_at > now`。返回命中行数。
-    async fn consume_update(
-        &self,
-        hash: &str,
-        matching: &OAuthFlowMatch<'_>,
-        now: i64,
-    ) -> Result<u64, TelegramFlowError> {
-        let dialect = Dialect::of(&self.db);
-        let affected = backend!(&self.db, pool, {
-            let mut update = QueryBuilder::new("UPDATE auth_flows SET consumed_at=");
-            push_timestamp!(update, dialect, now);
-            update
-                .push(" WHERE token_hash=")
-                .push_bind(hash)
-                .push(" AND purpose=")
-                .push_bind(matching.purpose);
-            push_optional_match(&mut update, matching);
-            update.push(" AND consumed_at IS NULL AND expires_at>");
-            push_timestamp!(update, dialect, now);
-            update.build().execute(pool).await?.rows_affected()
-        });
-        Ok(affected)
-    }
-}
-
-/// Go 的分类顺序：已消费优先于过期；不存在（上游已判）不经过这里。
-fn classify_existing(flow: OAuthFlow, now: i64) -> Result<OAuthFlow, TelegramFlowError> {
-    if flow.consumed_at.is_some() {
-        return Err(TelegramFlowError::FlowInvalid);
-    }
-    if flow.expires_at <= now {
-        return Err(TelegramFlowError::FlowInvalid);
-    }
-    Ok(flow)
-}
 
 /// Go `TelegramBind` 的事务闭包体（`bind_telegram.go:144-199`）：消费 flow →
 /// 断言防重放 → 用户/会话/外部身份/绑定列的检查与更新。按宏展开成具体
@@ -487,7 +258,7 @@ macro_rules! telegram_bind_body {
             .fetch_optional($executor)
             .await?
             .ok_or(TelegramFlowError::FlowInvalid)?;
-        let flow = record_flow(row)?;
+        let flow = flow_row!(row)?;
         if flow.consumed_at.is_some() {
             return Err(TelegramFlowError::FlowInvalid);
         }
@@ -615,4 +386,291 @@ macro_rules! telegram_bind_body {
         }
         Ok::<String, TelegramFlowError>($telegram_id.to_owned())
     }};
+}
+
+/// 持有连接池与 auth-flow HMAC key；key 不实现 Debug。
+#[derive(Clone)]
+pub struct OAuthFlowRepository {
+    db: Database,
+    key: Vec<u8>,
+}
+
+impl OAuthFlowRepository {
+    /// key 必须与 [`crate::auth_flow`] 的 key 一致（`auth_flow_key(secret)`）。
+    pub fn new(db: Database, key: impl Into<Vec<u8>>) -> Self {
+        Self {
+            db,
+            key: key.into(),
+        }
+    }
+
+    /// Go `CreateAuthFlow`：purpose 非空且未过期即插入，返回原始 token。
+    /// `expires_at <= now` 与空 purpose 归为 FlowInvalid（Go
+    /// `ErrAuthFlowInvalid`；HTTP 层三个 flow 错误同码）。
+    pub async fn create(
+        &self,
+        input: CreateOAuthFlow,
+        now: i64,
+    ) -> Result<SecretString, TelegramFlowError> {
+        if input.purpose.trim().is_empty() || input.expires_at <= now {
+            return Err(TelegramFlowError::FlowInvalid);
+        }
+        // generate_token 只在 CSPRNG 故障时失败，折叠为 Storage。
+        let raw = generate_token().map_err(|_| TelegramFlowError::Storage)?;
+        let hash = token_hash(&self.key, raw.expose_secret());
+        let dialect = Dialect::of(&self.db);
+        backend!(&self.db, pool, {
+            let mut insert = QueryBuilder::new(
+                "INSERT INTO auth_flows (token_hash,purpose,provider,intent,user_id,session_id,payload,expires_at,consumed_at,created_at) VALUES (",
+            );
+            insert
+                .push_bind(hash.as_str())
+                .push(",")
+                .push_bind(input.purpose)
+                .push(",")
+                .push_bind(&input.provider)
+                .push(",")
+                .push_bind(&input.intent)
+                .push(",")
+                .push_bind(input.user_id)
+                .push(",")
+                .push_bind(&input.session_id)
+                .push(",")
+                .push_bind(&input.payload)
+                .push(",");
+            push_timestamp!(insert, dialect, input.expires_at);
+            insert.push(",NULL,");
+            push_timestamp!(insert, dialect, now);
+            insert.push(")");
+            insert.build().execute(pool).await?;
+        });
+        Ok(raw)
+    }
+
+    /// Go `GetAuthFlow`：只读校验，已消费优先于过期判定。三个 Go 错误码
+    /// （Invalid/Expired/Consumed）在 HTTP 层同码（Telegram:
+    /// `TELEGRAM_BIND_FLOW_INVALID`；OAuth: `oauth.state_invalid`），
+    /// 统一折叠为 [`TelegramFlowError::FlowInvalid`]。
+    pub async fn get(
+        &self,
+        token: &str,
+        matching: OAuthFlowMatch<'_>,
+        now: i64,
+    ) -> Result<OAuthFlow, TelegramFlowError> {
+        if token.is_empty() || matching.purpose.is_empty() {
+            return Err(TelegramFlowError::FlowInvalid);
+        }
+        let hash = token_hash(&self.key, token);
+        match self.fetch_flow(&hash, &matching).await? {
+            None => Err(TelegramFlowError::FlowInvalid),
+            Some(flow) => classify_existing(flow, now),
+        }
+    }
+
+    /// Go `ConsumeAuthFlow`：条件 UPDATE 的原子消费，唯一赢家读回。
+    pub async fn consume(
+        &self,
+        token: &str,
+        matching: OAuthFlowMatch<'_>,
+        now: i64,
+    ) -> Result<OAuthFlow, TelegramFlowError> {
+        if token.is_empty() || matching.purpose.is_empty() {
+            return Err(TelegramFlowError::FlowInvalid);
+        }
+        let hash = token_hash(&self.key, token);
+        let affected = self.consume_update(&hash, &matching, now).await?;
+        if affected == 1 {
+            let mut flow = self
+                .fetch_flow(&hash, &matching)
+                .await?
+                .ok_or(TelegramFlowError::Storage)?;
+            flow.consumed_at = Some(now);
+            return Ok(flow);
+        }
+        // 未命中：重读区分不存在与已存在但不可消费；对 HTTP 层等价。
+        let existing = self.fetch_flow(&hash, &matching).await?;
+        match existing {
+            None => Err(TelegramFlowError::FlowInvalid),
+            Some(flow) => classify_existing(flow, now),
+        }
+    }
+
+    /// Go `ClaimExternalAuthAssertion`（非事务变体）：断言防重放的独立提交。
+    pub async fn claim_assertion(
+        &self,
+        assertion: &str,
+        expires_at: i64,
+        now: i64,
+    ) -> Result<(), TelegramFlowError> {
+        let dialect = Dialect::of(&self.db);
+        let key = self.key.as_slice();
+        backend!(&self.db, pool, {
+            claim_assertion_body!(
+                pool,
+                dialect,
+                PURPOSE_TELEGRAM_ASSERTION,
+                assertion,
+                expires_at,
+                now,
+                key
+            )
+        })
+    }
+
+
+    /// Go `TelegramBind` 的事务主体：消费 flow → 断言防重放 → 用户/会话/
+    /// 外部身份/绑定列的检查与更新，全部在一个数据库事务内提交或回滚。
+    /// SQLite 用 `BEGIN IMMEDIATE` 保证读改写原子；PG 用默认隔离 +
+    /// `FOR UPDATE` 行锁（Go `LockForUpdate`）。事务随 `Err` 提前返回由
+    /// sqlx 安排回滚（与 setup 切片同一约定）。
+    pub async fn consume_telegram_bind(
+        &self,
+        token: &str,
+        matching: OAuthFlowMatch<'_>,
+        telegram_id: &str,
+        assertion: &str,
+        assertion_expires_at: i64,
+        now: i64,
+    ) -> Result<String, TelegramFlowError> {
+        if token.is_empty() || matching.purpose.is_empty() {
+            return Err(TelegramFlowError::FlowInvalid);
+        }
+        let hash = token_hash(&self.key, token);
+        let key = self.key.as_slice();
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+                let outcome = telegram_bind_body!(
+                    &mut *tx,
+                    Dialect::Sqlite,
+                    key,
+                    hash.as_str(),
+                    &matching,
+                    telegram_id,
+                    assertion,
+                    assertion_expires_at,
+                    now
+                );
+                match outcome {
+                    Ok(value) => {
+                        tx.commit().await?;
+                        Ok(value)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                let outcome = telegram_bind_body!(
+                    &mut *tx,
+                    Dialect::Postgres,
+                    key,
+                    hash.as_str(),
+                    &matching,
+                    telegram_id,
+                    assertion,
+                    assertion_expires_at,
+                    now
+                );
+                match outcome {
+                    Ok(value) => {
+                        tx.commit().await?;
+                        Ok(value)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+        }
+    }
+
+    /// 按 token 摘要 + 匹配条件读单条 flow；不存在返回 `None`。投影在
+    /// 每个后端臂内完成（行类型在臂内具体化，泛型无法满足 Decode 绑定）。
+    async fn fetch_flow(
+        &self,
+        hash: &str,
+        matching: &OAuthFlowMatch<'_>,
+    ) -> Result<Option<OAuthFlow>, TelegramFlowError> {
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let mut query = QueryBuilder::new("SELECT ");
+                query
+                    .push(FLOW_COLUMNS_SQLITE)
+                    .push(" FROM auth_flows WHERE token_hash=")
+                    .push_bind(hash)
+                    .push(" AND purpose=")
+                    .push_bind(matching.purpose);
+                push_optional_match_sqlite(&mut query, matching);
+                let row = query.build().fetch_optional(pool).await?;
+                row.map(|row| flow_row!(row))
+                    .transpose()
+                    .map_err(sqlx::Error::into)
+            }
+            Database::Postgres(pool) => {
+                let mut query = QueryBuilder::new("SELECT ");
+                query
+                    .push(FLOW_COLUMNS_POSTGRES)
+                    .push(" FROM auth_flows WHERE token_hash=")
+                    .push_bind(hash)
+                    .push(" AND purpose=")
+                    .push_bind(matching.purpose);
+                push_optional_match_postgres(&mut query, matching);
+                let row = query.build().fetch_optional(pool).await?;
+                row.map(|row| flow_row!(row))
+                    .transpose()
+                    .map_err(sqlx::Error::into)
+            }
+        }
+    }
+
+    /// Go 的条件 UPDATE：`consumed_at = now WHERE … AND consumed_at IS NULL
+    /// AND expires_at > now`。返回命中行数。
+    async fn consume_update(
+        &self,
+        hash: &str,
+        matching: &OAuthFlowMatch<'_>,
+        now: i64,
+    ) -> Result<u64, TelegramFlowError> {
+        let affected = match &self.db {
+            Database::Sqlite(pool) => {
+                let mut update = QueryBuilder::new("UPDATE auth_flows SET consumed_at=");
+                push_timestamp!(update, Dialect::Sqlite, now);
+                update
+                    .push(" WHERE token_hash=")
+                    .push_bind(hash)
+                    .push(" AND purpose=")
+                    .push_bind(matching.purpose);
+                push_optional_match_sqlite(&mut update, matching);
+                update.push(" AND consumed_at IS NULL AND expires_at>");
+                push_timestamp!(update, Dialect::Sqlite, now);
+                update.build().execute(pool).await?.rows_affected()
+            }
+            Database::Postgres(pool) => {
+                let mut update = QueryBuilder::new("UPDATE auth_flows SET consumed_at=");
+                push_timestamp!(update, Dialect::Postgres, now);
+                update
+                    .push(" WHERE token_hash=")
+                    .push_bind(hash)
+                    .push(" AND purpose=")
+                    .push_bind(matching.purpose);
+                push_optional_match_postgres(&mut update, matching);
+                update.push(" AND consumed_at IS NULL AND expires_at>");
+                push_timestamp!(update, Dialect::Postgres, now);
+                update.build().execute(pool).await?.rows_affected()
+            }
+        };
+        Ok(affected)
+    }
+}
+
+/// Go 的分类顺序：已消费优先于过期；不存在（上游已判）不经过这里。
+fn classify_existing(flow: OAuthFlow, now: i64) -> Result<OAuthFlow, TelegramFlowError> {
+    if flow.consumed_at.is_some() {
+        return Err(TelegramFlowError::FlowInvalid);
+    }
+    if flow.expires_at <= now {
+        return Err(TelegramFlowError::FlowInvalid);
+    }
+    Ok(flow)
+}
+
 }

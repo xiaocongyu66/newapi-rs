@@ -13,6 +13,7 @@
 //!   aff_code、默认 setting；
 //! - 邮箱绑定复刻 `BindEmailToUser` 的事务形状（同一 advisory lock）。
 
+use crate::users::profile;
 use newapi_storage::Database;
 
 /// Go `userBindColumns`（`store_users_lifecycle.go:121-127`）。
@@ -29,6 +30,12 @@ pub const USER_NAME_MAX_CHARS: usize = 20;
 
 // 显式列清单，禁止 SELECT *；旧库的 INTEGER 列显式提升 BIGINT。
 const USER_BY_BIND_COLUMN_SQL: &str = r#"SELECT CAST(id AS BIGINT) AS id, username, display_name, CAST(role AS BIGINT) AS role, CAST(status AS BIGINT) AS status, email, github_id, discord_id, oidc_id, wechat_id, telegram_id, "group", CAST(quota AS BIGINT) AS quota, CAST(used_quota AS BIGINT) AS used_quota, CAST(request_count AS BIGINT) AS request_count, aff_code, CAST(aff_count AS BIGINT) AS aff_count, CAST(aff_quota AS BIGINT) AS aff_quota, CAST(aff_history AS BIGINT) AS aff_history_quota, CAST(inviter_id AS BIGINT) AS inviter_id, linux_do_id, setting, stripe_customer, CAST(auth_version AS BIGINT) AS auth_version FROM users"#;
+
+/// `FillUserById`（EmailBind 路径）：固定 WHERE，静态字面量。
+const USER_BY_ID_SQL: &str = r#"SELECT CAST(id AS BIGINT) AS id, username, display_name, CAST(role AS BIGINT) AS role, CAST(status AS BIGINT) AS status, email, github_id, discord_id, oidc_id, wechat_id, telegram_id, "group", CAST(quota AS BIGINT) AS quota, CAST(used_quota AS BIGINT) AS used_quota, CAST(request_count AS BIGINT) AS request_count, aff_code, CAST(aff_count AS BIGINT) AS aff_count, CAST(aff_quota AS BIGINT) AS aff_quota, CAST(aff_history AS BIGINT) AS aff_history_quota, CAST(inviter_id AS BIGINT) AS inviter_id, linux_do_id, setting, stripe_customer, CAST(auth_version AS BIGINT) AS auth_version FROM users WHERE id = $1 AND deleted_at IS NULL"#;
+
+/// `GetUserByOAuthBinding`：绑定行 → 用户行；固定 WHERE，静态字面量。
+const USER_BY_CUSTOM_BINDING_SQL: &str = r#"SELECT CAST(id AS BIGINT) AS id, username, display_name, CAST(role AS BIGINT) AS role, CAST(status AS BIGINT) AS status, email, github_id, discord_id, oidc_id, wechat_id, telegram_id, "group", CAST(quota AS BIGINT) AS quota, CAST(used_quota AS BIGINT) AS used_quota, CAST(request_count AS BIGINT) AS request_count, aff_code, CAST(aff_count AS BIGINT) AS aff_count, CAST(aff_quota AS BIGINT) AS aff_quota, CAST(aff_history AS BIGINT) AS aff_history_quota, CAST(inviter_id AS BIGINT) AS inviter_id, linux_do_id, setting, stripe_customer, CAST(auth_version AS BIGINT) AS auth_version FROM users WHERE id = (SELECT user_id FROM user_oauth_bindings WHERE provider_id = $1 AND provider_user_id = $2) AND deleted_at IS NULL"#;
 
 macro_rules! backend {
     ($db:expr, $pool:ident, $body:block) => {
@@ -171,8 +178,10 @@ macro_rules! create_user_body {
         // 绑定列（generic 走绑定行，其余单列 UPDATE——保持与 Go 的
         // `SetProviderUserID` + Updates(map) 等价的最终状态）。
         if !$input.bind_column.is_empty() {
+            // `bind_column` 来自 ResolvedProvider 的固定常量 / wechat 字面量；
+            // AssertSqlSafe 记录该审计。
             let sql = format!("UPDATE users SET {} = $1 WHERE id = $2", $input.bind_column);
-            sqlx::query(&sql)
+            sqlx::query(sqlx::AssertSqlSafe(sql))
                 .bind($input.provider_user_id)
                 .bind(inserted)
                 .execute(&mut *tx)
@@ -215,6 +224,8 @@ impl OAuthUserStore {
             column,
             "github_id" | "discord_id" | "wechat_id" | "linux_do_id"
         );
+        // `column` 来自固定白名单（ResolvedProvider 的常量 / 本模块
+        // 调用点），经 AssertSqlSafe 显式审计。
         let sql = if unscoped {
             format!(r#"SELECT EXISTS(SELECT 1 FROM users WHERE {column} = $1)"#)
         } else {
@@ -223,7 +234,10 @@ impl OAuthUserStore {
             )
         };
         let taken: bool = backend!(&self.db, pool, {
-            sqlx::query_scalar(&sql).bind(value).fetch_one(pool).await?
+            sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                .bind(value)
+                .fetch_one(pool)
+                .await?
         });
         Ok(taken)
     }
@@ -236,7 +250,7 @@ impl OAuthUserStore {
             return Ok(false);
         }
         let count: i64 = backend!(&self.db, pool, {
-            sqlx::query_scalar(&"SELECT COUNT(*) FROM users WHERE wechat_id = $1")
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE wechat_id = $1")
                 .bind(wechat_id)
                 .fetch_one(pool)
                 .await?
@@ -252,13 +266,16 @@ impl OAuthUserStore {
         column: &str,
         value: &str,
     ) -> Result<Option<StoreUser>, StoreError> {
+        // `column` 来自固定白名单（见 bind_id_taken 注释）。
         let sql = format!("{USER_BY_BIND_COLUMN_SQL} WHERE {column} = $1 AND deleted_at IS NULL");
-        let row = backend!(&self.db, pool, {
-            sqlx::query(&sql).bind(value).fetch_optional(pool).await?
+        let user: Option<StoreUser> = backend!(&self.db, pool, {
+            let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(value)
+                .fetch_optional(pool)
+                .await?;
+            row.map(|row| profile!(row)).transpose()?
         });
-        row.map(crate::users::profile_row)
-            .transpose()
-            .map_err(sqlx::Error::into)
+        Ok(user)
     }
 
     /// Go `FillUserByTelegramId`：找不到时返回固定中文文案
@@ -272,13 +289,14 @@ impl OAuthUserStore {
 
     /// Go `FillUserById`（`manage_users.go` EmailBind 路径）。
     pub async fn user_by_id(&self, user_id: i64) -> Result<Option<StoreUser>, StoreError> {
-        let sql = format!("{USER_BY_BIND_COLUMN_SQL} WHERE id = $1 AND deleted_at IS NULL");
-        let row = backend!(&self.db, pool, {
-            sqlx::query(&sql).bind(user_id).fetch_optional(pool).await?
+        let user: Option<StoreUser> = backend!(&self.db, pool, {
+            let row = sqlx::query(USER_BY_ID_SQL)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await?;
+            row.map(|row| profile!(row)).transpose()?
         });
-        row.map(crate::users::profile_row)
-            .transpose()
-            .map_err(sqlx::Error::into)
+        Ok(user)
     }
 
     /// Go `GetMaxUserId`（`store_users_lifecycle.go:58-62`）：
@@ -335,9 +353,10 @@ impl OAuthUserStore {
         if !BIND_COLUMNS.contains(&column) {
             return Err(StoreError::Storage);
         }
+        // `column` 已过 BIND_COLUMNS 白名单；AssertSqlSafe 记录该审计。
         let sql = format!("UPDATE users SET {column} = $1 WHERE id = $2");
         backend!(&self.db, pool, {
-            sqlx::query(&sql)
+            sqlx::query(sqlx::AssertSqlSafe(sql))
                 .bind(value)
                 .bind(user_id)
                 .execute(pool)
@@ -373,21 +392,15 @@ impl OAuthUserStore {
         provider_id: i64,
         provider_user_id: &str,
     ) -> Result<Option<StoreUser>, StoreError> {
-        let sql = format!(
-            "{USER_BY_BIND_COLUMN_SQL} WHERE id = \
-             (SELECT user_id FROM user_oauth_bindings WHERE provider_id = $1 AND provider_user_id = $2) \
-             AND deleted_at IS NULL"
-        );
-        let row = backend!(&self.db, pool, {
-            sqlx::query(&sql)
+        let user: Option<StoreUser> = backend!(&self.db, pool, {
+            let row = sqlx::query(USER_BY_CUSTOM_BINDING_SQL)
                 .bind(provider_id)
                 .bind(provider_user_id)
                 .fetch_optional(pool)
-                .await?
+                .await?;
+            row.map(|row| profile!(row)).transpose()?
         });
-        row.map(crate::users::profile_row)
-            .transpose()
-            .map_err(sqlx::Error::into)
+        Ok(user)
     }
 
     /// Go `UpdateUserOAuthBinding`（`bind_oauth.go:109-131`）：新账号被
@@ -560,6 +573,12 @@ pub enum CreateUserError {
     Storage,
 }
 
+impl From<sqlx::Error> for CreateUserError {
+    fn from(_: sqlx::Error) -> Self {
+        Self::Storage
+    }
+}
+
 impl std::fmt::Display for CreateUserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("oauth user creation failed")
@@ -572,6 +591,12 @@ impl std::error::Error for CreateUserError {}
 pub enum EmailBindError {
     EmailTaken,
     Storage,
+}
+
+impl From<sqlx::Error> for EmailBindError {
+    fn from(_: sqlx::Error) -> Self {
+        Self::Storage
+    }
 }
 
 impl std::fmt::Display for EmailBindError {

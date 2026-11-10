@@ -123,6 +123,8 @@ macro_rules! profile {
     }};
 }
 
+pub(crate) use profile;
+
 #[derive(Clone)]
 pub struct UserProfileRepository {
     db: Database,
@@ -139,12 +141,6 @@ macro_rules! backend {
             Database::Postgres($pool) => $body,
         }
     };
-}
-
-/// [`UserProfile`] 的行投影（`profile!` 宏的公开包装）：oauth_flow 的
-/// 绑定列查询复用同一形状，列别名由调用方 SQL 保证。
-pub(crate) fn profile_row<R: sqlx::Row>(row: R) -> Result<UserProfile, sqlx::Error> {
-    profile!(row)
 }
 
 impl UserProfileRepository {

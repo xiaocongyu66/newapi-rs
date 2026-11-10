@@ -911,7 +911,7 @@ fn navigate<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_js
 }
 
 /// Go `evaluateAccessPolicy` 的判定输出；只保留渲染拒绝文案需要的字段。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicyFailure {
     pub field: String,
     pub op: String,

@@ -84,11 +84,17 @@ impl std::fmt::Debug for OAuthSettings {
     }
 }
 
+/// `KEYS` 的 22 个占位符（? 形式；SQLite 兼容 $n，但保持与键序一致）。
+const LOAD_SQL_SQLITE: &str = r#"SELECT "key", "value" FROM "options" WHERE "key" IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+
+/// `KEYS` 的 22 个占位符（$n 形式）。
+const LOAD_SQL_POSTGRES: &str = r#"SELECT "key", "value" FROM "options" WHERE "key" IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)"#;
+
 impl OAuthSettings {
     /// 现读 options 表；缺行保留 Go 默认（开关 false、凭据空串、
     /// ServerAddress 进程初值）。
     pub async fn load(db: &Database) -> Result<Self, sqlx::Error> {
-        const KEYS: [&str; 25] = [
+        const KEYS: [&str; 22] = [
             "GitHubOAuthEnabled",
             "LinuxDOOAuthEnabled",
             "WeChatAuthEnabled",
@@ -112,29 +118,18 @@ impl OAuthSettings {
             "oidc.user_info_endpoint",
             "ServerAddress",
         ];
-        let placeholders_sqlite = KEYS.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let placeholders_pg = KEYS
-            .iter()
-            .enumerate()
-            .map(|(index, _)| format!("${}", index + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql =
-            format!("SELECT \"key\", \"value\" FROM \"options\" WHERE \"key\" IN ({placeholders})");
+        // 两个后端各用静态字面量（sqlx 的 SqlSafeStr 只接受 'static；
+        // 占位符与 KEYS 逐一一对应）。
         let mut rows: Vec<(String, Option<String>)> = match db {
             Database::Sqlite(pool) => {
-                let mut query = sqlx::query_as::<_, (String, Option<String>)>(
-                    &sql.replace("{placeholders}", &placeholders_sqlite),
-                );
+                let mut query = sqlx::query_as::<_, (String, Option<String>)>(LOAD_SQL_SQLITE);
                 for key in KEYS {
                     query = query.bind(key);
                 }
                 query.fetch_all(pool).await?
             }
             Database::Postgres(pool) => {
-                let mut query = sqlx::query_as::<_, (String, Option<String>)>(
-                    &sql.replace("{placeholders}", &placeholders_pg),
-                );
+                let mut query = sqlx::query_as::<_, (String, Option<String>)>(LOAD_SQL_POSTGRES);
                 for key in KEYS {
                     query = query.bind(key);
                 }

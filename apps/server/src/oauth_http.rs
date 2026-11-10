@@ -340,16 +340,14 @@ fn host_header(headers: &HeaderMap) -> String {
         .to_owned()
 }
 
-fn settings_of(
+/// 加载 OAuth 设置；数据库故障折叠为 `Err(())`（Go 的进程内存读取不会
+/// 失败，这是端口边界）。
+async fn settings_of(
     db: &newapi_storage::Database,
-) -> impl std::future::Future<Output = Result<newapi_identity::oauth_flow::settings::OAuthSettings, ()>>
-+ Send
-+ '_ {
-    async move {
-        newapi_identity::oauth_flow::settings::OAuthSettings::load(db)
-            .await
-            .map_err(|_| ())
-    }
+) -> Result<newapi_identity::oauth_flow::settings::OAuthSettings, ()> {
+    newapi_identity::oauth_flow::settings::OAuthSettings::load(db)
+        .await
+        .map_err(|_| ())
 }
 
 fn flow_repo(state: &AppState) -> Option<OAuthFlowRepository> {
