@@ -162,12 +162,14 @@ pub fn contains_field(fields: &[String], key: &str) -> bool {
 const MODEL_COLUMNS: &str = "id, model_name, description, icon, tags, vendor_id, endpoints, \
      status, sync_official, created_time, updated_time, name_rule";
 
-/// 行解码：可空列按 Go 零值回落。两个驱动的具现行类型各展开一次。
+/// 行解码宏：只能在**返回 `Result` 的函数体**里展开（内部用 `?`，展开为
+/// `Ok(...)` 表达式），不能进闭包。两个驱动的具现行类型各展开一次；
+/// 可空列按 Go 零值回落。
 macro_rules! model_row {
     ($row:expr) => {{
         let row = $row;
-        ModelRow {
-            id: row.try_get::<i64, _>("id")?,
+        Ok::<_, sqlx::Error>(ModelRow {
+            id: row.try_get::<Option<i64>, _>("id")?.unwrap_or_default(),
             model_name: row
                 .try_get::<Option<String>, _>("model_name")?
                 .unwrap_or_default(),
@@ -199,7 +201,7 @@ macro_rules! model_row {
             name_rule: row
                 .try_get::<Option<i64>, _>("name_rule")?
                 .unwrap_or_default(),
-        }
+        })
     }};
 }
 
@@ -214,13 +216,17 @@ macro_rules! backend {
 
 /// 动态 WHERE 的共享构建：与 Go `SearchModels` 的谓词顺序一致
 /// （keyword → vendor → status → sync_official），最后永远追加软删除范围。
-fn push_conditions(
-    query: &mut sqlx::QueryBuilder<'static>,
+/// 泛型与 bound 复刻 `channels/store.rs` 的 `push_where` 约定。
+fn push_conditions<DB: sqlx::Database>(
+    query: &mut sqlx::QueryBuilder<DB>,
     keyword: &str,
     vendor: &str,
     status: Option<i64>,
     sync_official: Option<i64>,
-) {
+) where
+    i64: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB>,
+    String: sqlx::Type<DB> + for<'t> sqlx::Encode<'t, DB>,
+{
     query.push("deleted_at IS NULL");
     if !keyword.is_empty() {
         let like = format!("%{keyword}%");
@@ -255,6 +261,19 @@ fn push_conditions(
         query.push(" AND models.sync_official = ");
         query.push_bind(value);
     }
+}
+
+/// 全 const SQL（sqlx 0.9 只接受 `&'static str` 或 `AssertSqlSafe` 包装的
+/// 动态串；所有查询的 SELECT 列一致，用 `MODEL_QUERY_*` 常量避免拼接）。
+macro_rules! model_query {
+    ($where:expr) => {
+        concat!(
+            "SELECT id, model_name, description, icon, tags, vendor_id, endpoints, \
+             status, sync_official, created_time, updated_time, name_rule \
+             FROM models WHERE ",
+            $where
+        )
+    };
 }
 
 /// `models` 表（及 sync 上游所需的 `vendors` 最小路径）的仓储。
@@ -300,7 +319,10 @@ impl ModelRepository {
             query.push(" OFFSET ");
             query.push_bind(offset);
             let rows = query.build().fetch_all(pool).await?;
-            let models = rows.iter().map(|row| model_row!(row)).collect();
+            let mut models = Vec::with_capacity(rows.len());
+            for row in &rows {
+                models.push(model_row!(row)?);
+            }
             Ok((models, total))
         })
     }
@@ -309,13 +331,14 @@ impl ModelRepository {
     /// （HTTP 层折成 `model.not_exists`，对齐 Go 的 gorm record-not-found）。
     pub async fn by_id(&self, id: i64) -> Result<Option<ModelRow>, sqlx::Error> {
         backend!(&self.db, pool, {
-            let row = sqlx::query(&format!(
-                "SELECT {MODEL_COLUMNS} FROM models WHERE id = $1 AND deleted_at IS NULL"
-            ))
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
-            Ok(row.map(|row| model_row!(row)))
+            let row = sqlx::query(model_query!("id = $1 AND deleted_at IS NULL"))
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+            match row {
+                Some(row) => Ok(Some(model_row!(row)?)),
+                None => Ok(None),
+            }
         })
     }
 
@@ -323,13 +346,14 @@ impl ModelRepository {
     /// 的按名读取（软删除范围生效）。
     pub async fn by_name(&self, name: &str) -> Result<Option<ModelRow>, sqlx::Error> {
         backend!(&self.db, pool, {
-            let row = sqlx::query(&format!(
-                "SELECT {MODEL_COLUMNS} FROM models WHERE model_name = $1 AND deleted_at IS NULL"
-            ))
-            .bind(name)
-            .fetch_optional(pool)
-            .await?;
-            Ok(row.map(|row| model_row!(row)))
+            let row = sqlx::query(model_query!("model_name = $1 AND deleted_at IS NULL"))
+                .bind(name)
+                .fetch_optional(pool)
+                .await?;
+            match row {
+                Some(row) => Ok(Some(model_row!(row)?)),
+                None => Ok(None),
+            }
         })
     }
 
@@ -354,7 +378,11 @@ impl ModelRepository {
             // Go 的 Find 无 ORDER BY；按 id 升序让冲突列表顺序确定。
             query.push(" ORDER BY id ASC");
             let rows = query.build().fetch_all(pool).await?;
-            Ok(rows.iter().map(|row| model_row!(row)).collect())
+            let mut locals = Vec::with_capacity(rows.len());
+            for row in &rows {
+                locals.push(model_row!(row)?);
+            }
+            Ok(locals)
         })
     }
 

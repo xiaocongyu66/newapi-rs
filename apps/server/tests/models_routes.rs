@@ -402,9 +402,10 @@ async fn seed_model(db: &Database, id: i64, name: &str, name_rule: i64, sync_off
 
 async fn model_updated_time(db: &Database, id: i64) -> i64 {
     backend!(db, pool, {
-        sqlx::query_scalar::<_, i64>(&format!(
-            "SELECT CAST(COALESCE(updated_time, 0) AS BIGINT) FROM models WHERE id = {id}"
-        ))
+        sqlx::query_scalar::<_, i64>(
+            "SELECT CAST(COALESCE(updated_time, 0) AS BIGINT) FROM models WHERE id = $1",
+        )
+        .bind(id)
         .fetch_one(pool)
         .await
         .expect("updated_time")
