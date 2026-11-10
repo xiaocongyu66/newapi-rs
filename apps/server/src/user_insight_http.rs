@@ -620,14 +620,13 @@ fn view_matches_keyword(view: &Value, keyword: &str) -> bool {
 fn sort_views(views: &mut [Value], sort_by: &str) {
     views.sort_by(|left, right| {
         let key = |view: &Value, field: &str| view[field].as_i64().unwrap_or(0);
-        let ordering = match sort_by {
+        match sort_by {
             "requests" => key(right, "total_requests").cmp(&key(left, "total_requests")),
             "risk" => key(right, "jailbreak_max_score").cmp(&key(left, "jailbreak_max_score")),
             "roleplay" => key(right, "roleplay_requests").cmp(&key(left, "roleplay_requests")),
             "code" => key(right, "code_requests").cmp(&key(left, "code_requests")),
             _ => key(right, "last_seen_at").cmp(&key(left, "last_seen_at")),
-        };
-        ordering
+        }
     });
 }
 
