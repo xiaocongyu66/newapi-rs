@@ -678,7 +678,7 @@ fn respond_create(headers: &HeaderMap, outcome: CreateOutcome) -> (Response, boo
             Json(json!({
                 "success": true,
                 "message": MSG_CREATED,
-                "data": CustomOAuthProviderView::from(&record),
+                "data": CustomOAuthProviderView::from(&*record),
             }))
             .into_response(),
             true,
@@ -908,7 +908,7 @@ fn respond_update(headers: &HeaderMap, outcome: UpdateOutcome) -> (Response, boo
             Json(json!({
                 "success": true,
                 "message": MSG_UPDATED,
-                "data": CustomOAuthProviderView::from(&record),
+                "data": CustomOAuthProviderView::from(&*record),
             }))
             .into_response(),
             true,
