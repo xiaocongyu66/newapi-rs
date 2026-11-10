@@ -971,6 +971,9 @@ async fn contract(db: &Database) {
     assert_eq!(body["data"]["source"]["locale"], json!("en"));
 
     // ---- sync_upstream：上游模型拉取失败 ---------------------------
+    // abilities-only 已在上一场景创建成功；删掉它让 missing 非空，
+    // 否则走早退分支拿不到上游错误体。
+    exec(db, "DELETE FROM models WHERE model_name = 'abilities-only'").await;
     let fake = FakeUpstream {
         responses: BTreeMap::new(),
     };

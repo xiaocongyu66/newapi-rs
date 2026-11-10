@@ -1273,6 +1273,11 @@ pub async fn sync_upstream_with(
         };
         match repository.by_name(name).await {
             Ok(Some(existing)) if existing.sync_official == 0 => {
+                #[cfg(test)]
+                eprintln!(
+                    "models sync skipped {name}: local row with sync_official=0 (id {})",
+                    existing.id
+                );
                 skipped.push(name.clone());
                 continue;
             }
