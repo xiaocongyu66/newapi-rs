@@ -115,14 +115,16 @@ pub async fn self_subscriptions(
         Err(error) => return database_error(&headers, &error),
     };
     let now = now_seconds();
-    let active = match repository.active_user_subscriptions(user_id, now).await {
-        Ok(subs) => subs,
-        Err(_) => Vec::new(),
-    };
-    let all = match repository.all_user_subscriptions(user_id).await {
-        Ok(subs) => subs,
-        Err(_) => Vec::new(),
-    };
+    // Go 吞错回空数组（`manage_subscription.go:62-71`）：查询失败不改变
+    // HTTP 结果，只在有 `Vec` 类型标注时用 `unwrap_or_default` 落空列表。
+    let active: Vec<_> = repository
+        .active_user_subscriptions(user_id, now)
+        .await
+        .unwrap_or_default();
+    let all: Vec<_> = repository
+        .all_user_subscriptions(user_id)
+        .await
+        .unwrap_or_default();
     let display = state.quota_display();
     success(json!({
         "billing_preference": preference,
