@@ -140,7 +140,19 @@ macro_rules! simple_table {
     };
 }
 
-simple_table!("tokens", TOKENS_POSTGRES, TOKENS_SQLITE);
+// tokens 带 key：删除语句虽只引用 user_id，但种子数据要写入令牌键。
+const TOKENS_SQLITE: &str = r#"CREATE TABLE tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id BIGINT NOT NULL,
+    "key" TEXT NOT NULL UNIQUE,
+    status INTEGER NOT NULL DEFAULT 1
+)"#;
+const TOKENS_POSTGRES: &str = r#"CREATE TABLE tokens (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    "key" VARCHAR(128) NOT NULL UNIQUE,
+    status INTEGER NOT NULL DEFAULT 1
+)"#;
 simple_table!("two_fas", TWO_FAS_POSTGRES, TWO_FAS_SQLITE);
 simple_table!(
     "two_fa_backup_codes",
