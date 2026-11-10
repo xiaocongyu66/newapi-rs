@@ -504,9 +504,7 @@ fn route_audit(method: &Method, path: &str) -> Option<RouteAuditInfo> {
             _ => None,
         };
     }
-    let Some(tail) = path.strip_prefix(ROUTE_ID_PREFIX) else {
-        return None;
-    };
+    let tail = path.strip_prefix(ROUTE_ID_PREFIX)?;
     if tail.is_empty() || tail.contains('/') {
         return None;
     }
@@ -556,7 +554,7 @@ enum CreateOutcome {
     SlugBuiltinConflict,
     Validation(String),
     Database,
-    Created(CustomOAuthProviderRecord),
+    Created(Box<CustomOAuthProviderRecord>),
 }
 
 /// Go `CreateCustomOAuthProviderRequest`（`bind_custom_oauth.go:113-132`）：
@@ -661,7 +659,7 @@ async fn create_flow(db: &Database, body: &[u8]) -> CreateOutcome {
     match repository.insert(&record).await {
         Ok(id) => {
             record.id = id;
-            CreateOutcome::Created(record)
+            CreateOutcome::Created(Box::new(record))
         }
         Err(error) => {
             tracing::warn!(
@@ -706,7 +704,7 @@ enum UpdateOutcome {
     SlugTaken,
     SlugBuiltinConflict,
     Validation(String),
-    Updated(CustomOAuthProviderRecord),
+    Updated(Box<CustomOAuthProviderRecord>),
 }
 
 /// Go `UpdateCustomOAuthProviderRequest`（`bind_custom_oauth.go:268-287`）：
@@ -793,7 +791,7 @@ async fn update_flow(db: &Database, id_text: &str, body: &[u8]) -> UpdateOutcome
         return UpdateOutcome::Validation(issue.message());
     }
     match repository.update(&record).await {
-        Ok(_) => UpdateOutcome::Updated(record),
+        Ok(_) => UpdateOutcome::Updated(Box::new(record)),
         Err(error) => {
             tracing::warn!(
                 event = "custom_oauth_update_failed",
