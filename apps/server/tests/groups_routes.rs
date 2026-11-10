@@ -356,8 +356,9 @@ async fn run_contract(db: Database) {
     assert_eq!(body["data"]["custom"]["ratio"].as_f64(), Some(3.0));
     assert_eq!(body["data"]["custom"]["desc"], json!("用户分组"));
 
-    // Invalid GroupRatio JSON falls back to the Go default (empty); the
-    // independently configured `auto` entry is still appended.
+    // Invalid GroupRatio JSON keeps the previous snapshot value: Go
+    // `types.LoadFromJsonString` (rw_map.go) decodes a local map and returns
+    // early on failure, leaving the runtime map untouched (last-good).
     update_option(&db, "GroupRatio", "not json").await;
     app.reload(&db).await.unwrap();
     let response = send(&app, "/api/user/self/groups", Some("Bearer pat-custom")).await;
@@ -366,9 +367,10 @@ async fn run_contract(db: Database) {
     let data = body["data"].as_object().expect("group object");
     assert_eq!(
         data.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-        BTreeSet::from(["auto"])
+        BTreeSet::from(["auto", "custom", "default", "vip"])
     );
     assert_eq!(data["auto"]["ratio"], json!("自动"));
+    assert_eq!(data["custom"]["ratio"].as_f64(), Some(3.0));
 
     // The models list stays empty for a user whose groups have no abilities.
     let response = send(&app, "/api/user/models", Some("Bearer pat-custom")).await;

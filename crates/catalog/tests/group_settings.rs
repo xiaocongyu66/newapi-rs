@@ -158,29 +158,36 @@ async fn contract(db: &Database) {
         vec!["vip".to_owned(), "default".to_owned()]
     );
 
-    // Invalid JSON or a wrong shape falls back to the Go default for that key,
-    // not the previous value and not an error.
+    // Go `types.LoadFromJsonString` (rw_map.go) decodes a fresh local map and
+    // returns early on failure without touching the live map, so an invalid
+    // row keeps the previous snapshot value (last-good) — not an empty map
+    // and not an error.
     for value in ["", "not json", "[]", r#"{"default":"1"}"#] {
         update(db, "GroupRatio", value).await;
         let fallback = GroupSettings::load(db, &loaded).await.unwrap();
-        assert!(fallback.group_ratio.is_empty(), "value={value:?}");
+        assert_eq!(fallback.group_ratio, loaded.group_ratio, "value={value:?}");
         // Untouched keys keep their configured values.
         assert_eq!(fallback.user_usable_groups, loaded.user_usable_groups);
         assert_eq!(fallback.group_group_ratio, loaded.group_group_ratio);
     }
+    // Go `UpdateUserUsableGroupsByJSONString` (resolve_group.go) resets the
+    // map to empty before `Unmarshal`, so an invalid row leaves an empty map
+    // — not the two-entry package seed, which only applies before any row is
+    // applied.
     for value in ["", "not json", "[]", r#"{"default":1}"#] {
         update(db, "UserUsableGroups", value).await;
         let fallback = GroupSettings::load(db, &loaded).await.unwrap();
-        assert_eq!(
-            fallback.user_usable_groups,
-            go_default_usable_groups(),
-            "value={value:?}"
-        );
+        assert!(fallback.user_usable_groups.is_empty(), "value={value:?}");
     }
+    // `UpdateGroupGroupRatioByJSONString` shares the same `LoadFromJsonString`
+    // last-good contract, so the previous snapshot survives an invalid row.
     for value in ["", "not json", "[]", r#"{"vip":1}"#] {
         update(db, "GroupGroupRatio", value).await;
         let fallback = GroupSettings::load(db, &loaded).await.unwrap();
-        assert!(fallback.group_group_ratio.is_empty(), "value={value:?}");
+        assert_eq!(
+            fallback.group_group_ratio, loaded.group_group_ratio,
+            "value={value:?}"
+        );
     }
     // Go `RWMap.UnmarshalJSON` and `UpdateAutoGroupsByJsonString` both reset
     // before decoding, so an invalid row leaves an empty value rather than the

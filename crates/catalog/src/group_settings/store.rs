@@ -4,7 +4,7 @@ use newapi_storage::Database;
 use serde::Deserialize;
 use sqlx::types::Json;
 
-use super::{GroupSettings, default_user_usable_groups};
+use super::GroupSettings;
 
 const KEYS: [&str; 5] = [
     "GroupRatio",
@@ -61,23 +61,32 @@ pub(super) async fn load(
     let mut next = previous.clone();
     for (key, value) in rows {
         match key.as_str() {
-            // Go `types.LoadFromJsonString` decodes a fresh map and only
-            // replaces the runtime map on success. The seeded default is an
-            // empty map, which is also the fallback required for invalid JSON.
+            // Go `UpdateGroupRatioByJSONString` routes through
+            // `types.LoadFromJsonString` (rw_map.go), which decodes a fresh
+            // local map and returns early on failure without touching the
+            // live map. An invalid row therefore keeps the previous snapshot
+            // value (last-good); the empty seeded default applies only before
+            // any row is ever applied.
             "GroupRatio" => {
-                next.group_ratio = parse_json::<BTreeMap<String, f64>>(&value).unwrap_or_default();
+                if let Some(ratio) = parse_json::<BTreeMap<String, f64>>(&value) {
+                    next.group_ratio = ratio;
+                }
             }
-            // Go Unmarshal into `map[string]string`; the seeded default is the
-            // two-entry map even when the persisted value cannot be decoded.
+            // Go `UpdateUserUsableGroupsByJSONString` (resolve_group.go)
+            // resets the map to empty before `Unmarshal`, so a row whose JSON
+            // cannot be decoded leaves an empty map — not the two-entry
+            // package seed, which only applies before any row is applied.
             "UserUsableGroups" => {
-                next.user_usable_groups = parse_json::<BTreeMap<String, String>>(&value)
-                    .unwrap_or_else(default_user_usable_groups);
+                next.user_usable_groups =
+                    parse_json::<BTreeMap<String, String>>(&value).unwrap_or_default();
             }
-            // Go `map[string]map[string]float64`; the seeded default is empty.
+            // Go `UpdateGroupGroupRatioByJSONString` uses the same
+            // `LoadFromJsonString` last-good contract as `GroupRatio`, so an
+            // invalid row keeps the previous snapshot value.
             "GroupGroupRatio" => {
-                next.group_group_ratio =
-                    parse_json::<BTreeMap<String, BTreeMap<String, f64>>>(&value)
-                        .unwrap_or_default();
+                if let Some(ratio) = parse_json::<BTreeMap<String, BTreeMap<String, f64>>>(&value) {
+                    next.group_group_ratio = ratio;
+                }
             }
             // Go 分层配置 `group_ratio_setting.group_special_usable_group`：
             // `RWMap.UnmarshalJSON` 先重置再解码，失败时留下空 map，
