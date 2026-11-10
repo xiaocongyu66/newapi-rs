@@ -20,6 +20,7 @@ pub mod limit_email;
 pub mod limit_redis;
 mod login_http;
 pub mod oauth_bindings_http;
+pub mod oauth_http;
 pub mod passkey_http;
 pub mod qq_bind_http;
 pub mod qqbot;
