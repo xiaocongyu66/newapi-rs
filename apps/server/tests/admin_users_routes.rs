@@ -132,7 +132,7 @@ const CASBIN_POSTGRES: &str = r#"CREATE TABLE casbin_rule (
 /// `HardDelete` 逐表清理的其余认证数据表：删除语句只引用 user_id，
 /// 最小表形即可。
 macro_rules! simple_table {
-    ($sqlite_name:literal, $postgres_name:literal, $name:ident) => {
+    ($sqlite_name:literal, $name:ident, $postgres_name:ident) => {
         const $name: &str = concat!("CREATE TABLE ", $sqlite_name, " (user_id INTEGER)");
         const $postgres_name: &str = concat!("CREATE TABLE ", $sqlite_name, " (user_id BIGINT)");
     };
