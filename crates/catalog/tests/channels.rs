@@ -650,7 +650,8 @@ async fn contract(db: &Database) {
     assert!(repository.by_id(1, true).await.unwrap().is_none());
     assert_eq!(ability_count(db, 1).await, 0);
 
-    // 删除已禁用：只删 status 2/3。
+    // 删除已禁用：只删 status 2/3。此时剩余 2（c-dup）、13（list-d）、
+    // 14（list-e）三行。
     assert_eq!(repository.delete_by_ids(&[10, 11]).await.unwrap(), 2);
     assert_eq!(ability_count(db, 10).await, 0);
     assert_eq!(repository.delete_disabled().await.unwrap(), 2);
@@ -663,7 +664,7 @@ async fn contract(db: &Database) {
         )
         .await
         .unwrap();
-    assert_eq!(remaining.len(), 4);
+    assert_eq!(remaining.len(), 3);
 }
 
 #[tokio::test]
