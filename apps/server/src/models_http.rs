@@ -1278,7 +1278,6 @@ pub async fn sync_upstream_with(
         };
         match repository.by_name(name).await {
             Ok(Some(existing)) if existing.sync_official == 0 => {
-                #[cfg(test)]
                 eprintln!(
                     "models sync skipped {name}: local row with sync_official=0 (id {})",
                     existing.id
@@ -1288,6 +1287,7 @@ pub async fn sync_upstream_with(
             }
             Ok(_) => {}
             Err(error) => {
+                eprintln!("models sync lookup failed for {name}: {error}");
                 tracing::warn!(
                     event = "model_lookup_failed",
                     category = crate::database_error_class(&error),
@@ -1324,7 +1324,7 @@ pub async fn sync_upstream_with(
                 created_list.push(name.clone());
             }
             Err(error) => {
-                #[cfg(test)]
+                // Go 的 SysError 同样输出错误原文；不含凭据或连接串。
                 eprintln!("models sync insert failed for {name}: {error}");
                 tracing::warn!(
                     event = "model_sync_insert_failed",
