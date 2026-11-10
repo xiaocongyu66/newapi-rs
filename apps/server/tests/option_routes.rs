@@ -273,7 +273,13 @@ async fn exec(db: &Database, statement: &'static str) {
 async fn create_schema(db: &Database) {
     match db {
         Database::Sqlite(_) => {
-            for statement in [USERS_SQLITE, CASBIN_SQLITE, OPTIONS_SQLITE, LOGS_SQLITE] {
+            for statement in [
+                USERS_SQLITE,
+                CASBIN_SQLITE,
+                OPTIONS_SQLITE,
+                LOGS_SQLITE,
+                SESSIONS_TABLE,
+            ] {
                 exec(db, statement).await;
             }
         }
@@ -1603,14 +1609,22 @@ async fn run_waffo_contract(db: Database) {
     let body = body_json(response).await;
     assert_eq!(body["data"]["products"][0]["id"], json!("PROD_5"), "{body}");
 
-    // waffo 写路径的兜底审计：save 落 generic。
+    // waffo 写路径的兜底审计：pair 先于 save，均落 generic。
     let generic: Vec<AuditRow> = audit_rows(&db)
         .await
         .into_iter()
         .filter(|row| row.action == "generic")
         .collect();
-    assert!(!generic.is_empty(), "waffo save 审计缺失");
-    assert_eq!(generic[0].route, "/api/option/waffo-pancake/save");
+    assert!(!generic.is_empty(), "waffo 审计缺失");
+    let routes: Vec<&str> = generic.iter().map(|row| row.route.as_str()).collect();
+    assert!(
+        routes.contains(&"/api/option/waffo-pancake/save"),
+        "save 审计缺失: {routes:?}"
+    );
+    assert!(
+        routes.contains(&"/api/option/waffo-pancake/pair"),
+        "pair 审计缺失: {routes:?}"
+    );
 }
 
 #[tokio::test]

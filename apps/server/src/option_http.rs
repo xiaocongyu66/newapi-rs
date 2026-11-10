@@ -282,23 +282,13 @@ pub async fn update_option(
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    // Go gin `BindJSON`：空体是 EOF 绑定错误。
+    // Go gin `BindJSON`：空体是 EOF 绑定错误，坏 JSON 同样 400。
     if body.is_empty() {
-        return Json(json!({
-            "success": false,
-            "message": MSG_INVALID_PARAMS_BIND,
-        }))
-        .into_response();
+        return bind_failure();
     }
     let request: OptionUpdateRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
-        Err(_) => {
-            return Json(json!({
-                "success": false,
-                "message": MSG_INVALID_PARAMS_BIND,
-            }))
-            .into_response();
-        }
+        Err(_) => return bind_failure(),
     };
     let value = coerce_option_value(&request.value);
     let key = request.key;
@@ -811,7 +801,7 @@ pub async fn clear_affinity_cache(
 
     if all == "true" {
         // Go：keys 数量即 deleted；空缓存为 0。
-        record_affinity_route_audit(&state, &auth_user, &headers, 200, true);
+        record_affinity_route_audit(&state, &auth_user, &headers, 200, true).await;
         return Json(json!({
             "success": true,
             "message": "",
@@ -820,7 +810,7 @@ pub async fn clear_affinity_cache(
         .into_response();
     }
     if rule_name.is_empty() {
-        record_affinity_route_audit(&state, &auth_user, &headers, 400, false);
+        record_affinity_route_audit(&state, &auth_user, &headers, 400, false).await;
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "message": MSG_AFFINITY_RULE_REQUIRED })),
@@ -832,7 +822,7 @@ pub async fn clear_affinity_cache(
         .iter()
         .find(|rule| rule.name.trim() == rule_name);
     let Some(rule) = matched else {
-        record_affinity_route_audit(&state, &auth_user, &headers, 400, false);
+        record_affinity_route_audit(&state, &auth_user, &headers, 400, false).await;
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "message": MSG_AFFINITY_UNKNOWN_RULE })),
@@ -840,14 +830,14 @@ pub async fn clear_affinity_cache(
             .into_response();
     };
     if !rule.include_rule_name {
-        record_affinity_route_audit(&state, &auth_user, &headers, 400, false);
+        record_affinity_route_audit(&state, &auth_user, &headers, 400, false).await;
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "success": false, "message": MSG_AFFINITY_RULE_NO_INCLUDE })),
         )
             .into_response();
     }
-    record_affinity_route_audit(&state, &auth_user, &headers, 200, true);
+    record_affinity_route_audit(&state, &auth_user, &headers, 200, true).await;
     Json(json!({
         "success": true,
         "message": "",
@@ -870,9 +860,11 @@ async fn record_affinity_route_audit(
         state,
         auth_user,
         headers,
-        "DELETE",
-        "/api/option/channel_affinity_cache",
-        "option.clear_affinity_cache",
+        RouteAuditTarget {
+            method: "DELETE",
+            route: "/api/option/channel_affinity_cache",
+            action: "option.clear_affinity_cache",
+        },
         status,
         success,
     )
@@ -981,9 +973,11 @@ pub async fn reset_model_ratio(
             &state,
             &auth_user,
             &headers,
-            "POST",
-            "/api/option/rest_model_ratio",
-            "option.reset_ratio",
+            RouteAuditTarget {
+                method: "POST",
+                route: "/api/option/rest_model_ratio",
+                action: "option.reset_ratio",
+            },
             200,
             false,
         )
@@ -999,9 +993,11 @@ pub async fn reset_model_ratio(
             &state,
             &auth_user,
             &headers,
-            "POST",
-            "/api/option/rest_model_ratio",
-            "option.reset_ratio",
+            RouteAuditTarget {
+                method: "POST",
+                route: "/api/option/rest_model_ratio",
+                action: "option.reset_ratio",
+            },
             200,
             false,
         )
@@ -1012,9 +1008,11 @@ pub async fn reset_model_ratio(
         &state,
         &auth_user,
         &headers,
-        "POST",
-        "/api/option/rest_model_ratio",
-        "option.reset_ratio",
+        RouteAuditTarget {
+            method: "POST",
+            route: "/api/option/rest_model_ratio",
+            action: "option.reset_ratio",
+        },
         200,
         true,
     )
@@ -1095,9 +1093,11 @@ pub async fn confirm_payment_compliance(
             &state,
             &auth_user,
             &headers,
-            "POST",
-            "/api/option/payment_compliance",
-            "option.payment_compliance",
+            RouteAuditTarget {
+                method: "POST",
+                route: "/api/option/payment_compliance",
+                action: "option.payment_compliance",
+            },
             200,
             false,
         )
@@ -1113,9 +1113,11 @@ pub async fn confirm_payment_compliance(
             &state,
             &auth_user,
             &headers,
-            "POST",
-            "/api/option/payment_compliance",
-            "option.payment_compliance",
+            RouteAuditTarget {
+                method: "POST",
+                route: "/api/option/payment_compliance",
+                action: "option.payment_compliance",
+            },
             200,
             false,
         )
@@ -1129,9 +1131,11 @@ pub async fn confirm_payment_compliance(
         &state,
         &auth_user,
         &headers,
-        "POST",
-        "/api/option/payment_compliance",
-        "option.payment_compliance",
+        RouteAuditTarget {
+            method: "POST",
+            route: "/api/option/payment_compliance",
+            action: "option.payment_compliance",
+        },
         200,
         true,
     )
@@ -1361,9 +1365,11 @@ pub async fn waffo_save(
             &state,
             &auth_user,
             &headers,
-            "POST",
-            "/api/option/waffo-pancake/save",
-            "generic",
+            RouteAuditTarget {
+                method: "POST",
+                route: "/api/option/waffo-pancake/save",
+                action: "generic",
+            },
             200,
             false,
         )
@@ -1391,9 +1397,11 @@ pub async fn waffo_save(
             &state,
             &auth_user,
             &headers,
-            "POST",
-            "/api/option/waffo-pancake/save",
-            "generic",
+            RouteAuditTarget {
+                method: "POST",
+                route: "/api/option/waffo-pancake/save",
+                action: "generic",
+            },
             200,
             false,
         )
@@ -1409,9 +1417,11 @@ pub async fn waffo_save(
             &state,
             &auth_user,
             &headers,
-            "POST",
-            "/api/option/waffo-pancake/save",
-            "generic",
+            RouteAuditTarget {
+                method: "POST",
+                route: "/api/option/waffo-pancake/save",
+                action: "generic",
+            },
             200,
             false,
         )
@@ -1422,9 +1432,11 @@ pub async fn waffo_save(
         &state,
         &auth_user,
         &headers,
-        "POST",
-        "/api/option/waffo-pancake/save",
-        "generic",
+        RouteAuditTarget {
+            method: "POST",
+            route: "/api/option/waffo-pancake/save",
+            action: "generic",
+        },
         200,
         true,
     )
@@ -1609,6 +1621,18 @@ pub async fn waffo_subscription_product_options(
 // 共用小件
 // ---------------------------------------------------------------------------
 
+/// Go `ops.UpdateOption` 的绑定失败：HTTP 400 + `{success:false,"无效的参数"}`。
+fn bind_failure() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "success": false,
+            "message": MSG_INVALID_PARAMS_BIND,
+        })),
+    )
+        .into_response()
+}
+
 /// `{message: "error", data: <固定文案>}` 的 waffo 信封（HTTP 200）。
 fn waffo_error(message: &str) -> Response {
     Json(json!({ "message": "error", "data": message })).into_response()
@@ -1622,9 +1646,7 @@ async fn record_option_route_audit(
     state: &AppState,
     auth_user: &AuthenticatedUser,
     headers: &HeaderMap,
-    method: &'static str,
-    route: &'static str,
-    action: &'static str,
+    audit: RouteAuditTarget,
     status: u16,
     success: bool,
 ) {
@@ -1637,10 +1659,10 @@ async fn record_option_route_audit(
         &db,
         RouteAudit {
             operator: &operator,
-            action,
-            method,
-            route,
-            path: route,
+            action: audit.action,
+            method: audit.method,
+            route: audit.route,
+            path: audit.route,
             status,
             success,
             route_params: Vec::new(),
@@ -1649,6 +1671,14 @@ async fn record_option_route_audit(
         },
     )
     .await;
+}
+
+/// 兜底审计的路由标识三元组（`method + route` 命中
+/// `auditRouteActions` 时 action 为固定值，否则 `generic`）。
+struct RouteAuditTarget {
+    method: &'static str,
+    route: &'static str,
+    action: &'static str,
 }
 
 /// Go `auditAuthMethod`：PAT → `access_token`，会话 → `session`。
