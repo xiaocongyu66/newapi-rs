@@ -61,6 +61,8 @@ fn translated(key: &str) -> String {
 /// Go `GetUserById(0)` 的硬编码中文（`store_users.go:411-413`）。
 const MSG_ID_EMPTY: &str = "id 为空！";
 /// Go `ManageUser` add_quota 的硬编码中文（`manage_users.go:1142`）。
+/// JSON 绑定层无法表达 NaN/Inf，该分支在 Rust 侧经 serde 绑定不可达。
+#[expect(dead_code)]
 const MSG_INVALID_QUOTA_VALUE: &str = "无效的额度数值";
 /// Go `updateAdminPermissionsForUserInTx` 的固定文本（`manage_users.go:1029`）。
 const MSG_ONLY_ROOT_PERMISSIONS: &str = "only root can update admin permissions";
@@ -157,7 +159,9 @@ simple_table!(
     OAUTH_BINDINGS_POSTGRES,
     OAUTH_BINDINGS_SQLITE
 );
-simple_table!("qq_bindings", QQ_POSTGRES, QQ_SQLITE);
+// qq_bindings 带 open_id：删除语句虽只引用 user_id，但种子数据要写入绑定。
+const QQ_SQLITE: &str = "CREATE TABLE qq_bindings (user_id INTEGER, open_id TEXT)";
+const QQ_POSTGRES: &str = "CREATE TABLE qq_bindings (user_id BIGINT, open_id TEXT)";
 
 macro_rules! backend {
     ($db:expr, $pool:ident, $body:block) => {
@@ -1567,6 +1571,8 @@ async fn run_contract(db: Database) {
         &translated("common.invalid_params"),
     )
     .await;
+    // 注：Go 的 NaN/Inf 分支（"无效的额度数值"）在 Rust 侧经 serde_json 绑定
+    // 不可达——JSON 无法表达 NaN 字面量，绑定层即拒。字面量保留于 handler。
     // subtract。
     assert_success(
         send_json(
