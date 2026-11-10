@@ -199,6 +199,10 @@ fn router(state: AppState) -> Router {
             get(user_insight_http::get_client_catalog),
         )
         .route(
+            "/api/user-insight/client-ban",
+            post(user_insight_http::set_global_client_ban),
+        )
+        .route(
             "/api/user-insight/{id}",
             get(user_insight_http::get_user_insight_detail)
                 .delete(user_insight_http::purge_user_insight_handler),
