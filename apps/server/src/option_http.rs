@@ -1331,7 +1331,16 @@ pub async fn waffo_pair(
     };
     // Go 兜底审计：waffo-pancake 路由未登记 action，落 generic。
     record_option_route_audit(
-        &state, &auth_user, &headers, "POST", route, "generic", 200, success,
+        &state,
+        &auth_user,
+        &headers,
+        RouteAuditTarget {
+            method: "POST",
+            route,
+            action: "generic",
+        },
+        200,
+        success,
     )
     .await;
     response
@@ -1560,9 +1569,11 @@ pub async fn waffo_subscription_product(
         &state,
         &auth_user,
         &headers,
-        "POST",
-        "/api/option/waffo-pancake/subscription-product",
-        "generic",
+        RouteAuditTarget {
+            method: "POST",
+            route: "/api/option/waffo-pancake/subscription-product",
+            action: "generic",
+        },
         200,
         success,
     )
