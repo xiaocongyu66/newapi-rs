@@ -160,11 +160,11 @@ impl UpstreamFetch for HttpUpstream {
     }
 }
 
-fn fetch_once(
-    client: &reqwest::Client,
-    url: &str,
+fn fetch_once<'a>(
+    client: &'a reqwest::Client,
+    url: &'a str,
     max_bytes: usize,
-) -> impl Future<Output = Result<Vec<u8>, UpstreamFetchError>> + Send + '_ {
+) -> impl Future<Output = Result<Vec<u8>, UpstreamFetchError>> + Send + 'a {
     async move {
         let response = client
             .get(url)
@@ -259,6 +259,7 @@ pub(crate) fn upstream_urls_for(base: &str, locale: &str) -> (String, String) {
 /// 空值归一、不影响行为（fetch 不检查它们），这里只用于“信封 vs 数组”
 /// 的形态判定。
 #[derive(Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
 #[allow(dead_code)]
 struct UpstreamEnvelope<T> {
     #[serde(default)]
