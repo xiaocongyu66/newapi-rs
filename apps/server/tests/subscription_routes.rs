@@ -370,14 +370,16 @@ async fn run_contract(db: Database) {
         .collect();
     assert_eq!(json!(all_ids), json!([4, 1, 3, 2]), "{body}");
 
-    // Stored preference is echoed through normalization.
-    seed_user_setting(
-        &db,
-        8,
-        "pat-other",
-        Some(r#"{"billing_preference":"wallet_first"}"#),
-    )
-    .await;
+    // Stored preference is echoed through normalization. User 8 was seeded
+    // earlier without a setting row value, so update it in place instead of
+    // inserting a duplicate.
+    backend!(db, pool, {
+        sqlx::query("UPDATE users SET setting = $1 WHERE id = 8")
+            .bind(r#"{"billing_preference":"wallet_first"}"#)
+            .execute(pool)
+            .await
+            .expect("update user setting");
+    });
     let body = assert_success(
         send(
             &app,
