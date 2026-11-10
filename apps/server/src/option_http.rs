@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use axum::{
     Json,
     body::Bytes,
-    extract::{ConnectInfo, Extension, Request, State},
+    extract::{Extension, Request, State},
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
@@ -132,10 +132,6 @@ pub async fn require_system_settings(
     }
     // 拒绝路径：写方法的兜底审计（本切片路由只有 POST/PUT/DELETE）。
     let (parts, _body) = request.into_parts();
-    let peer = parts
-        .extensions
-        .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
     let method = parts.method.clone();
     let path = parts.uri.path().to_owned();
     let headers = parts.headers.clone();
@@ -955,7 +951,7 @@ pub async fn reset_model_ratio(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let default_str = crate::option_defaults::default_model_ratio_json();
-    if let Err(_) = upsert_option(&db, "ModelRatio", &default_str).await {
+    if upsert_option(&db, "ModelRatio", &default_str).await.is_err() {
         record_option_route_audit(
             &state,
             &auth_user,
@@ -1154,7 +1150,7 @@ pub async fn waffo_catalog(
     State(state): State<AppState>,
     Extension(_auth_user): Extension<AuthenticatedUser>,
     uri: Uri,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     injected: Option<Extension<InjectedPancakeTransport>>,
 ) -> Response {
     let Some(db) = state.db() else {
@@ -1189,8 +1185,8 @@ pub async fn waffo_pair(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     headers: HeaderMap,
-    body: Bytes,
     injected: Option<Extension<InjectedPancakeTransport>>,
+    body: Bytes,
 ) -> Response {
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -1404,8 +1400,8 @@ pub async fn waffo_subscription_product(
     State(state): State<AppState>,
     Extension(auth_user): Extension<AuthenticatedUser>,
     headers: HeaderMap,
-    body: Bytes,
     injected: Option<Extension<InjectedPancakeTransport>>,
+    body: Bytes,
 ) -> Response {
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

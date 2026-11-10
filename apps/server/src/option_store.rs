@@ -387,7 +387,7 @@ pub(crate) fn validate_theme_customization(value: &str) -> Result<(), String> {
     };
     let optional_int = |key: &str| -> Option<i64> { payload.get(key).and_then(Value::as_i64) };
     let mut invalid: Vec<String> = Vec::new();
-    for (name, value, allowed) in [
+    let enum_rules: [(&str, String, &[&str]); 5] = [
         (
             "preset",
             text("preset"),
@@ -417,7 +417,8 @@ pub(crate) fn validate_theme_customization(value: &str) -> Result<(), String> {
             text("content_layout"),
             ["full", "centered"],
         ),
-    ] {
+    ];
+    for (name, value, allowed) in enum_rules {
         if !allowed.contains(&value.as_str()) {
             invalid.push(format!("{name} 无效：{value:?}"));
         }

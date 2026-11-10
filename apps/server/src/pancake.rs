@@ -186,9 +186,10 @@ impl PancakeTransport for HttpPancakeTransport {
     ) -> PancakeFuture<'a, PairOutcome> {
         Box::pin(async move {
             // Go：先建店，失败直接上抛（Failed）；建品失败返回孤儿店。
-            let store_id = create_store(merchant_id, private_key)
-                .await
-                .map_err(|error| PairOutcome::Failed(error.0))?;
+            let store_id = match create_store(merchant_id, private_key).await {
+                Ok(store_id) => store_id,
+                Err(error) => return Ok(PairOutcome::Failed(error.0)),
+            };
             match create_product(
                 merchant_id,
                 private_key,

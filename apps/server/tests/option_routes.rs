@@ -350,13 +350,10 @@ impl PancakeTransport for FakePancakeTransport {
         _private_key: &'a str,
     ) -> newapi_server::pancake::PancakeFuture<'a, WaffoPancakeCatalog> {
         self.record("catalog");
-        let merchant_id = merchant_id.to_owned();
         Box::pin(async move {
+            let _ = merchant_id;
             match self.take() {
-                Canned::Catalog(result) => {
-                    let _ = merchant_id;
-                    result
-                }
+                Canned::Catalog(result) => result,
                 _ => Err(PancakeError("unexpected call".to_owned())),
             }
         })
@@ -387,9 +384,7 @@ impl PancakeTransport for FakePancakeTransport {
         _return_url: &'a str,
     ) -> newapi_server::pancake::PancakeFuture<'a, String> {
         self.record(format!("create_product:{store_id}:{name}").as_str());
-        let name = name.to_owned();
         Box::pin(async move {
-            let _ = name;
             match self.take() {
                 Canned::Pair(PairOutcome::Complete(result)) => Ok(result.product_id),
                 Canned::Pair(PairOutcome::Failed(message)) => Err(PancakeError(message)),
