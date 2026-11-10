@@ -1314,6 +1314,8 @@ pub async fn sync_upstream_with(
                 created_list.push(name.clone());
             }
             Err(error) => {
+                #[cfg(test)]
+                eprintln!("models sync insert failed for {name}: {error}");
                 tracing::warn!(
                     event = "model_sync_insert_failed",
                     category = crate::database_error_class(&error),
