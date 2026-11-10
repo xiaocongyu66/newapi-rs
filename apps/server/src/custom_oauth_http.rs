@@ -1178,9 +1178,10 @@ fn translate(headers: &HeaderMap, key: &str) -> String {
 /// Go `resp.Status`：`"<code> <reason>"`。`StatusCode` 的 Display 本身就是
 /// 该格式（无标准短语时只剩 code），无需再拼一次 canonical_reason。
 fn status_line(status: u16) -> String {
-    StatusCode::from_u16(status)
-        .map(|status| status.to_string())
-        .unwrap_or_else(|| format!("{status}"))
+    match StatusCode::from_u16(status) {
+        Ok(status) => status.to_string(),
+        Err(_) => format!("{status}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
