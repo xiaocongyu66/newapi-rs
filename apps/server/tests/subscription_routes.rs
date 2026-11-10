@@ -373,10 +373,10 @@ async fn run_contract(db: Database) {
     // Stored preference is echoed through normalization. User 8 was seeded
     // earlier without a setting row value, so update it in place instead of
     // inserting a duplicate.
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query("UPDATE users SET setting = $1 WHERE id = 8")
             .bind(r#"{"billing_preference":"wallet_first"}"#)
-            .execute(&pool)
+            .execute(pool)
             .await
             .expect("update user setting");
     });
@@ -407,9 +407,9 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_eq!(body["data"], json!({"billing_preference": "wallet_only"}));
-    backend!(db, pool, {
+    backend!(&db, pool, {
         let stored: Option<String> = sqlx::query_scalar("SELECT setting FROM users WHERE id = 7")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .expect("read back setting");
         let stored: Value = serde_json::from_str(&stored.expect("setting written")).unwrap();
