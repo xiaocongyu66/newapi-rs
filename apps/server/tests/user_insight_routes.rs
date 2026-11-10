@@ -857,7 +857,8 @@ async fn run_contract(db: Database) {
         Some(&json!({"client": "curl", "ban": true})),
     )
     .await;
-    assert_eq!(blocked_option(&db).await, json!(["curl", "opencode"]));
+    // Go 的重建算法把目标移到列表末尾：先整体去重保序、再追加。
+    assert_eq!(blocked_option(&db).await, json!(["opencode", "curl"]));
 
     // 解封只移除目标。
     let body = body_json(
