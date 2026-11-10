@@ -10,6 +10,7 @@
 //! 取列不可行；行映射由一个共享宏生成函数体，再按后端各包一层具体签名。
 
 use newapi_storage::Database;
+use sqlx::Row;
 
 /// Go `SubscriptionPlan`（`store_subscription.go:104-155`）的行投影；
 /// `gorm:"-"` 的两个 display 字段不在行上，由 server 适配层渲染时计算。
