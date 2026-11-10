@@ -53,7 +53,7 @@ const ADMIN_PAT: &str = "log-admin-pat";
 const USER_A_PAT: &str = "log-user-a-pat";
 const USER_B_PAT: &str = "log-user-b-pat";
 
-const SQLITE_USERS: &str = r#"CREATE TABLE users (
+const SQLITE_USERS: &str = r#"CREATE TABLE IF NOT EXISTS users (
     id BIGINT PRIMARY KEY, username TEXT, display_name TEXT,
     role BIGINT, status BIGINT, email TEXT, github_id TEXT, discord_id TEXT,
     oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, "group" TEXT,
@@ -65,7 +65,7 @@ const SQLITE_USERS: &str = r#"CREATE TABLE users (
 
 const POSTGRES_USERS: &str = SQLITE_USERS;
 
-const SQLITE_LOGS: &str = r#"CREATE TABLE logs (
+const SQLITE_LOGS: &str = r#"CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id BIGINT NOT NULL DEFAULT 0,
     created_at BIGINT NOT NULL DEFAULT 0,
@@ -89,7 +89,7 @@ const SQLITE_LOGS: &str = r#"CREATE TABLE logs (
     other TEXT NOT NULL DEFAULT ''
 )"#;
 
-const POSTGRES_LOGS: &str = r#"CREATE TABLE logs (
+const POSTGRES_LOGS: &str = r#"CREATE TABLE IF NOT EXISTS logs (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL DEFAULT 0,
     created_at BIGINT NOT NULL DEFAULT 0,
@@ -113,12 +113,12 @@ const POSTGRES_LOGS: &str = r#"CREATE TABLE logs (
     other TEXT NOT NULL DEFAULT ''
 )"#;
 
-const SQLITE_CHANNELS: &str = r#"CREATE TABLE channels (
+const SQLITE_CHANNELS: &str = r#"CREATE TABLE IF NOT EXISTS channels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL DEFAULT ''
 )"#;
 
-const POSTGRES_CHANNELS: &str = r#"CREATE TABLE channels (
+const POSTGRES_CHANNELS: &str = r#"CREATE TABLE IF NOT EXISTS channels (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL DEFAULT ''
 )"#;
