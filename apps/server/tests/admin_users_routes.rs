@@ -161,7 +161,7 @@ simple_table!("qq_bindings", QQ_POSTGRES, QQ_SQLITE);
 
 macro_rules! backend {
     ($db:expr, $pool:ident, $body:block) => {
-        match $db {
+        match &$db {
             Database::Sqlite($pool) => $body,
             Database::Postgres($pool) => $body,
         }
@@ -433,7 +433,7 @@ fn jwt(user_id: i64, sid: &str, uv: i64, sv: i64, issued_at: i64) -> String {
 
 async fn send(
     state: &AppState,
-    method: Method,
+    method: &Method,
     path: &str,
     authorization: Option<&str>,
     body: Option<&Value>,
@@ -634,19 +634,19 @@ async fn run_contract(db: Database) {
         (Method::POST, "/api/user/manage"),
     ] {
         assert_auth_failure(
-            send(&app, method, path, None, None).await,
+            send(&app, &method, path, None, None).await,
             StatusCode::UNAUTHORIZED,
             "AUTH_UNAUTHORIZED",
         )
         .await;
         assert_auth_failure(
-            send(&app, method, path, Some(&common), None).await,
+            send(&app, &method, path, Some(&common), None).await,
             StatusCode::FORBIDDEN,
             "AUTH_INSUFFICIENT_PRIVILEGE",
         )
         .await;
         assert_auth_failure(
-            send(&app, method, path, Some(&guest), None).await,
+            send(&app, &method, path, Some(&guest), None).await,
             StatusCode::FORBIDDEN,
             "AUTH_INSUFFICIENT_PRIVILEGE",
         )
@@ -1496,7 +1496,7 @@ async fn run_contract(db: Database) {
         let demote_reason: String = sqlx::query_scalar(
             "SELECT revoked_reason FROM user_sessions WHERE sid = 'sid-common4'",
         )
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .expect("demote reason");
         assert_eq!(demote_reason, "admin_demote");
