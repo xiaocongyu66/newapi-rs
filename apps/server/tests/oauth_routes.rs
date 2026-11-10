@@ -1186,7 +1186,7 @@ async fn sqlite_oauth_provider_unknown_and_state_contract() {
         .connect("sqlite::memory:")
         .await
         .expect("in-memory SQLite fixture");
-    run_provider_unknown_contract(Database::Sqlite(pool)).await;
+    run_provider_unknown_contract(Database::Sqlite(pool.clone())).await;
     run_provider_state_invalid_contract(Database::Sqlite(pool)).await;
 }
 
