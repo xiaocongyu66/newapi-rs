@@ -517,6 +517,14 @@ async fn postgres_models_routes_contract() {
 }
 
 async fn contract(db: &Database) {
+    // 把仓储层的 warn!（失败分类）透到测试 stdout，panic 时随
+    // captured output 一起打印，便于 CI 证据定位。
+    let _guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stdout)
+            .with_max_level(tracing::Level::WARN)
+            .finish(),
+    );
     create_schema(db).await;
     reset(db).await;
     seed_user(db, 1, "admin-one", 10).await;
@@ -1020,7 +1028,10 @@ async fn contract(db: &Database) {
     // 与 status 不同；abilities-only-2 进入 abilities 成为缺失。
     exec(
         db,
-        "UPDATE models SET sync_official = 1 WHERE model_name = 'abilities-only'",
+        "UPDATE models SET sync_official = 1, description = 'up desc', \
+         icon = 'up-icon', tags = 'up-tag', \
+         vendor_id = (SELECT id FROM vendors WHERE name = 'UpVendor'), \
+         name_rule = 1, status = 1 WHERE model_name = 'abilities-only'",
     )
     .await;
     exec(

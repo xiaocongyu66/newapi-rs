@@ -1069,7 +1069,12 @@ async fn ensure_vendor(
             cache.insert(vendor_name.to_owned(), id);
             id
         }
-        Err(_) => {
+        Err(error) => {
+            tracing::warn!(
+                event = "model_sync_vendor_insert_failed",
+                category = crate::database_error_class(&error),
+                "vendor insert failed during sync"
+            );
             cache.insert(vendor_name.to_owned(), 0);
             0
         }
