@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn md5_matches_known_vectors() {
         assert_eq!(md5_hex(""), "d41d8cd98f00b204e9800998ecf8427e");
-        assert_eq!(md5_hex("abc"), "900150983249c27d1cac5687ff72f73a");
+        assert_eq!(md5_hex("abc"), "900150983cd24fb0d6963f7d28e17f72");
         assert_eq!(
             md5_hex("The quick brown fox jumps over the lazy dog"),
             "9e107d9d372bb6826bd81d3542a419d6"
