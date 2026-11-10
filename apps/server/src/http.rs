@@ -571,13 +571,11 @@ fn build_router(state: AppState) -> Router {
         Router::new()
             .route(
                 "/api/user-insight/",
-                get(crate::user_insight_http::list_user_insights)
-                    .post(crate::user_insight_http::set_global_client_ban),
+                get(crate::user_insight_http::list_user_insights),
             )
             .route(
                 "/api/user-insight",
-                get(crate::user_insight_http::list_user_insights)
-                    .post(crate::user_insight_http::set_global_client_ban),
+                get(crate::user_insight_http::list_user_insights),
             )
             .route(
                 "/api/user-insight/summary",
@@ -586,6 +584,10 @@ fn build_router(state: AppState) -> Router {
             .route(
                 "/api/user-insight/client-catalog",
                 get(crate::user_insight_http::get_client_catalog),
+            )
+            .route(
+                "/api/user-insight/client-ban",
+                post(crate::user_insight_http::set_global_client_ban),
             )
             .route(
                 "/api/user-insight/{id}",
