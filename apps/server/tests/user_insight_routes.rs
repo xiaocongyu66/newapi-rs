@@ -734,6 +734,45 @@ async fn run_contract(db: Database) {
     assert_invalid_params(send(&app, Method::GET, "/api/user-insight/0", Some(&admin), None).await)
         .await;
 
+    // ---- client catalog ----------------------------------------------------
+    let body = body_json(
+        send(
+            &app,
+            Method::GET,
+            "/api/user-insight/client-catalog",
+            Some(&admin),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["success"], json!(true));
+    let entries = body["data"].as_array().expect("catalog");
+    // 内置规则 44 条在前，顺序同 Go clientRules。
+    assert_eq!(entries[0]["id"], json!("claude_code"));
+    assert_eq!(entries[0]["built_in"], json!(true));
+    assert_eq!(entries[0]["requests"], json!(0));
+    let cursor = entries
+        .iter()
+        .find(|entry| entry["id"] == json!("cursor"))
+        .expect("cursor entry");
+    assert_eq!(cursor["kind"], json!("ide"));
+    assert_eq!(cursor["requests"], json!(7));
+    assert_eq!(cursor["users"], json!(1));
+    let sillytavern = entries
+        .iter()
+        .find(|entry| entry["id"] == json!("sillytavern"))
+        .expect("sillytavern entry");
+    assert_eq!(sillytavern["users"], json!(1));
+    // 观测到的自动发现客户端追加在后，discovered 形态 + 可读名。
+    let discovered = entries.last().expect("discovered entry");
+    assert_eq!(discovered["id"], json!("ua:mybot+acme"));
+    assert_eq!(discovered["name"], json!("mybot (acme)"));
+    assert_eq!(discovered["kind"], json!("discovered"));
+    assert_eq!(discovered["built_in"], json!(false));
+    assert_eq!(discovered["requests"], json!(3));
+    assert_eq!(discovered["users"], json!(1));
+
     // ---- purge -------------------------------------------------------------
     seed_sample(&db, 11).await;
     seed_sample(&db, 11).await;
@@ -779,45 +818,6 @@ async fn run_contract(db: Database) {
         .await,
     )
     .await;
-
-    // ---- client catalog ----------------------------------------------------
-    let body = body_json(
-        send(
-            &app,
-            Method::GET,
-            "/api/user-insight/client-catalog",
-            Some(&admin),
-            None,
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(body["success"], json!(true));
-    let entries = body["data"].as_array().expect("catalog");
-    // 内置规则 44 条在前，顺序同 Go clientRules。
-    assert_eq!(entries[0]["id"], json!("claude_code"));
-    assert_eq!(entries[0]["built_in"], json!(true));
-    assert_eq!(entries[0]["requests"], json!(0));
-    let cursor = entries
-        .iter()
-        .find(|entry| entry["id"] == json!("cursor"))
-        .expect("cursor entry");
-    assert_eq!(cursor["kind"], json!("ide"));
-    assert_eq!(cursor["requests"], json!(7));
-    assert_eq!(cursor["users"], json!(1));
-    let sillytavern = entries
-        .iter()
-        .find(|entry| entry["id"] == json!("sillytavern"))
-        .expect("sillytavern entry");
-    assert_eq!(sillytavern["users"], json!(1));
-    // 观测到的自动发现客户端追加在后，discovered 形态 + 可读名。
-    let discovered = entries.last().expect("discovered entry");
-    assert_eq!(discovered["id"], json!("ua:mybot+acme"));
-    assert_eq!(discovered["name"], json!("mybot (acme)"));
-    assert_eq!(discovered["kind"], json!("discovered"));
-    assert_eq!(discovered["built_in"], json!(false));
-    assert_eq!(discovered["requests"], json!(3));
-    assert_eq!(discovered["users"], json!(1));
 
     // ---- global client ban -------------------------------------------------
     let response = send(
