@@ -13,8 +13,10 @@
 //!   aff_code、默认 setting；
 //! - 邮箱绑定复刻 `BindEmailToUser` 的事务形状（同一 advisory lock）。
 
-use crate::users::profile;
+// profile! 宏在调用点展开：Row trait 与 UserProfile 需在此作用域可见。
+use crate::users::{UserProfile, profile};
 use newapi_storage::Database;
+use sqlx::Row;
 
 /// Go `userBindColumns`（`store_users_lifecycle.go:121-127`）。
 const BIND_COLUMNS: [&str; 5] = [

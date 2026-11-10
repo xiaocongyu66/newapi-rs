@@ -192,7 +192,7 @@ mod tests {
         });
         let mut signed = params;
         signed.retain(|(key, _)| key != "hash");
-        signed.push(("hash".to_owned(), vec![signature]));
+        signed.push(("hash".to_owned(), vec![signature.clone()]));
 
         let verified =
             verify_telegram_authorization(&signed, "bot-token", 1_700_000_100).expect("valid");

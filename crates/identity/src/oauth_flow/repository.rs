@@ -225,7 +225,7 @@ macro_rules! push_optional_match_impl {
                 .push_bind($matching.session_id);
         }
     }};
-
+}
 
 /// Go `TelegramBind` 的事务闭包体（`bind_telegram.go:144-199`）：消费 flow →
 /// 断言防重放 → 用户/会话/外部身份/绑定列的检查与更新。按宏展开成具体
@@ -517,7 +517,6 @@ impl OAuthFlowRepository {
         })
     }
 
-
     /// Go `TelegramBind` 的事务主体：消费 flow → 断言防重放 → 用户/会话/
     /// 外部身份/绑定列的检查与更新，全部在一个数据库事务内提交或回滚。
     /// SQLite 用 `BEGIN IMMEDIATE` 保证读改写原子；PG 用默认隔离 +
@@ -671,6 +670,4 @@ fn classify_existing(flow: OAuthFlow, now: i64) -> Result<OAuthFlow, TelegramFlo
         return Err(TelegramFlowError::FlowInvalid);
     }
     Ok(flow)
-}
-
 }
