@@ -1539,9 +1539,10 @@ mod tests {
     fn append_keys_deduplicates() {
         let joined = append_keys("origin-key\nsecond-key", "second-key\nthird", false).unwrap();
         assert_eq!(joined, "origin-key\nsecond-key\nthird");
-        // 顶点 JSON 数组分支。
+        // 顶点 JSON 数组分支：Go 的现有 key 列表保留 RawMessage 引号，新 key
+        // 列表由 getVertexArrayKeys 去引号，两者形态不同（Go 同样不去重）。
         let joined = append_keys("[\"a\",\"b\"]", "[\"b\",\"c\"]", true).unwrap();
-        assert_eq!(joined, "\"a\"\n\"b\"\n\"c\"");
+        assert_eq!(joined, "\"a\"\n\"b\"\nb\nc");
     }
 
     #[test]
