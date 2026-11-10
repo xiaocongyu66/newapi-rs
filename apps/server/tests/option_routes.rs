@@ -305,7 +305,6 @@ async fn audit_rows(db: &Database) -> Vec<AuditRow> {
 }
 
 /// 注入式 Pancake 传输的预置行为。
-#[derive(Clone)]
 enum Canned {
     Catalog(Result<WaffoPancakeCatalog, PancakeError>),
     Pair(PairOutcome),
@@ -315,14 +314,14 @@ enum Canned {
 #[derive(Clone)]
 struct FakePancakeTransport {
     calls: Arc<Mutex<Vec<String>>>,
-    queue: Arc<Mutex<Vec<Canned>>>,
+    queue: Arc<Mutex<std::collections::VecDeque<Canned>>>,
 }
 
 impl FakePancakeTransport {
     fn new(canned: Vec<Canned>) -> Self {
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
-            queue: Arc::new(Mutex::new(canned)),
+            queue: Arc::new(Mutex::new(canned.into_iter().collect())),
         }
     }
 
@@ -411,11 +410,12 @@ fn catalog_fixture() -> WaffoPancakeCatalog {
     }
 }
 
-fn sqlite_fixture() -> Database {
+async fn sqlite_fixture() -> Database {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
-        .expect("sqlite fixture");
+        .await
+        .expect("in-memory SQLite fixture");
     Database::Sqlite(pool)
 }
 
@@ -646,7 +646,7 @@ async fn run_auth_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_option_auth_contract() {
-    run_auth_contract(sqlite_fixture()).await;
+    run_auth_contract(sqlite_fixture().await).await;
 }
 
 #[tokio::test]
@@ -742,7 +742,7 @@ async fn run_get_options_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_option_get_contract() {
-    run_get_options_contract(sqlite_fixture()).await;
+    run_get_options_contract(sqlite_fixture().await).await;
 }
 
 #[tokio::test]
@@ -943,8 +943,7 @@ async fn run_put_option_contract(db: Database) {
         Some("reload-visible")
     );
     // 公共 GET 读快照：写后 reload 使其立刻反映新值。
-    let notice_response = app
-        .clone()
+    let notice_response = router(app.clone())
         .oneshot(
             Request::builder()
                 .method(Method::GET)
@@ -978,7 +977,7 @@ async fn run_put_option_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_option_put_contract() {
-    run_put_option_contract(sqlite_fixture()).await;
+    run_put_option_contract(sqlite_fixture().await).await;
 }
 
 #[tokio::test]
@@ -1075,7 +1074,7 @@ async fn run_subresource_contract(db: Database) {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_json(response).await["data"]["deleted"], json!(0));
     // DELETE 的兜底审计（含 400 分支）。
-    let delete_audits: Vec<&AuditRow> = audit_rows(&db)
+    let delete_audits: Vec<AuditRow> = audit_rows(&db)
         .await
         .into_iter()
         .filter(|row| row.action == "option.clear_affinity_cache")
@@ -1140,7 +1139,7 @@ async fn run_subresource_contract(db: Database) {
     let stored = option_row(&db, "ModelRatio").await.expect("ModelRatio row");
     let parsed: Value = serde_json::from_str(&stored).expect("ModelRatio JSON");
     assert_eq!(parsed["gpt-4-gizmo-*"], json!(15.0), "{stored}");
-    let reset_audits: Vec<&AuditRow> = audit_rows(&db)
+    let reset_audits: Vec<AuditRow> = audit_rows(&db)
         .await
         .into_iter()
         .filter(|row| row.action == "option.reset_ratio")
@@ -1151,7 +1150,7 @@ async fn run_subresource_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_option_subresource_contract() {
-    run_subresource_contract(sqlite_fixture()).await;
+    run_subresource_contract(sqlite_fixture().await).await;
 }
 
 #[tokio::test]
@@ -1236,7 +1235,7 @@ async fn run_compliance_contract(db: Database) {
             .as_deref(),
         Some("v1")
     );
-    let audits: Vec<&AuditRow> = audit_rows(&db)
+    let audits: Vec<AuditRow> = audit_rows(&db)
         .await
         .into_iter()
         .filter(|row| row.action == "option.payment_compliance")
@@ -1247,7 +1246,7 @@ async fn run_compliance_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_option_compliance_contract() {
-    run_compliance_contract(sqlite_fixture()).await;
+    run_compliance_contract(sqlite_fixture().await).await;
 }
 
 #[tokio::test]
@@ -1501,7 +1500,7 @@ async fn run_waffo_contract(db: Database) {
     assert_eq!(body["data"]["products"][0]["id"], json!("PROD_5"), "{body}");
 
     // waffo 写路径的兜底审计：save 落 generic。
-    let generic: Vec<&AuditRow> = audit_rows(&db)
+    let generic: Vec<AuditRow> = audit_rows(&db)
         .await
         .into_iter()
         .filter(|row| row.action == "generic")
@@ -1512,7 +1511,7 @@ async fn run_waffo_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_option_waffo_contract() {
-    run_waffo_contract(sqlite_fixture()).await;
+    run_waffo_contract(sqlite_fixture().await).await;
 }
 
 #[tokio::test]
