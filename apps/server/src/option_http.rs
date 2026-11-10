@@ -859,7 +859,7 @@ pub async fn clear_affinity_cache(
 /// Go 兜底审计：`DELETE /api/option/channel_affinity_cache` →
 /// `option.clear_affinity_cache`。400 分支同样落审计（Go 的
 /// finishAdminAudit 不区分业务成败）。
-fn record_affinity_route_audit(
+async fn record_affinity_route_audit(
     state: &AppState,
     auth_user: &AuthenticatedUser,
     headers: &HeaderMap,
