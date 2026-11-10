@@ -692,7 +692,7 @@ fn form(pairs: &[(&str, &str)]) -> String {
 }
 
 /// Go `url.QueryEscape`：未保留字符原样，空格转 `+`，其余 `%XX` 大写。
-pub(crate) fn query_encode_into(out: &mut String, value: &str) {
+pub fn query_encode_into(out: &mut String, value: &str) {
     for &byte in value.as_bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {

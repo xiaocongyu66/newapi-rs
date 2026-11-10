@@ -55,10 +55,12 @@ use newapi_identity::oauth_flow::providers::{
     ProviderError, ResolvedProvider, query_encode_into,
 };
 use newapi_identity::oauth_flow::{
-    self, OAuthFlowError, OAuthFlowRepository, OAuthUserStore, TelegramFlowError,
-    store::{CreateUserError, EmailBindError},
+    self, OAuthFlowError, TelegramFlowError,
+    repository::OAuthFlowRepository,
+    store::{CreateUserError, EmailBindError, OAuthUserStore},
 };
 use newapi_identity::user_auth::CredentialKind;
+use newapi_identity::users::UserProfile;
 use serde_json::{Value, json};
 
 use crate::AppState;
@@ -619,7 +621,7 @@ pub async fn handle_provider(
         return rejected(description);
     }
     let code = first_value(&pairs, "code").unwrap_or_default();
-    let transport = transport_of(injected.as_ref());
+    let transport = transport_of(injected.as_ref().map(|v| &**v));
     if pending.intent == oauth_flow::INTENT_BIND {
         return bind_flow(
             &state,
@@ -836,7 +838,7 @@ async fn find_or_create_user(
     resolved: &ResolvedProvider,
     oauth_user: &OAuthUser,
     affiliate_code: &str,
-) -> Result<crate::users::UserProfile, OAuthFlowError> {
+) -> Result<UserProfile, OAuthFlowError> {
     let Some(db) = state.db() else {
         return Err(OAuthFlowError::Storage);
     };
@@ -959,7 +961,7 @@ async fn user_by_provider(
     store: &OAuthUserStore,
     resolved: &ResolvedProvider,
     oauth_user: &OAuthUser,
-) -> Option<crate::users::UserProfile> {
+) -> Option<UserProfile> {
     if resolved.bind_column.is_empty() {
         store
             .user_by_custom_binding(resolved.custom_id, &oauth_user.provider_user_id)
@@ -1026,7 +1028,7 @@ pub async fn wechat_login(
     }
     let pairs = query_values(query.as_deref());
     let code = first_value(&pairs, "code").unwrap_or_default();
-    let transport = transport_of(injected.as_ref());
+    let transport = transport_of(injected.as_ref().map(|v| &**v));
     let wechat_id = match wechat_id_by_code(&settings, &code, transport).await {
         Ok(wechat_id) => wechat_id,
         Err(message) => return rejected(message),
@@ -1063,7 +1065,7 @@ async fn create_wechat_user(
     state: &AppState,
     store: &OAuthUserStore,
     wechat_id: &str,
-) -> Result<crate::users::UserProfile, CreateUserError> {
+) -> Result<UserProfile, CreateUserError> {
     let max = store
         .max_user_id()
         .await
@@ -1180,7 +1182,7 @@ pub async fn wechat_bind(
         Some(request) => request,
         None => return rejected(MSG_WECHAT_INVALID_REQUEST.to_owned()),
     };
-    let transport = transport_of(injected.as_ref());
+    let transport = transport_of(injected.as_ref().map(|v| &**v));
     let wechat_id = match wechat_id_by_code(&settings, &request.code, transport).await {
         Ok(wechat_id) => wechat_id,
         Err(message) => return rejected(message),
@@ -1446,7 +1448,7 @@ async fn session_reference(
     if pending.user_id <= 0 || pending.session_id.trim().is_empty() {
         return SessionReference::Invalid;
     }
-    let user: Option<(i64, i64)> = match &db {
+    let user = match &db {
         newapi_storage::Database::Sqlite(pool) => {
             sqlx::query_as(
                 "SELECT CAST(status AS BIGINT), CAST(auth_version AS BIGINT) FROM users \
@@ -1476,7 +1478,7 @@ async fn session_reference(
     if status != 1 {
         return SessionReference::UserDisabled;
     }
-    let session: Option<(String, i64, i64, i64)> = match &db {
+    let session = match &db {
         newapi_storage::Database::Sqlite(pool) => {
             sqlx::query_as(
                 "SELECT status, CAST(revoked_at AS BIGINT), CAST(expires_at AS BIGINT), \
