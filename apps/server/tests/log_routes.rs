@@ -37,7 +37,7 @@ use newapi_server::{AppState, log_http};
 use newapi_storage::Database;
 use serde_json::{Value, json};
 use sqlx::{
-    ConnectOptions,
+    ConnectOptions, Row,
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::SqlitePoolOptions,
 };
