@@ -48,7 +48,7 @@ use std::net::SocketAddr;
 
 use axum::{
     Json,
-    body::{Bytes, to_bytes},
+    body::to_bytes,
     extract::{ConnectInfo, Extension, Path, Request, State},
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
@@ -406,7 +406,9 @@ fn clear_user_json(role: i64, status: i64) -> Value {
 }
 
 fn language(headers: &HeaderMap) -> String {
-    crate::request_lang::request_language(crate::request_lang::accept_language_header(headers))
+    crate::request_lang::request_language(
+        crate::request_lang::accept_language_header(headers).as_deref(),
+    )
 }
 
 fn translate(headers: &HeaderMap, key: &str) -> String {

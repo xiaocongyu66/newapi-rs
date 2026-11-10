@@ -654,7 +654,7 @@ impl AdminUserRepository {
     /// 成功返回新用户 id；邮箱恒为空串（Go `cleanUser` 不带邮箱）。
     pub async fn create(&self, input: &AdminCreateInput<'_>) -> Result<i64, AdminPermissionError> {
         let aff_code = random_aff_code();
-        let mut user_id: i64 = 0;
+        let mut user_id;
         backend!(&self.db, pool, {
             let mut tx = pool.begin().await?;
             user_id = sqlx::query_scalar(INSERT_ADMIN_USER)
