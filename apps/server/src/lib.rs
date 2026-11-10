@@ -10,6 +10,7 @@ pub mod auth;
 pub mod body_bind;
 pub mod boundary_mw;
 pub mod checkin_http;
+pub mod custom_oauth_http;
 mod global_limit;
 pub mod groups_http;
 mod http;
