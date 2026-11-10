@@ -364,13 +364,11 @@ async fn run_contract(db: Database) {
     assert_eq!(active[0]["subscription"]["amount_used_display"], json!(0.5));
     let all = data["all_subscriptions"].as_array().expect("all");
     // end_time desc: id 4 (now+9999), 1 (now+3600), 3 (now-10), 2 (now-3600).
-    assert_eq!(
-        all.iter()
-            .map(|s| s["subscription"]["id"].clone())
-            .collect::<Vec<_>>(),
-        json!([4, 1, 3, 2]),
-        "{body}"
-    );
+    let all_ids: Vec<_> = all
+        .iter()
+        .map(|s| s["subscription"]["id"].clone())
+        .collect();
+    assert_eq!(json!(all_ids), json!([4, 1, 3, 2]), "{body}");
 
     // Stored preference is echoed through normalization.
     seed_user_setting(
@@ -409,7 +407,7 @@ async fn run_contract(db: Database) {
     assert_eq!(body["data"], json!({"billing_preference": "wallet_only"}));
     backend!(db, pool, {
         let stored: Option<String> = sqlx::query_scalar("SELECT setting FROM users WHERE id = 7")
-            .fetch_one(pool)
+            .fetch_one(&pool)
             .await
             .expect("read back setting");
         let stored: Value = serde_json::from_str(&stored.expect("setting written")).unwrap();
