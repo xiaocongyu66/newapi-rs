@@ -28,8 +28,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use newapi_billing::topup::{
-    PayMethod, RechargeError, RechargeOutcome, RechargeParams, TopUpQuotaRejection, TopUpSettings,
-    check_capacity, codepay_sign, constant_time_eq, epay_sign, gateway_pay_type_code, insert_topup,
+    PayMethod, RechargeOutcome, RechargeParams, TopUpQuotaRejection, TopUpSettings, check_capacity,
+    codepay_sign, constant_time_eq, epay_sign, gateway_pay_type_code, insert_topup,
     manual_complete_top_up, now_seconds, pay_money, random_string, recharge_top_up,
     record_topup_log, redeem, validate_top_up_quota, vmq_create_sign, vmq_notify_sign,
 };
@@ -66,7 +66,6 @@ const MSG_AMOUNT_TOO_SMALL: &str = "充值金额过低";
 const MSG_PAY_CONFIG_MISSING: &str = "当前管理员未配置支付信息";
 const MSG_PAY_METHOD_MISSING: &str = "支付方式不存在";
 const MSG_PAY_METHOD_UNSUPPORTED: &str = "不支持的支付方式";
-const MSG_LAUNCH_FAILED: &str = "拉起支付失败";
 const MSG_ORDER_CREATE_FAILED: &str = "创建订单失败";
 const MSG_BAD_TRADE_NO: &str = "参数错误";
 
@@ -118,9 +117,7 @@ fn parse_urlencoded(input: &str) -> BTreeMap<String, String> {
     for pair in input.split('&').filter(|pair| !pair.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         let key = percent_decode(key);
-        if !map.contains_key(&key) {
-            map.insert(key, percent_decode(value));
-        }
+        map.entry(key).or_insert_with(|| percent_decode(value));
     }
     map
 }
@@ -298,7 +295,6 @@ fn min_topup(settings: &TopUpSettings, tokens: bool, quota_per_unit: f64) -> i64
 /// 返回 `(pay_money, profile)` 或已写好的错误响应。
 struct PayContext {
     pay_money: f64,
-    profile: newapi_identity::users::UserProfile,
 }
 
 async fn pay_context(
@@ -307,6 +303,9 @@ async fn pay_context(
     user_id: i64,
     request: &PayRequest,
 ) -> Result<PayContext, Response> {
+    // clippy result_large_err：错误分支是完整的 Response 信封（与 Go 的
+    // 200 + common.H 错误体一致），按 Go 结构直接返回。
+    #![allow(clippy::result_large_err)]
     let settings = match TopUpSettings::load(db).await {
         Ok(settings) => settings,
         Err(error) => {
@@ -361,10 +360,7 @@ async fn pay_context(
     if money < 0.01 {
         return Err(pay_error_static(MSG_AMOUNT_TOO_SMALL));
     }
-    Ok(PayContext {
-        pay_money: money,
-        profile,
-    })
+    Ok(PayContext { pay_money: money })
 }
 
 /// Go 侧 TOKENS 展示下的订单金额归一化：`amount / QuotaPerUnit` 截断。
@@ -472,6 +468,7 @@ pub async fn request_epay(
 
 /// Go `RequestVmqPay` / `RequestCodePayPay` 入口的合规与凭证门。
 fn gateway_entry_gate(settings: &TopUpSettings, gateway: &str) -> Result<(), Response> {
+    #![allow(clippy::result_large_err)]
     let compliant = settings.payment_compliance_confirmed();
     let configured = match gateway {
         "vmq" => !settings.vmq_address.trim().is_empty() && !settings.vmq_key.trim().is_empty(),
@@ -494,6 +491,7 @@ fn resolve_pay_type(
     gateway: &str,
     request_method: &str,
 ) -> Result<&'static str, Response> {
+    #![allow(clippy::result_large_err)]
     let Some(method) = find_pay_method(settings, request_method, gateway) else {
         return Err(pay_error_static(MSG_PAY_METHOD_MISSING));
     };
@@ -713,7 +711,7 @@ pub async fn epay_notify(
     State(state): State<AppState>,
     method: axum::http::Method,
     uri: Uri,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let _ = notify_params;
@@ -820,7 +818,7 @@ pub async fn vmq_notify(
     State(state): State<AppState>,
     method: axum::http::Method,
     uri: Uri,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let Some(db) = state.db() else {
@@ -926,7 +924,7 @@ pub async fn codepay_notify(
     State(state): State<AppState>,
     method: axum::http::Method,
     uri: Uri,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let Some(db) = state.db() else {
@@ -1198,7 +1196,7 @@ fn api_i18n_error(headers: &HeaderMap, key: &str) -> Response {
     .into_response()
 }
 
-fn api_plain_error(headers: &HeaderMap, message: &str) -> Response {
+fn api_plain_error(_headers: &HeaderMap, message: &str) -> Response {
     Json(json!({
         "success": false,
         "message": message,
