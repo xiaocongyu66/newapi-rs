@@ -128,13 +128,17 @@ pub fn widget_signature(bot_token: &str, params: &[(String, String)]) -> String 
 /// （Go 返回 error，两个分支在调用点同归失败）。
 fn hex_decode(input: &str) -> Option<Vec<u8>> {
     let bytes = input.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        let high = hex_value(pair[0])?;
-        let low = hex_value(pair[1])?;
+    let (pairs, rest) = bytes.as_chunks::<2>();
+    if !rest.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(pairs.len());
+    for &[high_byte, low_byte] in pairs {
+        let high = hex_value(high_byte)?;
+        let low = hex_value(low_byte)?;
         out.push(high * 16 + low);
     }
     Some(out)
@@ -176,20 +180,16 @@ mod tests {
             ("auth_date", "1700000000"),
             ("hash", "placeholder"),
         ]);
-        // 重算合法签名：排序键值（不含 hash）→ \n 连接 → HMAC(SHA256(token))。
-        let joined = params
-            .iter()
-            .filter(|(key, _)| key != "hash")
-            .map(|(key, values)| format!("{key}={}", values[0]))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let secret = Sha256::digest(b"bot-token");
-        let expected = crate::crypto::mac(&secret, joined.as_bytes());
-        let signature = expected.iter().fold(String::new(), |mut acc, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(acc, "{byte:02x}");
-            acc
-        });
+        // 重算合法签名（排序键值 → \n 连接 → HMAC(SHA256(token))），
+        // 与校验侧同一算法（widget_signature）。
+        let signature = widget_signature(
+            "bot-token",
+            &params
+                .iter()
+                .filter(|(key, _)| key != "hash")
+                .map(|(key, values)| (key.clone(), values[0].clone()))
+                .collect::<Vec<_>>(),
+        );
         let mut signed = params;
         signed.retain(|(key, _)| key != "hash");
         signed.push(("hash".to_owned(), vec![signature.clone()]));
@@ -235,8 +235,17 @@ mod tests {
 
     #[test]
     fn future_skew_boundary_is_inclusive() {
-        // 恰好 +2min 仍接受（Go `>` 边界）。
-        let params = single(&[("id", "1"), ("auth_date", "1700000000"), ("hash", "00")]);
+        // 恰好 +2min 仍接受（Go `>` 边界）；签名合法，窗口是唯一变量。
+        let base = single(&[("id", "1"), ("auth_date", "1700000000")]);
+        let signature = widget_signature(
+            "bot-token",
+            &[
+                ("id".to_owned(), "1".to_owned()),
+                ("auth_date".to_owned(), "1700000000".to_owned()),
+            ],
+        );
+        let mut params = base;
+        params.push(("hash".to_owned(), vec![signature.clone()]));
         let verified = verify_telegram_authorization(&params, "bot-token", 1_700_000_000 - 120);
         assert!(verified.is_ok());
         // 恰好 -5min 仍接受。

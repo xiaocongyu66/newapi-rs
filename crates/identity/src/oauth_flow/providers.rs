@@ -1088,9 +1088,11 @@ fn render_denied(
     }
     message = replace_expression(&message, "current", |path| string_at(value, &path));
     message = replace_expression(&message, "required", |path| {
-        (path == failure.field)
-            .then(|| text_of(&failure.expected))
-            .unwrap_or_default()
+        if path == failure.field {
+            text_of(&failure.expected)
+        } else {
+            String::new()
+        }
     });
     message.trim().to_owned()
 }

@@ -541,6 +541,7 @@ impl OAuthUserStore {
 
     /// Go `WeChatAuth` 的用户创建（`bind_wechat.go:88-109`）：wechat_id
     /// 直接随用户行插入，无独立绑定事务。
+    #[allow(clippy::too_many_arguments)] // 参数与 Go `WeChatAuth` 直传一致。
     pub async fn create_wechat_user(
         &self,
         username: &str,

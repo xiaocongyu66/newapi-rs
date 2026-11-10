@@ -153,33 +153,3 @@ impl From<sqlx::Error> for OAuthFlowError {
         Self::Storage
     }
 }
-
-/// Go `handler.handleOAuthError` 的错误翻译点（`handle_oauth.go:452-467`）：
-/// `oauth.OAuthError` 的 MsgKey 归一到固定键；`AccessDeniedError` 直传；
-/// `TrustLevelError` 固定键。其它错误折叠为存储分类。
-pub(crate) fn provider_error_to_flow_error(error: providers::ProviderError) -> OAuthFlowError {
-    match error {
-        providers::ProviderError::InvalidCode => OAuthFlowError::Provider {
-            key: "oauth.invalid_code",
-            provider: String::new(),
-        },
-        providers::ProviderError::ConnectFailed(provider) => OAuthFlowError::Provider {
-            key: "oauth.connect_failed",
-            provider,
-        },
-        providers::ProviderError::TokenFailed(provider) => OAuthFlowError::Provider {
-            key: "oauth.token_failed",
-            provider,
-        },
-        providers::ProviderError::UserInfoEmpty(provider) => OAuthFlowError::Provider {
-            key: "oauth.user_info_empty",
-            provider,
-        },
-        providers::ProviderError::GetUserFailed(provider) => OAuthFlowError::Provider {
-            key: "oauth.get_user_error",
-            provider,
-        },
-        providers::ProviderError::TrustLevel => OAuthFlowError::TrustLevel,
-        providers::ProviderError::Denied(message) => OAuthFlowError::Message(message),
-    }
-}
