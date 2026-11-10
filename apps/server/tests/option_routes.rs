@@ -136,7 +136,8 @@ macro_rules! backend {
 
 /// 与 `http.rs` 的注册保持同一形态（含根路由的尾斜线双注册）。
 fn router(state: AppState) -> Router {
-    let routes = Router::new()
+    // /api/notice 是公共路由（http.rs 中不挂 admin_auth），不能进分层组。
+    let protected = Router::new()
         .route("/api/option/", get(get_options).put(update_option))
         .route("/api/option", get(get_options).put(update_option))
         .route(
@@ -160,7 +161,6 @@ fn router(state: AppState) -> Router {
             "/api/option/waffo-pancake/subscription-product-options",
             get(waffo_subscription_product_options),
         )
-        .route("/api/notice", get(notice_probe))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_system_settings,
@@ -168,8 +168,12 @@ fn router(state: AppState) -> Router {
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             server_auth::admin_auth,
-        ));
-    routes.with_state(state)
+        ))
+        .with_state(state.clone());
+    Router::new()
+        .merge(protected)
+        .route("/api/notice", get(notice_probe))
+        .with_state(state)
 }
 
 /// 公共 GET /api/notice 的等价投影（http.rs 的 `notice` 为私有；这里按
@@ -414,10 +418,6 @@ impl FakePancakeTransport {
             calls: Arc::new(Mutex::new(Vec::new())),
             queue: Arc::new(Mutex::new(canned.into_iter().collect())),
         }
-    }
-
-    fn calls(&self) -> Vec<String> {
-        self.calls.lock().expect("calls").clone()
     }
 
     fn record(&self, call: &str) {
@@ -1244,7 +1244,7 @@ async fn run_subresource_contract(db: Database) {
     assert_eq!(body["message"], json!(MSG_RESET_RATIO_SUCCESS), "{body}");
     let stored = option_row(&db, "ModelRatio").await.expect("ModelRatio row");
     let parsed: Value = serde_json::from_str(&stored).expect("ModelRatio JSON");
-    assert_eq!(parsed["gpt-4-gizmo-*"], json!(15.0), "{stored}");
+    assert_eq!(parsed["gpt-4-gizmo-*"].as_f64(), Some(15.0), "{stored}");
     let reset_audits: Vec<AuditRow> = audit_rows(&db)
         .await
         .into_iter()
