@@ -420,6 +420,16 @@ async fn run_admin_list_contract(db: &Database) {
 
     // 默认分页：page 1、page_size 10；排序 created_at DESC, id DESC；渠道名
     // 由 channels 表回填（channel_id=0 的行渠道名为空串）。
+    backend!(db, pool, {
+        let counts = sqlx::query("SELECT (SELECT COUNT(*) FROM logs) AS logs, (SELECT COUNT(*) FROM channels) AS channels")
+            .fetch_one(pool)
+            .await
+            .expect("seed sanity check");
+        let log_rows: i64 = counts.try_get("logs").expect("logs count");
+        let channel_rows: i64 = counts.try_get("channels").expect("channels count");
+        assert_eq!(log_rows, 2, "seeded log rows");
+        assert_eq!(channel_rows, 1, "seeded channel rows");
+    });
     let body = assert_list_success(send(&state, "/api/log/", ADMIN_PAT).await, 2, 2).await;
     assert_eq!(body["data"]["page"], json!(1));
     assert_eq!(body["data"]["page_size"], json!(10));
