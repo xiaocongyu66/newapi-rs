@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -45,6 +46,8 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tower::ServiceExt;
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
 
 const SECRET: &str = "models-routes-fixture-secret";
 
@@ -469,7 +472,11 @@ async fn postgres_models_routes_contract() {
         .connect_with(options.clone().disable_statement_logging())
         .await
         .unwrap();
-    let schema = format!("models_routes_{}", std::process::id());
+    let schema = format!(
+        "models_routes_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"
     )))

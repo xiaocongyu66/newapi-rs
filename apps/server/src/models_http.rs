@@ -1313,7 +1313,14 @@ pub async fn sync_upstream_with(
                 created_models += 1;
                 created_list.push(name.clone());
             }
-            Err(_) => skipped.push(name.clone()),
+            Err(error) => {
+                tracing::warn!(
+                    event = "model_sync_insert_failed",
+                    category = crate::database_error_class(&error),
+                    "model insert failed during sync"
+                );
+                skipped.push(name.clone());
+            }
         }
     }
 
