@@ -22,7 +22,6 @@
 
 use std::collections::BTreeMap;
 
-use md5::{Digest, Md5};
 use newapi_storage::Database;
 use rand::Rng;
 use sqlx::Row;
@@ -63,17 +62,10 @@ pub fn constant_time_eq(a: &str, b: &str) -> bool {
     diff == 0
 }
 
-/// Go `vmqMd5`：小写十六进制 MD5。
+/// Go `vmqMd5`：小写十六进制 MD5。`md5` 0.8 的 API 是 `compute(bytes)` +
+/// `format!("{:x}")`（`digest::Digest` 风格属于 `md-5` 0.10）。
 pub fn md5_hex(input: &str) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(input.as_bytes());
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push(char::from_digit(u32::from(byte) >> 4, 16).unwrap_or('0'));
-        out.push(char::from_digit(u32::from(byte) & 0xf, 16).unwrap_or('0'));
-    }
-    out
+    format!("{:x}", md5::compute(input.as_bytes()))
 }
 
 /// go-epay `GenerateParams` 的签名部分：过滤 `sign`/`sign_type`/空值，key
@@ -81,7 +73,7 @@ pub fn md5_hex(input: &str) -> String {
 pub fn epay_sign(params: &BTreeMap<String, String>, key: &str) -> String {
     let mut keys: Vec<&String> = params
         .iter()
-        .filter(|(k, v)| k != "sign" && k != "sign_type" && !v.is_empty())
+        .filter(|(k, v)| k.as_str() != "sign" && k.as_str() != "sign_type" && !v.is_empty())
         .map(|(k, _)| k)
         .collect();
     keys.sort();
@@ -123,7 +115,7 @@ pub fn vmq_notify_sign(
 pub fn codepay_sign(params: &BTreeMap<String, String>, key: &str) -> String {
     let mut keys: Vec<&String> = params
         .iter()
-        .filter(|(k, v)| k != "sign" && !v.is_empty())
+        .filter(|(k, v)| k.as_str() != "sign" && !v.is_empty())
         .map(|(k, _)| k)
         .collect();
     keys.sort();
@@ -607,7 +599,7 @@ fn quota_from_product_f64(money: f64, quota_per_unit: f64) -> Option<i64> {
         return None;
     }
     let rounded = product.round();
-    if rounded <= 0.0 || rounded >= f64::from(MAX_QUOTA) {
+    if rounded <= 0.0 || rounded >= f64::from(MAX_QUOTA as i32) {
         return None;
     }
     Some(rounded as i64)
@@ -629,22 +621,7 @@ pub async fn redeem(db: &Database, key: &str, user_id: i64) -> Result<i64, Redee
 #[derive(Debug)]
 pub struct RedeemFailed;
 
-async fn redeem_on_sqlite(
-    pool: &sqlx::Pool<sqlx::Sqlite>,
-    key: &str,
-    user_id: i64,
-) -> Result<i64, RedeemFailed> {
-    redeem_on_impl!(pool, key, user_id)
-}
-
-async fn redeem_on_pg(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-    key: &str,
-    user_id: i64,
-) -> Result<i64, RedeemFailed> {
-    redeem_on_impl!(pool, key, user_id)
-}
-
+/// 兑换事务体：`Executor` 不跨后端，宏在每个后端上各实例化一次。
 macro_rules! redeem_on_impl {
     ($pool:expr, $key:expr, $user_id:expr) => {{
         // Go `common.RandomSleep()`：0–3000ms 反枚举时序抖动。
@@ -710,6 +687,22 @@ macro_rules! redeem_on_impl {
         tx.commit().await.map_err(|_| RedeemFailed)?;
         Ok(quota)
     }};
+}
+
+async fn redeem_on_sqlite(
+    pool: &sqlx::Pool<sqlx::Sqlite>,
+    key: &str,
+    user_id: i64,
+) -> Result<i64, RedeemFailed> {
+    redeem_on_impl!(pool, key, user_id)
+}
+
+async fn redeem_on_pg(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    key: &str,
+    user_id: i64,
+) -> Result<i64, RedeemFailed> {
+    redeem_on_impl!(pool, key, user_id)
 }
 
 /// 新建充值订单（Go `TopUp.Insert`）。
@@ -794,30 +787,28 @@ pub async fn record_topup_log(
                VALUES ($1,$2,$3,$4,$5,'','',0,0,0,0,false,$6,'',$7)";
     let now = now_seconds();
     let result = match db {
-        Database::Sqlite(pool) => {
-            sqlx::query(sql)
-                .bind(user_id)
-                .bind(now)
-                .bind(LOG_TYPE_TOPUP)
-                .bind(content)
-                .bind(username)
-                .bind(caller_ip)
-                .bind(&other)
-                .execute(pool)
-                .await
-        }
-        Database::Postgres(pool) => {
-            sqlx::query(sql)
-                .bind(user_id)
-                .bind(now)
-                .bind(LOG_TYPE_TOPUP)
-                .bind(content)
-                .bind(username)
-                .bind(caller_ip)
-                .bind(&other)
-                .execute(pool)
-                .await
-        }
+        Database::Sqlite(pool) => sqlx::query(sql)
+            .bind(user_id)
+            .bind(now)
+            .bind(LOG_TYPE_TOPUP)
+            .bind(content)
+            .bind(username)
+            .bind(caller_ip)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
+        Database::Postgres(pool) => sqlx::query(sql)
+            .bind(user_id)
+            .bind(now)
+            .bind(LOG_TYPE_TOPUP)
+            .bind(content)
+            .bind(username)
+            .bind(caller_ip)
+            .bind(&other)
+            .execute(pool)
+            .await
+            .map(|_| ()),
     };
     if let Err(error) = result {
         tracing::warn!(
