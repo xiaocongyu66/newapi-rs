@@ -427,7 +427,7 @@ async fn contract(db: &Database) {
     let names: Vec<&str> = rows.iter().map(|row| row.model_name.as_str()).collect();
     assert_eq!(
         names,
-        vec!["gpt-beta", "claude", "gpt-alpha", "m-explicit", "m-zero"]
+        vec!["m-explicit", "claude", "gpt-beta", "gpt-alpha", "m-zero"]
     );
 
     let (rows, total) = repository
