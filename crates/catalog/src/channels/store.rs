@@ -110,8 +110,11 @@ fn parse_channel_info(json: &str) -> Result<ChannelInfo, sqlx::Error> {
     if json.is_empty() {
         return Ok(ChannelInfo::default());
     }
-    serde_json::from_str(json)
-        .map_err(|_| sqlx::Error::Decode("channel_info is not valid JSON".into()))
+    serde_json::from_str(json).map_err(|_| {
+        // TEMPORARY DIAGNOSTIC: remove once the channel list failure is understood.
+        eprintln!("DIAG bad channel_info string: {json:?}");
+        sqlx::Error::Decode("channel_info is not valid JSON".into())
+    })
 }
 
 /// 行解码：`key` 列可能不在 SELECT 列表中（对应 `Omit("key")`），
