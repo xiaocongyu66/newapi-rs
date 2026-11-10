@@ -874,11 +874,8 @@ mod tests {
             let mut provider = record();
             provider.access_policy = policy.to_owned();
             let issue = validate(&mut provider).unwrap_err();
-            assert_eq!(
-                issue,
-                ProviderValidationIssue::AccessPolicyInvalid(expected.to_owned()),
-                "{policy}"
-            );
+            // HTTP 层按 message() 原样返回，含 `access_policy is invalid: ` 前缀。
+            assert_eq!(issue.message(), expected, "{policy}");
         }
     }
 
