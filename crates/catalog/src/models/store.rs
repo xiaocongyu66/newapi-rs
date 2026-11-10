@@ -482,16 +482,34 @@ impl ModelRepository {
     }
 
     /// Go `mi.Delete()`：软删除。返回是否确实删掉了行（删除前 Go 先 `First`
-    /// 校验存在，这一步在 HTTP 层完成）。
+    /// 校验存在，这一步在 HTTP 层完成）。时间戳列写法沿用
+    /// `identity/src/two_fa/repository.rs` 的双后端先例：unix 秒经
+    /// `datetime(...,'unixepoch')` / `to_timestamp(...::BIGINT)` 写入
+    /// TIMESTAMP/TIMESTAMPTZ 列。
     pub async fn soft_delete(&self, id: i64, deleted_at: i64) -> Result<bool, sqlx::Error> {
         backend!(&self.db, pool, {
-            let result = sqlx::query(
-                "UPDATE models SET deleted_at = $1 WHERE id = $2 AND deleted_at IS NULL",
-            )
-            .bind(deleted_at)
-            .bind(id)
-            .execute(pool)
-            .await?;
+            let result = match self.db {
+                Database::Sqlite(_) => {
+                    sqlx::query(
+                        "UPDATE models SET deleted_at = datetime($1, 'unixepoch') \
+                         WHERE id = $2 AND deleted_at IS NULL",
+                    )
+                    .bind(deleted_at)
+                    .bind(id)
+                    .execute(pool)
+                    .await?
+                }
+                Database::Postgres(_) => {
+                    sqlx::query(
+                        "UPDATE models SET deleted_at = to_timestamp($1::BIGINT) \
+                         WHERE id = $2 AND deleted_at IS NULL",
+                    )
+                    .bind(deleted_at)
+                    .bind(id)
+                    .execute(pool)
+                    .await?
+                }
+            };
             Ok(result.rows_affected() > 0)
         })
     }
@@ -519,9 +537,12 @@ impl ModelRepository {
     /// Go 输出 map 无序；这里按 vendor_id 升序保证响应可复现。
     pub async fn vendor_counts(&self) -> Result<Vec<(i64, i64)>, sqlx::Error> {
         backend!(&self.db, pool, {
+            // NULL vendor_id 与 0 在 Go 的 map 合并后都是键 0；这里用
+            // COALESCE 提前合并，让输出确定且与 Go 的语义一致。
             let rows = sqlx::query(
-                "SELECT vendor_id, COUNT(*) AS count FROM models \
-                 WHERE deleted_at IS NULL GROUP BY vendor_id ORDER BY vendor_id ASC",
+                "SELECT COALESCE(vendor_id, 0) AS vendor_id, COUNT(*) AS count FROM models \
+                 WHERE deleted_at IS NULL GROUP BY COALESCE(vendor_id, 0) \
+                 ORDER BY vendor_id ASC",
             )
             .fetch_all(pool)
             .await?;
