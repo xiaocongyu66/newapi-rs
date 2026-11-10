@@ -198,7 +198,7 @@ struct ProfileRow {
 macro_rules! profile_select {
     ($suffix:literal) => {
         concat!(
-            "SELECT user_id, username, ",
+            "SELECT CAST(user_id AS BIGINT) AS user_id, username, ",
             "CAST(first_seen_at AS BIGINT) AS first_seen_at, ",
             "CAST(last_seen_at AS BIGINT) AS last_seen_at, ",
             "CAST(total_requests AS BIGINT) AS total_requests, ",

@@ -582,9 +582,9 @@ async fn run_contract(db: Database) {
     assert_eq!(items[0]["role"], json!(1));
     assert_eq!(items[0]["group"], json!("default"));
     assert_eq!(items[0]["display_name"], json!("rp-bob"));
-    // 派生字段。
+    // 派生字段。前后端分 6/4，双方都不低于 35%，Go 判 fullstack。
     assert_eq!(items[1]["primary_category"], json!("code"));
-    assert_eq!(items[1]["primary_stack"], json!("frontend"));
+    assert_eq!(items[1]["primary_stack"], json!("fullstack"));
     assert_eq!(items[1]["risk_level"], json!("confirmed"));
     // 性别推断：自述 2 次全一致 → female，置信度 1 封顶 0.9，basis self_report。
     assert_eq!(items[0]["guessed_gender"], json!("female"));
