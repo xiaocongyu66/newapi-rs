@@ -22,6 +22,7 @@ pub mod passkey_http;
 pub mod qq_bind_http;
 pub mod qqbot;
 pub mod readonly_http;
+pub mod redemption_http;
 pub mod register_http;
 pub mod request_lang;
 pub mod reset_http;

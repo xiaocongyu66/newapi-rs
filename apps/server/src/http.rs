@@ -489,6 +489,43 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // `/api/redemption/*`：Go redemptionRoute = apiRouter.Group("/redemption")
+    // （`register_api.go:386-396`），组级只有 `security.AdminAuth()` 一道，
+    // 无限流、无 DisableCache。Fiber 非严格路由使无尾斜杠的 `/api/redemption`
+    // 等价于 `/api/redemption/`，因此两种形态都注册（与 `/api/token` 一致）。
+    let redemption_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/redemption/",
+                get(crate::redemption_http::list_redemptions)
+                    .post(crate::redemption_http::add_redemption)
+                    .put(crate::redemption_http::update_redemption),
+            )
+            .route(
+                "/api/redemption",
+                get(crate::redemption_http::list_redemptions)
+                    .post(crate::redemption_http::add_redemption)
+                    .put(crate::redemption_http::update_redemption),
+            )
+            .route(
+                "/api/redemption/search",
+                get(crate::redemption_http::search_redemptions),
+            )
+            .route(
+                "/api/redemption/invalid",
+                delete(crate::redemption_http::delete_invalid_redemptions),
+            )
+            .route(
+                "/api/redemption/{id}",
+                get(crate::redemption_http::get_redemption)
+                    .delete(crate::redemption_http::delete_redemption),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                redemption_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
     // `POST /api/user/aff_transfer` 同组，但 Go 在它前面多挂
     // `UserCriticalRateLimit("aff-transfer")` 与

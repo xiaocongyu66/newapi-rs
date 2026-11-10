@@ -9,4 +9,5 @@ pub mod checkin;
 mod go_options;
 pub mod qq_bot;
 pub mod quota_display;
+pub mod redemption;
 pub mod topup;
