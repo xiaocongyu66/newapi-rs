@@ -171,6 +171,29 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // `/api/subscription` 自助三路由（`register_api.go:257-263`）：组内纯
+    // `UserAuth`，无限流、无 Turnstile、无 DisableCache。支付下单七条与
+    // admin 组、支付回调不在本切片。
+    let subscription_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/subscription/plans",
+                get(crate::subscription_http::plans),
+            )
+            .route(
+                "/api/subscription/self",
+                get(crate::subscription_http::self_subscriptions),
+            )
+            .route(
+                "/api/subscription/self/preference",
+                put(crate::subscription_http::update_preference),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                subscription_state,
+                crate::auth::user_auth,
+            )),
+    );
     // QQ 绑定路由（`register_api.go:193-197`，紧跟 checkin 之后注册）：
     // - `GET /qq/bind`：`selfRoute` 组内纯 `UserAuth`，无限流、无 DisableCache。
     // - `POST /qq/bind/code`：`UserAuth → CriticalRateLimit → DisableCache`。
