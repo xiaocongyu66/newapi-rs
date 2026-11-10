@@ -26,3 +26,6 @@ sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-toki
 # webauthn-rs passkey 切片预验证：精确锁版（同工作区风格），起步 default-features = false。
 # 最小配置若过则结论最强；若缺必需 feature，CI 日志直接暴露，第二轮再开 defaults。
 webauthn-rs = { version = "=0.6.2", default-features = false }
+# 邮箱格式正则门（任务 #45）基线钉版：admin 配置的 EmailFormatRegex 规则
+# 需要 regex 引擎做 is_match；默认特性覆盖 Go regexp 的常用语法。
+regex = "=1.13.1"
