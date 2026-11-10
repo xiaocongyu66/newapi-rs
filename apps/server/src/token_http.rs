@@ -15,6 +15,12 @@
 //! The raw token key is a credential. It is returned only by `/:id/key`; all
 //! other responses carry [`newapi_identity::tokens::mask_token_key`] output.
 //! Database error text and key values never enter a log line.
+//!
+//! 组与令牌运行时选项来自 `AppState` 的 reload 快照
+//! （`group_settings`/`token_runtime_settings`，与 `/api/user/groups` 一致）：
+//! Go 的模型是进程内 options map（`InitOptionMap` 装载、写后 ApplyOption、
+//! `SyncOptions` 兜底），选项写入 API 尚未移植，故此处不引入即时生效，
+//! 数据库写入在下一次 reload 前对端点不可见。
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -30,8 +36,7 @@ use newapi_identity::{
     self_user::QuotaDisplaySettings,
     tokens::{
         self, LikePatternError, NewToken, TOKEN_STATUS_ENABLED, TOKEN_STATUS_EXHAUSTED,
-        TOKEN_STATUS_EXPIRED, TokenRecord, TokenRepository, TokenRuntimeSettings, TokenSearch,
-        TokenUpdate,
+        TOKEN_STATUS_EXPIRED, TokenRecord, TokenRepository, TokenSearch, TokenUpdate,
     },
 };
 use newapi_storage::Database;
@@ -346,10 +351,7 @@ pub async fn search_tokens(
     if let Some(stripped) = key.strip_prefix("sk-") {
         key = stripped.to_owned();
     }
-    let runtime = match TokenRuntimeSettings::load(repository.database()).await {
-        Ok(settings) => settings,
-        Err(error) => return database_error(&headers, error),
-    };
+    let runtime = state.token_runtime_settings();
     // Go only counts when a fuzzy `%` wildcard is present.
     if keyword.contains('%') || key.contains('%') {
         let count = match repository.count_for_user(auth_user.0.user_id).await {
@@ -420,14 +422,8 @@ pub async fn token_auto_groups(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let repository = token_repository(&state, db);
-    let runtime = match TokenRuntimeSettings::load(repository.database()).await {
-        Ok(settings) => settings,
-        Err(error) => return database_error(&headers, error),
-    };
-    let settings = match load_group_settings(repository.database()).await {
-        Some(settings) => settings,
-        None => return database_error_message(&headers),
-    };
+    let runtime = state.token_runtime_settings();
+    let settings = state.group_settings();
     let user_group = match resolve_user_group(&repository, &auth_user, &headers).await {
         Ok(group) => group,
         Err(response) => return response,
@@ -523,10 +519,7 @@ pub async fn add_token(
         return api_error(&headers, MSG_INVALID_PARAMS);
     };
     let repository = token_repository(&state, db);
-    let runtime = match TokenRuntimeSettings::load(repository.database()).await {
-        Ok(settings) => settings,
-        Err(error) => return database_error(&headers, error),
-    };
+    let runtime = state.token_runtime_settings();
     let display = state.quota_display();
     let unlimited_quota = request.unlimited_quota.unwrap_or(false);
     let remain_quota = if unlimited_quota {
@@ -565,10 +558,7 @@ pub async fn add_token(
     let group = request.group.clone().unwrap_or_default();
     let mut cross_group_retry = request.cross_group_retry.unwrap_or(false);
     let auto_groups = if group == "auto" {
-        let settings = match load_group_settings(repository.database()).await {
-            Some(settings) => settings,
-            None => return database_error_message(&headers),
-        };
+        let settings = state.group_settings();
         let user_group = match resolve_user_group(&repository, &auth_user, &headers).await {
             Ok(group) => group,
             Err(response) => return response,
@@ -693,29 +683,21 @@ pub async fn update_token(
             cross_group_retry = false;
             String::new()
         } else if request.auto_groups.set {
-            match load_group_settings(repository.database()).await {
-                Some(settings) => {
-                    let user_group =
-                        match resolve_user_group(&repository, &auth_user, &headers).await {
-                            Ok(group) => group,
-                            Err(response) => return response,
-                        };
-                    let runtime = match TokenRuntimeSettings::load(repository.database()).await {
-                        Ok(runtime) => runtime,
-                        Err(error) => return database_error(&headers, error),
-                    };
-                    match validate_auto_groups(
-                        &request.auto_groups.groups,
-                        &settings,
-                        &user_group,
-                        runtime.max_token_auto_groups,
-                        &headers,
-                    ) {
-                        Ok(stored) => stored,
-                        Err(response) => return response,
-                    }
-                }
-                None => return database_error_message(&headers),
+            let settings = state.group_settings();
+            let user_group = match resolve_user_group(&repository, &auth_user, &headers).await {
+                Ok(group) => group,
+                Err(response) => return response,
+            };
+            let runtime = state.token_runtime_settings();
+            match validate_auto_groups(
+                &request.auto_groups.groups,
+                &settings,
+                &user_group,
+                runtime.max_token_auto_groups,
+                &headers,
+            ) {
+                Ok(stored) => stored,
+                Err(response) => return response,
             }
         } else {
             existing.auto_groups.clone()
@@ -874,20 +856,6 @@ fn auto_groups_json(raw: &str) -> Value {
     match tokens::parse_auto_groups(raw) {
         Some(groups) if !groups.is_empty() => json!(groups),
         _ => Value::Null,
-    }
-}
-
-async fn load_group_settings(db: &newapi_storage::Database) -> Option<GroupSettings> {
-    match GroupSettings::load(db, &GroupSettings::default()).await {
-        Ok(settings) => Some(settings),
-        Err(error) => {
-            tracing::warn!(
-                event = "token_group_settings_load_failed",
-                category = crate::database_error_class(&error),
-                "token group settings load failed"
-            );
-            None
-        }
     }
 }
 

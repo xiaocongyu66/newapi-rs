@@ -71,8 +71,11 @@ impl Default for GroupSettings {
 impl GroupSettings {
     /// Fetch all group keys in one statement and return a complete replacement.
     /// Missing rows retain the corresponding `previous` value; SQL NULL is an
-    /// error rather than a silent default. A row whose JSON is invalid falls
-    /// back to the Go default for that key (see `store`).
+    /// error rather than a silent default. An invalid JSON row mirrors the Go
+    /// loader for that key: `GroupRatio`/`GroupGroupRatio` keep the previous
+    /// value (Go `LoadFromJsonString` last-good), while `UserUsableGroups`,
+    /// `AutoGroups`, and the special-usable overlay reset before decoding and
+    /// end up empty (see `store`).
     pub async fn load(db: &Database, previous: &Self) -> Result<Self, sqlx::Error> {
         store::load(db, previous).await
     }

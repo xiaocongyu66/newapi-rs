@@ -922,7 +922,10 @@ async fn run_contract(db: Database) {
     .await;
     assert_eq!(body["data"]["total"], json!(0));
 
-    // Auto-group validation and the auto-groups endpoint.
+    // Auto-group validation and the auto-groups endpoint. Group and
+    // token-runtime options reach the endpoints through the reload snapshot
+    // (Go `InitOptionMap`/`SyncOptions`), so the writes are invisible until
+    // the next reload.
     reset(&db).await;
     seed_user(&db, USER_A, "default", pat_a).await;
     set_option(&db, "GroupRatio", r#"{"default":1,"vip":2}"#).await;
@@ -934,6 +937,7 @@ async fn run_contract(db: Database) {
     .await;
     set_option(&db, "AutoGroups", r#"["vip","missing","default"]"#).await;
     set_option(&db, "MaxTokenAutoGroups", "2").await;
+    app.reload(&db).await.unwrap();
     let body = assert_success(
         send_json(
             &app,
@@ -1108,10 +1112,12 @@ async fn run_contract(db: Database) {
     assert!(!cross);
     assert_eq!(group, "not-configured");
 
-    // Per-user token limit from `token_setting.max_user_tokens`.
+    // Per-user token limit from `token_setting.max_user_tokens`; the runtime
+    // snapshot must be refreshed before the endpoint can see the new limit.
     reset(&db).await;
     seed_user(&db, USER_A, "default", pat_a).await;
     set_option(&db, "token_setting.max_user_tokens", "1").await;
+    app.reload(&db).await.unwrap();
     seed_token(
         &db,
         USER_A,

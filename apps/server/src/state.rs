@@ -12,6 +12,7 @@ use newapi_identity::auth_flow::auth_flow_key;
 use newapi_identity::auth_session::{AuthFence, SessionAuth};
 use newapi_identity::self_user::{QuotaDisplayKind, QuotaDisplaySettings};
 use newapi_identity::token_cache::RedisTokenCache;
+use newapi_identity::tokens::TokenRuntimeSettings;
 use newapi_security::client_ip::{ProxyPolicy, resolve_client_ip};
 use newapi_storage::Database;
 use tokio::sync::watch;
@@ -139,6 +140,10 @@ pub struct AppState {
     /// 启动与 reload worker 同频刷新，handler 只读此快照，
     /// 对齐 Go 的 InitOptionMap + SyncOptions 装载时机。
     group_settings: Arc<RwLock<GroupSettings>>,
+    /// 令牌运行时选项快照（AutoGroups/MaxTokenAutoGroups/
+    /// `token_setting.max_user_tokens`）：与用户组选项同频装载，
+    /// token 端点只读此快照，与 `/api/user/groups` 的新鲜度一致。
+    token_runtime: Arc<RwLock<TokenRuntimeSettings>>,
     /// auth_flow 的 HMAC key：`auth-flow-v1:` + session secret，与 Go 一致。
     flow_key: Option<Arc<Vec<u8>>>,
     /// 可信代理解析策略；未注入时只信任直连 peer（测试路径）。
@@ -177,6 +182,7 @@ impl Default for AppState {
             auth_settings: Arc::new(RwLock::new(AuthSettings::default())),
             quota_display: Arc::new(RwLock::new(QuotaDisplay::default())),
             group_settings: Arc::new(RwLock::new(GroupSettings::default())),
+            token_runtime: Arc::new(RwLock::new(TokenRuntimeSettings::default())),
             flow_key: None,
             proxy_policy: None,
             rate_limiter: None,
@@ -404,6 +410,14 @@ impl AppState {
             .clone()
     }
 
+    /// 令牌运行时选项快照（启动与 reload worker 装载，handler 只读）。
+    pub fn token_runtime_settings(&self) -> TokenRuntimeSettings {
+        self.token_runtime
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
     /// 令牌 Redis 缓存；未注入时 `TokenRepository` 走纯数据库路径。
     pub fn token_cache(&self) -> Option<Arc<RedisTokenCache>> {
         self.token_cache.clone()
@@ -496,6 +510,15 @@ impl AppState {
                 return Err(error);
             }
         };
+        // 令牌运行时选项与用户组选项同频装载：与 Go 的
+        // InitOptionMap/SyncOptions 一致，失败同样不发布部分状态。
+        let runtime_next = match TokenRuntimeSettings::load(db).await {
+            Ok(next) => next,
+            Err(error) => {
+                self.mark_not_ready();
+                return Err(error);
+            }
+        };
         let setup_next = match db.setup_completed().await {
             Ok(next) => next,
             Err(error) => {
@@ -515,6 +538,10 @@ impl AppState {
             .group_settings
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = group_next;
+        *self
+            .token_runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = runtime_next;
         *self
             .snapshot
             .write()
