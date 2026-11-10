@@ -142,9 +142,11 @@ pub async fn require_system_settings(
                 &state,
                 &user,
                 &headers,
-                "POST",
-                "/api/option/payment_compliance",
-                "option.payment_compliance",
+                RouteAuditTarget {
+                    method: "POST",
+                    route: "/api/option/payment_compliance",
+                    action: "option.payment_compliance",
+                },
                 403,
                 success,
             )
@@ -155,9 +157,11 @@ pub async fn require_system_settings(
                 &state,
                 &user,
                 &headers,
-                "POST",
-                "/api/option/rest_model_ratio",
-                "option.reset_ratio",
+                RouteAuditTarget {
+                    method: "POST",
+                    route: "/api/option/rest_model_ratio",
+                    action: "option.reset_ratio",
+                },
                 403,
                 success,
             )
@@ -168,9 +172,11 @@ pub async fn require_system_settings(
                 &state,
                 &user,
                 &headers,
-                "DELETE",
-                "/api/option/channel_affinity_cache",
-                "option.clear_affinity_cache",
+                RouteAuditTarget {
+                    method: "DELETE",
+                    route: "/api/option/channel_affinity_cache",
+                    action: "option.clear_affinity_cache",
+                },
                 403,
                 success,
             )
@@ -181,9 +187,11 @@ pub async fn require_system_settings(
                 &state,
                 &user,
                 &headers,
-                "POST",
-                "/api/option/waffo-pancake/pair",
-                "generic",
+                RouteAuditTarget {
+                    method: "POST",
+                    route: "/api/option/waffo-pancake/pair",
+                    action: "generic",
+                },
                 403,
                 success,
             )
@@ -194,9 +202,11 @@ pub async fn require_system_settings(
                 &state,
                 &user,
                 &headers,
-                "POST",
-                "/api/option/waffo-pancake/save",
-                "generic",
+                RouteAuditTarget {
+                    method: "POST",
+                    route: "/api/option/waffo-pancake/save",
+                    action: "generic",
+                },
                 403,
                 success,
             )
@@ -207,9 +217,11 @@ pub async fn require_system_settings(
                 &state,
                 &user,
                 &headers,
-                "POST",
-                "/api/option/waffo-pancake/subscription-product",
-                "generic",
+                RouteAuditTarget {
+                    method: "POST",
+                    route: "/api/option/waffo-pancake/subscription-product",
+                    action: "generic",
+                },
                 403,
                 success,
             )
