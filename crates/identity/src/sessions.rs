@@ -618,12 +618,43 @@ impl SessionRepository {
         reason: &str,
         now: i64,
     ) -> Result<RevokeReport, BatchFailure> {
+        if current_sid.is_empty() {
+            return Err(BatchFailure {
+                committed: RevokeReport::default(),
+                error: SessionError::Invalid,
+            });
+        }
+        self.revoke_user_sessions(fence, user_id, Some(current_sid), reason, now)
+            .await
+    }
+
+    /// Go `RevokeAllUserSessions`（`session_store.go:709-711`）=
+    /// `revokeUserSessions(userID, "", reason)`：不排除 SID，撤销该用户全部
+    /// 活跃会话。管理员安全重置在 auth_version 递增事务提交后调用。
+    pub async fn revoke_all<F: RevocationFence>(
+        &self,
+        fence: &F,
+        user_id: i64,
+        reason: &str,
+        now: i64,
+    ) -> Result<RevokeReport, BatchFailure> {
+        self.revoke_user_sessions(fence, user_id, None, reason, now)
+            .await
+    }
+
+    /// Go `revokeUserSessions`（`session_store.go:713`）：分批挑选活跃会话，
+    /// 先发 pending deny 再事务内逐行撤销，直到没有候选行为止。
+    async fn revoke_user_sessions<F: RevocationFence>(
+        &self,
+        fence: &F,
+        user_id: i64,
+        excluded: Option<&str>,
+        reason: &str,
+        now: i64,
+    ) -> Result<RevokeReport, BatchFailure> {
         let mut total = RevokeReport::default();
         let result: Result<(), SessionError> = async {
             validate_revoke(user_id, reason, now)?;
-            if current_sid.is_empty() {
-                return Err(SessionError::Invalid);
-            }
             loop {
                 let candidates: Vec<SessionMetadata> = backend!(&self.db, pool, {
                     let mut query = sqlx::QueryBuilder::new("SELECT ");
@@ -631,11 +662,12 @@ impl SessionRepository {
                         .push(COLUMNS)
                         .push(" FROM user_sessions WHERE user_id=")
                         .push_bind(user_id)
-                        .push(" AND sid<>")
-                        .push_bind(current_sid)
                         .push(" AND status='active' AND revoked_at=0 AND expires_at>")
-                        .push_bind(now)
-                        .push(" ORDER BY sid LIMIT 500");
+                        .push_bind(now);
+                    if let Some(current) = excluded {
+                        query.push(" AND sid<>").push_bind(current);
+                    }
+                    query.push(" ORDER BY sid LIMIT 500");
                     let rows = query.build().fetch_all(pool).await?;
                     let mut out = Vec::with_capacity(rows.len());
                     for row in rows {

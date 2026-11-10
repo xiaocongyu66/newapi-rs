@@ -338,17 +338,16 @@ async fn run_contract(db: &Database) {
     let response = send(&state(db), Some(&token)).await;
     assert_authenticated(response, "session").await;
 
-    // Expired JWT: Go's writeDashboardAuthError gives AUTH_TOKEN_EXPIRED, but
-    // `SessionAuth::parse_access` collapses expiry and shape failures into
-    // Unauthorized, so this port (like `user_auth`) maps it to
-    // AUTH_UNAUTHORIZED. Same status, same body otherwise.
+    // Expired JWT: Go's writeDashboardAuthError gives 401 AUTH_TOKEN_EXPIRED
+    // with MsgAuthNotLoggedIn (authenticate.go:206-207); the message envelope
+    // otherwise stays the same as the unauthorized classification.
     let token = jwt("sid-ok", 1, 1, session_at - 10_000);
     let response = send(&state(db), Some(&format!("Bearer {token}"))).await;
     assert_dashboard_failure(
         response,
         StatusCode::UNAUTHORIZED,
-        "AUTH_UNAUTHORIZED",
-        "auth.access_token_invalid",
+        "AUTH_TOKEN_EXPIRED",
+        "auth.not_logged_in",
     )
     .await;
 

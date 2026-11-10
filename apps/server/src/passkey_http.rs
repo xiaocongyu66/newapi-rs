@@ -1339,10 +1339,22 @@ pub async fn admin_reset(
     if let Err(error) = repository.delete_with_auth_version(target.id).await {
         return store_error_response(&headers, error);
     }
-    // Go 随后调用 `RevokeAllUserSessions(userId, "admin_passkey_reset")`；
-    // 与已交付的 admin 2FA 端口同处置：事务内递增 `users.auth_version` 使
-    // 旧版本会话在下次校验时被拒（sessions::validate_access 的版本检查），
-    // 不另行成批撤销（会话表行保留至自然过期）。
+    // Go 在删除事务提交后调用 `RevokeAllUserSessions(userId,
+    // "admin_passkey_reset")`（enroll_passkey.go:473-476）：把该用户全部活跃
+    // 会话行立即置 revoked（RevokedAt/RevokedReason 落库），会话列表随即不再
+    // 显示它们；auth_version 已在上一个事务内递增，旧令牌同样被版本检查拒绝。
+    // 事务边界与 Go 对齐：撤销是独立批次事务，不含在 passkey 删除事务内。
+    let Some(auth) = state.auth() else {
+        return service_unavailable();
+    };
+    if let Err(error) = auth.revoke_all(target.id, "admin_passkey_reset", now).await {
+        tracing::warn!(
+            event = "admin_passkey_session_revoke_failed",
+            error = ?error,
+            "admin passkey session revoke failed"
+        );
+        return api_key(&headers, MSG_DATABASE_ERROR);
+    }
     let auth_method = match admin_user.0.credential {
         CredentialKind::DashboardSession => "session",
         CredentialKind::PersonalAccessToken => "access_token",

@@ -425,7 +425,9 @@ async fn run_contract(db: Database) {
     assert_auth_failure(response, StatusCode::UNAUTHORIZED, "AUTH_UNAUTHORIZED").await;
     let expired = jwt("sid-expired", 1, 1, issued_at - 2_000);
     let response = send(&app, "/api/user/self", Some(&format!("Bearer {expired}"))).await;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    // Go UserAuth → writeDashboardAuthError: 401 AUTH_TOKEN_EXPIRED for an
+    // expired dashboard token (authenticate.go:206-207).
+    assert_auth_failure(response, StatusCode::UNAUTHORIZED, "AUTH_TOKEN_EXPIRED").await;
 
     // Disabled PAT: Go authHelper answers AUTH_USER_DISABLED.
     reset(&db).await;

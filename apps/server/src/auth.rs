@@ -183,10 +183,10 @@ async fn resolve_optional_identity(
             };
             let identity = match auth.parse_access(credential, now) {
                 Ok(identity) => identity,
-                // Go `ParseAccessToken` 区分过期与无效（authtoken.go:208/210），
-                // writeDashboardAuthError 分别给出 AUTH_TOKEN_EXPIRED 与 AUTH_UNAUTHORIZED；
-                // 但 `SessionAuth::parse_access` 已把两者折叠为 Unauthorized，本端口
-                // 与既有 `user_auth` 一律映射 AUTH_UNAUTHORIZED（遗留见交付说明）。
+                // Go `ParseAccessToken` 区分过期与无效（authtoken.go:207-210），
+                // writeDashboardAuthError 分别给出 AUTH_TOKEN_EXPIRED 与
+                // AUTH_UNAUTHORIZED（authenticate.go:206-207/214-216）。
+                Err(SessionAuthError::TokenExpired) => return Err(token_expired()),
                 Err(_) => return Err(invalid_credential()),
             };
             match auth.validate(&identity, now).await {
@@ -429,10 +429,11 @@ async fn authenticate_dashboard(
         return Err(internal_failure());
     };
     // Split parse and session validation so a revoked session keeps Go's
-    // AUTH_SESSION_REVOKED classification. Both helper methods deliberately
-    // collapse the underlying detail; no credential text is ever formatted.
+    // AUTH_SESSION_REVOKED classification, and an expired access token keeps
+    // AUTH_TOKEN_EXPIRED. No credential text is ever formatted.
     let identity = match auth.parse_access(credential, now) {
         Ok(identity) => identity,
+        Err(SessionAuthError::TokenExpired) => return Err(token_expired()),
         Err(_) => return Err(invalid_credential()),
     };
     match auth.validate(&identity, now).await {
@@ -536,6 +537,16 @@ fn invalid_credential() -> AuthFailure {
         StatusCode::UNAUTHORIZED,
         "AUTH_UNAUTHORIZED",
         MSG_ACCESS_TOKEN_INVALID,
+    )
+}
+
+/// Go `writeDashboardAuthError` 的过期分支（authenticate.go:206-207）：
+/// 401 `AUTH_TOKEN_EXPIRED` + MsgAuthNotLoggedIn（与 AUTH_SESSION_REVOKED 同文案）。
+fn token_expired() -> AuthFailure {
+    AuthFailure::new(
+        StatusCode::UNAUTHORIZED,
+        "AUTH_TOKEN_EXPIRED",
+        MSG_NOT_LOGGED_IN,
     )
 }
 

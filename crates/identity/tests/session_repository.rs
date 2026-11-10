@@ -589,6 +589,75 @@ async fn remaining_scenarios(db: &Database, second: &Database) {
             .revoked_count,
         1
     );
+
+    // Go `RevokeAllUserSessions`（session_store.go:709-711）：不排除任何 SID，
+    // 该用户全部活跃会话立即置 revoked 并落库撤销原因；其他用户不受影响。
+    execute(db, "DELETE FROM user_sessions").await;
+    repo.create(draft("keep"), SessionLimits::default(), NOW)
+        .await
+        .expect("create current");
+    repo.create(draft("other"), SessionLimits::default(), NOW)
+        .await
+        .expect("create other");
+    let foreign = CreateSession {
+        sid: "foreign".into(),
+        user_id: 2,
+        expected_auth_version: Some(1),
+        refresh_hash: hash('a'),
+        login_method: " password ".into(),
+        ip: " 127.0.0.1 ".into(),
+        user_agent: " x ".into(),
+    };
+    repo.create(foreign, SessionLimits::default(), NOW)
+        .await
+        .expect("create user 2");
+    let all_spy = SpyFence::new();
+    assert_eq!(
+        repo.revoke_all(&all_spy, 1, "admin_passkey_reset", NOW + 1)
+            .await
+            .expect("revoke all")
+            .revoked_count,
+        2
+    );
+    assert!(
+        repo.validate_access(1, "keep", 1, 3, NOW + 1)
+            .await
+            .is_err(),
+        "revoke_all 不保留当前会话"
+    );
+    assert!(
+        repo.validate_access(1, "other", 1, 3, NOW + 1)
+            .await
+            .is_err()
+    );
+    assert!(
+        repo.validate_access(2, "foreign", 1, 1, NOW + 1)
+            .await
+            .is_ok(),
+        "其他用户的会话不受影响"
+    );
+    let revoked = repo
+        .authoritative("keep")
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(revoked.metadata.status, "revoked");
+    assert_eq!(revoked.metadata.revoked_reason, "admin_passkey_reset");
+    // 幂等：没有活跃行时返回 0。
+    assert_eq!(
+        repo.revoke_all(&no_cache, 1, "admin_passkey_reset", NOW + 2)
+            .await
+            .expect("idempotent")
+            .revoked_count,
+        0
+    );
+    // revoke_others 的空 SID 参数仍按 Invalid 拒绝（原行为不变）。
+    let failure = repo
+        .revoke_others(&no_cache, 1, "", "user_revoked_others", NOW + 1)
+        .await
+        .expect_err("empty sid rejects");
+    assert_eq!(failure.error, SessionError::Invalid);
+    assert_eq!(failure.committed.revoked_count, 0);
 }
 
 // fence 作为既有可控异步端口，不在生产轮换代码插入测试 hook。
