@@ -879,7 +879,7 @@ pub async fn update_user(
                 )
                 .await
             {
-                return response;
+                return *response;
             }
         }
         Ok(AdminEditOutcome::Unchanged) => {}
@@ -970,7 +970,7 @@ async fn revoke_after_admin_change(
     reason: &str,
     now: i64,
     headers: &HeaderMap,
-) -> Result<(), Response> {
+) -> Result<(), Box<Response>> {
     let Some(auth) = state.auth() else {
         return Err(api_error(headers, MSG_DATABASE_ERROR));
     };
@@ -1138,7 +1138,7 @@ pub async fn manage_user(
             if let Err(response) =
                 revoke_after_admin_change(&state, target.id, "admin_demote", now, &headers).await
             {
-                return response;
+                return *response;
             }
             match repository.token_keys(target.id).await {
                 Ok(keys) => invalidate_token_cache(&state, &keys).await,
@@ -1286,8 +1286,7 @@ async fn apply_status_or_role(
         Ok(next_auth_version) => {
             if let Some(next_auth_version) = next_auth_version
                 && next_auth_version > target.auth_version
-            {
-                if let Err(response) = revoke_after_admin_change(
+                && let Err(response) = revoke_after_admin_change(
                     state,
                     target.id,
                     "user_security_changed",
@@ -1295,9 +1294,8 @@ async fn apply_status_or_role(
                     headers,
                 )
                 .await
-                {
-                    return response;
-                }
+            {
+                return *response;
             }
         }
         Err(error) => return manage_error_response(headers, error),
