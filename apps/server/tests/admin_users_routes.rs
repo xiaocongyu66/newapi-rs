@@ -611,6 +611,16 @@ async fn run_contract(db: Database) {
     seed_session(&db, "sid-guest", 9, at).await;
     seed_session(&db, "sid-target", 2, at).await;
     seed_rule(&db, "user:2", "channel", "read", "allow").await;
+    // Go `seedDefaultPolicies`（`policy/seed.go:44-61`）的 post-Init 起始行：
+    // admin 基线 = registry 中 DefaultRoles 含 admin 的动作（channel
+    // read/operate/write）。capabilities 求值读 casbin_rule 表，夹具须复现。
+    for (resource, action) in [
+        ("channel", "read"),
+        ("channel", "operate"),
+        ("channel", "write"),
+    ] {
+        seed_rule(&db, "role:admin", resource, action, "allow").await;
+    }
     seed_qq(&db, 2, "qq-open-2").await;
     seed_token(&db, 2, "tk-target").await;
     for table in [
@@ -832,14 +842,15 @@ async fn run_contract(db: Database) {
         &translated("user.no_permission_same_level"),
     )
     .await;
-    // root 看 admin：admin_permissions 恒在（root 全真）。
+    // root 看 admin：admin_permissions 恒在；admin 基线 = seedDefaultPolicies
+    // （channel read/operate/write），sensitive_write/system.settings 非默认。
     let body =
         assert_success(send(&app, Method::GET, "/api/user/3", Some(&root), None).await).await;
     assert_eq!(body["data"]["id"], json!(3));
     let matrix = &body["data"]["admin_permissions"];
     assert_eq!(matrix["channel"]["read"], json!(true));
-    assert_eq!(matrix["channel"]["sensitive_write"], json!(true));
-    assert_eq!(matrix["system"]["settings"], json!(true));
+    assert_eq!(matrix["channel"]["sensitive_write"], json!(false));
+    assert_eq!(matrix["system"]["settings"], json!(false));
     assert!(body["data"].get("qq_open_id").is_none(), "未绑定 QQ 缺键");
     // root 看 common：qq_open_id 有值；普通用户的矩阵全假。
     let body =
