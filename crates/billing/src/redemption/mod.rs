@@ -599,4 +599,64 @@ mod tests {
         let one = where_clause(&["status = 2".to_owned()]);
         assert_eq!(one, " WHERE deleted_at IS NULL AND status = 2");
     }
+
+    /// 直接在仓储层复现 search 的 SQL 装配与执行（最小夹具），
+    /// 让 sqlx 的错误文本在失败输出里可见。
+    const SQLITE_REDEMPTIONS_DDL: &str = r#"CREATE TABLE redemptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        "key" CHAR(32) NOT NULL UNIQUE,
+        status INTEGER NOT NULL DEFAULT 1,
+        name TEXT NOT NULL DEFAULT '',
+        quota INTEGER NOT NULL DEFAULT 100,
+        redeemed_time BIGINT NOT NULL DEFAULT 0,
+        created_time BIGINT NOT NULL DEFAULT 0,
+        used_user_id INTEGER NOT NULL DEFAULT 0,
+        expired_time BIGINT NOT NULL DEFAULT 0,
+        deleted_at TIMESTAMP
+    )"#;
+
+    #[tokio::test]
+    async fn sqlite_search_runs_the_assembled_queries() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite fixture");
+        sqlx::query(SQLITE_REDEMPTIONS_DDL)
+            .execute(&pool)
+            .await
+            .expect("fixture schema");
+        for row in [
+            (10i64, 1i64, 100i64, "alpha", 1i64, 0i64),
+            (20, 1, 100, "apple", 2, 0),
+            (30, 1, 100, "beta", 3, 0),
+        ] {
+            sqlx::query(
+                r#"INSERT INTO redemptions (id,user_id,status,name,quota) VALUES (?,?,?,?,?)"#,
+            )
+            .bind(row.0)
+            .bind(row.1)
+            .bind(row.4)
+            .bind(row.3)
+            .bind(row.2)
+            .execute(&pool)
+            .await
+            .expect("seed row");
+        }
+        let repository = RedemptionRepository::new(Database::Sqlite(pool));
+        let (records, total) = repository
+            .search("ap", RedemptionStatusFilter::None, 0, 10, 1_000_000)
+            .await
+            .expect("search must succeed against the fixture");
+        assert_eq!(total, 2);
+        assert_eq!(records.len(), 2);
+        // 数字 keyword 走 `id = ? OR name LIKE ?` 分支。
+        let (records, total) = repository
+            .search("20", RedemptionStatusFilter::Used, 0, 10, 1_000_000)
+            .await
+            .expect("numeric keyword search must succeed");
+        assert_eq!(total, 1);
+        assert_eq!(records[0].id, 20);
+    }
 }

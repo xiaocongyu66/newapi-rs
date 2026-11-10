@@ -621,18 +621,17 @@ async fn run_contract(db: Database) {
 
     // ---- 搜索（SearchRedemptions）-----------------------------------------
     // name 前缀匹配（未转义 LIKE，Go 行为）。
-    let body = body_json(
-        send(
-            &app,
-            Method::GET,
-            "/api/redemption/search?keyword=ap",
-            Some(&admin),
-            None,
-        )
-        .await,
+    let response = send(
+        &app,
+        Method::GET,
+        "/api/redemption/search?keyword=ap",
+        Some(&admin),
+        None,
     )
     .await;
-    assert_eq!(body["data"]["total"], json!(2));
+    assert_eq!(response.status(), StatusCode::OK, "search(ap) status");
+    let body = body_json(response).await;
+    assert_eq!(body["data"]["total"], json!(2), "search(ap) body: {body}");
     let items = body["data"]["items"].as_array().expect("items");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["id"], json!(20));
