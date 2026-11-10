@@ -279,6 +279,11 @@ pub async fn decide(
     }
 }
 
+/// 管理端 query 解码复用入口（fasthttp `Args.Peek` 的字节级语义）。
+pub(crate) fn decode_query_component(input: &str) -> String {
+    decode_component(input)
+}
+
 fn decode_component(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
