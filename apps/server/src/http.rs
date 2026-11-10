@@ -457,6 +457,67 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::admin_auth,
             )),
     );
+    // `/api/option/*`：Go `optionRoute` 组（`register_api.go:298-312`），
+    // 组级 `AdminAuth()` + `RequirePermission(policy.SystemSettings)`，无
+    // DisableCache、无限流。根路由注册带尾斜线与不带尾斜线两种形态，对齐
+    // Fiber StrictRouting=false 的匹配行为。
+    let option_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/option/",
+                get(crate::option_http::get_options).put(crate::option_http::update_option),
+            )
+            .route(
+                "/api/option",
+                get(crate::option_http::get_options).put(crate::option_http::update_option),
+            )
+            .route(
+                "/api/option/channel_affinity_cache",
+                get(crate::option_http::affinity_cache_stats)
+                    .delete(crate::option_http::clear_affinity_cache),
+            )
+            .route(
+                "/api/option/smtp_pool_status",
+                get(crate::option_http::smtp_pool_status),
+            )
+            .route(
+                "/api/option/rest_model_ratio",
+                post(crate::option_http::reset_model_ratio),
+            )
+            .route(
+                "/api/option/payment_compliance",
+                post(crate::option_http::confirm_payment_compliance),
+            )
+            .route(
+                "/api/option/waffo-pancake/catalog",
+                get(crate::option_http::waffo_catalog),
+            )
+            .route(
+                "/api/option/waffo-pancake/pair",
+                post(crate::option_http::waffo_pair),
+            )
+            .route(
+                "/api/option/waffo-pancake/save",
+                post(crate::option_http::waffo_save),
+            )
+            .route(
+                "/api/option/waffo-pancake/subscription-product",
+                post(crate::option_http::waffo_subscription_product),
+            )
+            .route(
+                "/api/option/waffo-pancake/subscription-product-options",
+                get(crate::option_http::waffo_subscription_product_options),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                option_state.clone(),
+                crate::option_http::require_system_settings,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                option_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `PUT /api/user/self`：Go `UserAuth → CriticalRateLimit → DisableCache →
     // handler`（缓存头由 handler 写）；`DELETE /api/user/self` 仅 `UserAuth`。
     let self_put_state = state.clone();
