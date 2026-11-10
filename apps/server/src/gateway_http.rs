@@ -312,7 +312,7 @@ async fn pay_context(
         Err(error) => {
             tracing::warn!(
                 event = "pay_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "pay settings load failed"
             );
             return Err(pay_error_static(MSG_BAD_REQUEST));
@@ -342,7 +342,7 @@ async fn pay_context(
         Err(error) => {
             tracing::warn!(
                 event = "pay_user_lookup_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "pay user lookup failed"
             );
             return Err(pay_error_static(MSG_GROUP_FAILED));
@@ -400,7 +400,7 @@ pub async fn request_epay(
         Err(error) => {
             tracing::warn!(
                 event = "pay_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "pay settings load failed"
             );
             return pay_error_static(MSG_BAD_REQUEST);
@@ -460,7 +460,7 @@ pub async fn request_epay(
     {
         tracing::warn!(
             event = "epay_order_create_failed",
-            category = crate::database_error_class(error),
+            category = crate::database_error_class(&error),
             trade_no = %trade_no,
             "epay order create failed"
         );
@@ -520,7 +520,7 @@ pub async fn request_vmq_pay(
         Err(error) => {
             tracing::warn!(
                 event = "pay_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "pay settings load failed"
             );
             return pay_error_static(MSG_BAD_REQUEST);
@@ -578,7 +578,7 @@ pub async fn request_vmq_pay(
     {
         tracing::warn!(
             event = "vmq_order_create_failed",
-            category = crate::database_error_class(error),
+            category = crate::database_error_class(&error),
             trade_no = %trade_no,
             "vmq order create failed"
         );
@@ -611,7 +611,7 @@ pub async fn request_codepay_pay(
         Err(error) => {
             tracing::warn!(
                 event = "pay_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "pay settings load failed"
             );
             return pay_error_static(MSG_BAD_REQUEST);
@@ -680,7 +680,7 @@ pub async fn request_codepay_pay(
     {
         tracing::warn!(
             event = "codepay_order_create_failed",
-            category = crate::database_error_class(error),
+            category = crate::database_error_class(&error),
             trade_no = %trade_no,
             "codepay order create failed"
         );
@@ -725,7 +725,7 @@ pub async fn epay_notify(
         Err(error) => {
             tracing::warn!(
                 event = "epay_notify_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "epay notify settings load failed"
             );
             return text_body("fail");
@@ -831,7 +831,7 @@ pub async fn vmq_notify(
         Err(error) => {
             tracing::warn!(
                 event = "vmq_notify_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "vmq notify settings load failed"
             );
             return text_body("fail");
@@ -937,7 +937,7 @@ pub async fn codepay_notify(
         Err(error) => {
             tracing::warn!(
                 event = "codepay_notify_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "codepay notify settings load failed"
             );
             return text_body("fail");
@@ -1075,7 +1075,7 @@ pub async fn topup_redeem(
         Err(error) => {
             tracing::warn!(
                 event = "topup_redeem_settings_load_failed",
-                category = crate::database_error_class(error),
+                category = crate::database_error_class(&error),
                 "topup redeem settings load failed"
             );
             return api_i18n_error(&headers, "payment.compliance_required");
