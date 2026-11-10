@@ -11,6 +11,7 @@ use newapi_catalog::channels::{
 };
 use newapi_storage::Database;
 use sqlx::{
+    ConnectOptions,
     postgres::PgPoolOptions,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
