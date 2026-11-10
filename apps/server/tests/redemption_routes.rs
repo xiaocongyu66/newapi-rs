@@ -560,6 +560,11 @@ async fn run_contract(db: Database) {
     assert!(other.contains("redemption.create"));
     assert!(other.contains("\"count\":2"));
     assert!(other.contains("\"name\":\"gift\""));
+    // Go 记的是请求体里的原始 `quota` 字段（redeem_code.go:91 的
+    // `logger.LogQuota(redemption.Quota)`）：本请求未带 `quota`，审计为零值
+    // 展示串“＄0.000000 额度”，而不是换算后入库的“＄1.000000 额度”
+    // （入库值仍由 quota_display 换算，见上面 stored_rows 的 500_000 断言）。
+    assert!(other.contains("\"quota\":\"＄0.000000 额度\""));
     assert!(other.contains("admin_info"));
 
     // ---- 列表（GetAllRedemptions）-----------------------------------------

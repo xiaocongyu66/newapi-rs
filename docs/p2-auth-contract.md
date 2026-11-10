@@ -322,3 +322,13 @@ impl AuthService {
 `UserSetting::from_json`（`crates/identity/src/users.rs`）此前用 serde 的全有或无语义：任何字段类型不匹配就整体回退到零值设置，注释称“不部分采用”。这与 Go 不符：Go `User.GetSetting`（`store_users.go:165-174`）忽略 `json.Unmarshal` 的错误返回部分解码结果，而 `encoding/json` 对字段类型不匹配的规定是“跳过该字段、尽可能解码其余字段、结尾才报告 `UnmarshalTypeError`”。真实影响：`PUT /api/user/setting` 与 `PUT /api/user/self` 对已存 `sidebar_modules` 为对象（前端写入形态）的用户，会把 `upstream_model_update_notify_enabled` 等其余字段静默清零——普通角色因此无法保留管理员专属开关（`manage_users.go:1457-1461` 的 carry-over），`PUT /api/user/self` 的读-改-写会整体抹掉其它设置。已改为按字段单独解码，类型不匹配的字段留零值、其余照常采用；`null` 与缺键仍为零值，JSON 非对象仍整体为零值。测试侧 `setting_routes.rs` 的“普通角色发 false 仍保留 stored true”用例（Go 依据同上）随之通过。
 
 8.8 的修复随 `52ab874` 推送，因签到日界 flake（`f9d15c9` 修复）前未单独绿；最终由 `ba7554c` 的 run `42506448654`（success）验证：pg14/pg17 各 454 项全过，`setting_routes.rs` 的普通角色保留管理员开关用例双后端通过。
+
+### 8.9 2026-11-10 独立金钱审计两处差异修复：redemption.create 审计口径按 Go 对齐 + quota_from_scaled 下界闭端点（含 Go 实现缺陷，供上游反馈）（远程证据待回填）
+
+**1. `redemption.create` 审计的 quota 口径（Go 侧原始缺陷，两侧已对齐到 Go 口径）**
+
+Go `billing.AddRedemption` 的管理审计记的是 `logger.LogQuota(redemption.Quota)`（`apps/api/internal/billing/redeem_code.go:91`），即**请求体里的原始 `quota` 字段**（`Redemption.Quota`，`store_redemption.go:25` 的 `int` 列）；而实际入库的是 `QuotaFromDisplayAmount(redemption.QuotaDisplay)`（`redeem_code.go:73`）。即 Go 审计记录的是一个未换算、前端通常不发送而为 0 的原始字段，与入库值系统性不一致——这是 **Go 侧的原始缺陷**，登记供上游反馈。按“Go 是 oracle（含其既有缺陷）”策略，Rust `apps/server/src/redemption_http.rs` 的审计改为记录请求体 `quota` 原值（`display.format_quota(request.quota.unwrap_or(0), true)`）；**响应与入库值不变**（仍是 `quota_display` 换算值，与 Go 一致），仅审计记录口径对齐。契约测试 `apps/server/tests/redemption_routes.rs` 原先刻意不断言审计 `quota`（断言被调平），现已显式断言：请求未带 `quota` 时审计为零值展示串 `"＄0.000000 额度"`（Go 口径），与入库的 `500_000`（`quota_display=1` 换算，`stored_rows` 断言）形成对照，任何回到“记换算值”的回归都会让该断言失败。
+
+**2. `quota_from_scaled` 的 `i32::MIN` 端点（开端点→闭端点，一行修复）**
+
+Go `saturateQuota` 对两侧边界都用闭端点：`value >= MaxQuota` 与 `value <= MinQuota`（`apps/api/internal/common/quota_math.go:77-80`），故 `QuotaFromDecimalStrict`（`quota_math.go:152`）**拒绝 -2147483648**（下界含等号）。Rust `crates/billing/src/topup/quote.rs` 的 `quota_from_scaled` 此前只有 `quota < i32::MIN` 才拒绝（开端点），-2147483648 被当作可表示值接受。已改为 `quota <= i128::from(i32::MIN)` 闭端点，上界 `>= MaxQuota` 原本已是闭端点，未动；并补单测 `quota_from_scaled_rejects_both_closed_int32_bounds`：`i32::MAX` 与 `i32::MIN` 均拒绝、各自内侧一值（`MaxQuota - 1`、`i32::MIN + 1`）仍可表示。`validate_credited_quota`/`check_capacity` 已有 `<= 0` 拒绝，负值端不受影响。
