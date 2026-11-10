@@ -223,13 +223,95 @@ pub(crate) fn error_category(error: &sqlx::Error) -> &'static str {
 
 /// Go `auditContentEN`（`usage/write_audit.go:53-64`）：action 的英文兜底
 /// 模板，供导出等非本地化消费者使用；未登记的 action 退回 action 本身。
-fn audit_content_en(action: &str) -> &str {
-    match action {
+/// `${key}` 占位符从 params 渲染（Go `os.Expand` 语义：未知键渲染为空串）。
+fn audit_content_en(action: &str, params: Option<&Map<String, Value>>) -> String {
+    let template = match action {
         "user.2fa_disable" => "Force-disabled two-factor authentication for the user",
         "user.passkey_register" => "Registered a passkey",
         "user.passkey_delete" => "Deleted a passkey",
         "user.reset_passkey" => "Reset the user passkey",
-        _ => action,
+        // `usage/write_audit.go:31-44` 渠道域模板中基础 CRUD 使用的五项；
+        // 标签/复制/上游同步等由后续切片补齐。
+        "channel.create" => "Created channel ${name} (type ${type}, count ${count})",
+        "channel.update" => "Updated channel ${name} (ID: ${id})",
+        "channel.delete" => "Deleted channel ${name} (ID: ${id})",
+        "channel.delete_batch" => "Batch deleted ${count} channels",
+        "channel.delete_disabled" => "Deleted all disabled channels (${count})",
+        _ => return action.to_owned(),
+    };
+    match params {
+        Some(params) => expand_template(template, params),
+        None => template.to_owned(),
+    }
+}
+
+/// Go `os.Expand` 的最小子集：`${name}` 替换为 params 对应值的 `%v` 形态；
+/// 未登记的键替换为空串。渲染值只覆盖字符串/数字/布尔/数组（渠道域埋点
+/// 使用的全部类型），其余落到空串。
+fn expand_template(template: &str, params: &Map<String, Value>) -> String {
+    let mut output = String::with_capacity(template.len());
+    let mut chars = template.char_indices().peekable();
+    while let Some((_, ch)) = chars.next() {
+        if ch != '$' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some((_, '{')) => {
+                let mut key = String::new();
+                let mut closed = false;
+                for (_, ch) in chars.by_ref() {
+                    if ch == '}' {
+                        closed = true;
+                        break;
+                    }
+                    key.push(ch);
+                }
+                if !closed {
+                    output.push('$');
+                    output.push('{');
+                    output.push_str(&key);
+                    continue;
+                }
+                output.push_str(&param_display(params, key.trim()));
+            }
+            Some((_, other)) => {
+                output.push('$');
+                output.push(other);
+            }
+            None => output.push('$'),
+        }
+    }
+    output
+}
+
+/// Go `fmt.Sprintf("%v", v)` 的最小等价（字符串原样、数字/布尔按字面量、
+/// 数组按 `[a b]`）。
+fn param_display(params: &Map<String, Value>, key: &str) -> String {
+    match params.get(key) {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Number(value)) => value.to_string(),
+        Some(Value::Bool(value)) => value.to_string(),
+        Some(Value::Null) => String::new(),
+        Some(Value::Array(items)) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(param_display_value)
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        Some(value) => param_display_value(value),
+        None => String::new(),
+    }
+}
+
+fn param_display_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        _ => Value::Null.to_string(),
     }
 }
 
@@ -261,7 +343,7 @@ pub async fn record_user_security_audit(
     other.insert("op".to_owned(), Value::Object(op));
     let other = serde_json::to_string(&Value::Object(other)).unwrap_or_default();
 
-    let content = audit_content_en(action);
+    let content = audit_content_en(action, None);
     let request_id = fresh_request_id();
     let result = match db {
         Database::Sqlite(pool) => sqlx::query(MANAGE_AUDIT_INSERT)
@@ -349,7 +431,7 @@ pub async fn record_manage_audit_with_params(
     other.insert("admin_info".to_owned(), admin_info_object(operator));
     let other = serde_json::to_string(&Value::Object(other)).unwrap_or_default();
 
-    let content = audit_content_en(action);
+    let content = audit_content_en(action, extra_params);
     let request_id = fresh_request_id();
     let is_stream = false;
     let result = match db {

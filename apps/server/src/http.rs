@@ -561,6 +561,48 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::admin_auth,
             )),
     );
+
+    // `/api/channel*` 基础 CRUD（Go `register_channels.go` 的前八条）：
+    // 组级 `AdminAuth()` 之后是路由级 `RequirePermission(...)`——permission
+    // 403 在 handler 入口的 `channel_http::require_permission` 复现（401/403
+    // 只来自鉴权链；业务结果一律 HTTP 200 + 信封）。axum 不做尾部斜杠归一
+    // 化，两种写法都注册（与 `/api/token` 一致）。
+    let channel_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/channel/",
+                get(crate::channel_http::list_channels)
+                    .post(crate::channel_http::add_channel)
+                    .put(crate::channel_http::update_channel),
+            )
+            .route(
+                "/api/channel",
+                get(crate::channel_http::list_channels)
+                    .post(crate::channel_http::add_channel)
+                    .put(crate::channel_http::update_channel),
+            )
+            .route(
+                "/api/channel/search",
+                get(crate::channel_http::search_channels),
+            )
+            .route(
+                "/api/channel/disabled",
+                delete(crate::channel_http::delete_disabled_channels),
+            )
+            .route(
+                "/api/channel/batch",
+                post(crate::channel_http::delete_channel_batch),
+            )
+            .route(
+                "/api/channel/{id}",
+                get(crate::channel_http::get_channel).delete(crate::channel_http::delete_channel),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                channel_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // `GET /api/user/aff`：Go `selfRoute` 组内（`UserAuth`），无缓存头。
     // `POST /api/user/aff_transfer` 同组，但 Go 在它前面多挂
     // `UserCriticalRateLimit("aff-transfer")` 与
