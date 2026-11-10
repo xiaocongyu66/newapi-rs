@@ -275,7 +275,8 @@ impl OAuthUserStore {
                 .bind(value)
                 .fetch_optional(pool)
                 .await?;
-            row.map(|row| Ok(profile!(row))).transpose()?
+            row.map(|row| Ok::<_, sqlx::Error>(profile!(row)))
+                .transpose()?
         });
         Ok(user)
     }
@@ -296,7 +297,8 @@ impl OAuthUserStore {
                 .bind(user_id)
                 .fetch_optional(pool)
                 .await?;
-            row.map(|row| Ok(profile!(row))).transpose()?
+            row.map(|row| Ok::<_, sqlx::Error>(profile!(row)))
+                .transpose()?
         });
         Ok(user)
     }
@@ -400,7 +402,8 @@ impl OAuthUserStore {
                 .bind(provider_user_id)
                 .fetch_optional(pool)
                 .await?;
-            row.map(|row| Ok(profile!(row))).transpose()?
+            row.map(|row| Ok::<_, sqlx::Error>(profile!(row)))
+                .transpose()?
         });
         Ok(user)
     }

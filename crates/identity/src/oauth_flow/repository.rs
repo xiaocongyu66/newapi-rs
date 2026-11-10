@@ -607,9 +607,12 @@ impl OAuthFlowRepository {
                     .push_bind(matching.purpose);
                 push_optional_match_sqlite(&mut query, matching);
                 let row = query.build().fetch_optional(pool).await?;
-                row.map(|row| Ok(flow_row!(row)))
-                    .transpose()
-                    .map_err(sqlx::Error::into)
+                // 宏体带 `?`：在函数的 Result 上下文里逐行展开，避免闭包推断歧义。
+                let flow = match row {
+                    Some(row) => Some(flow_row!(row)?),
+                    None => None,
+                };
+                Ok(flow)
             }
             Database::Postgres(pool) => {
                 let mut query = QueryBuilder::new("SELECT ");
@@ -621,9 +624,12 @@ impl OAuthFlowRepository {
                     .push_bind(matching.purpose);
                 push_optional_match_postgres(&mut query, matching);
                 let row = query.build().fetch_optional(pool).await?;
-                row.map(|row| Ok(flow_row!(row)))
-                    .transpose()
-                    .map_err(sqlx::Error::into)
+                // 宏体带 `?`：在函数的 Result 上下文里逐行展开，避免闭包推断歧义。
+                let flow = match row {
+                    Some(row) => Some(flow_row!(row)?),
+                    None => None,
+                };
+                Ok(flow)
             }
         }
     }
