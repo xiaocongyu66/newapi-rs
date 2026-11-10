@@ -26,7 +26,7 @@ use axum::{
     http::{HeaderMap, Method, Request, StatusCode, header},
     middleware,
     response::Response,
-    routing::{delete, get, post, put},
+    routing::{get, post},
 };
 use newapi_server::custom_oauth_http::{
     DiscoveryError, DiscoveryFuture, DiscoveryResponse, DiscoveryTransport,
