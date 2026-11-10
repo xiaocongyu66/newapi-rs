@@ -37,6 +37,7 @@ use newapi_server::{AppState, log_http};
 use newapi_storage::Database;
 use serde_json::{Value, json};
 use sqlx::{
+    ConnectOptions,
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::SqlitePoolOptions,
 };
@@ -247,7 +248,7 @@ async fn setup(db: &Database) {
 async fn reset(db: &Database) {
     backend!(db, pool, {
         for table in ["logs", "channels", "users"] {
-            sqlx::query(&format!("DELETE FROM {table}"))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
                 .execute(pool)
                 .await
                 .expect("reset table");
