@@ -729,8 +729,9 @@ async fn run_self_stat_contract(db: &Database, now: i64) {
     seed_user(db, USER_A, 1, USER_A_PAT).await;
     seed_user(db, USER_B, 1, USER_B_PAT).await;
 
-    // Go oracle（1bd571ec9 起丢失 user 限定）：所有 type=2 行的
-    // prompt+completion 都计入，含 USER_B 的行；type=1 不计。
+    // 主控裁决（docs/p2-auth-contract.md §8.10）：Go 在 1bd571ec9 重构时
+    // 丢失 user 限定（跨用户聚合泄露），本端口按安全立场恢复会话 user_id
+    // 限定。USER_A 只统计自己的 type=2 行；USER_B 的行与 type=1 不计。
     seed_log(
         db,
         &LogSeed {
@@ -764,7 +765,14 @@ async fn run_self_stat_contract(db: &Database, now: i64) {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["success"], json!(true));
-    assert_eq!(body["data"]["token"], json!(160));
+    assert_eq!(body["data"]["token"], json!(150));
+
+    // USER_B 只统计自己的行（7+3），与 USER_A 的 150 互不可见。
+    let response = send(&state, "/api/log/self/stat", USER_B_PAT).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["success"], json!(true));
+    assert_eq!(body["data"]["token"], json!(10));
 
     // token_name 与时间窗过滤。
     let response = send(
@@ -774,7 +782,7 @@ async fn run_self_stat_contract(db: &Database, now: i64) {
     )
     .await;
     let body = body_json(response).await;
-    assert_eq!(body["data"]["token"], json!(160));
+    assert_eq!(body["data"]["token"], json!(150));
     let response = send(
         &state,
         &format!("/api/log/self/stat?end_timestamp={}", now - 120),

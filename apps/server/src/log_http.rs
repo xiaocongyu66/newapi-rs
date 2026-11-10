@@ -23,12 +23,14 @@
 //!   文案按既有安全立场换成固定 i18n 键，LIKE 模式校验沿用 Go `dbx` 的
 //!   通配符规则（与令牌搜索同一实现与键）。
 //!
-//! 与 Go oracle 的两处有意偏差（详见交付报告）：
+//! 与 Go oracle 的一处有意偏差（详见交付报告与 docs/p2-auth-contract.md
+//! §8.10）：
 //! - Go `GetAllLogsInternal`/`GetUserLogsInternal` 的 group 过滤拼出
 //!   `logs.logs.group`（`logGroupCol` 常量已含前缀又叠加 `"logs."`），SQL 必错；
 //!   本端口实现可工作的 `logs."group"`，与同文件未迁移的 `GetAllLogs` 一致。
-//! - Go `GetLogsSelfStat` 自 1bd571ec9 重构起丢失 user 限定（恒传 `""`），本
-//!   端口逐字保留该行为，自助统计按 token_name/model 聚合全局消费 token 数。
+//! - Go `GetLogsSelfStat` 自 1bd571ec9 重构起丢失 user 限定（恒传 `""`），
+//!   该回归使任意登录用户可读到全局消费 token 聚合；本端口按安全立场恢复
+//!   会话 user_id 限定（主控裁决），登记于 docs/p2-auth-contract.md §8.10。
 
 use std::collections::HashMap;
 
@@ -184,16 +186,22 @@ pub async fn logs_stat(State(state): State<AppState>, uri: Uri, headers: HeaderM
 }
 
 /// `GET /api/log/self/stat` → Go `handler.GetLogsSelfStat`
-/// （`SumUsedTokenInternal(logType, start, end, model, "", tokenName)`）。
-/// Go 对查询错误零处理（`Scan` 的错误被丢弃），失败即 0；响应体没有
-/// `message` 字段，`data` 只有 `token` 一个键。
-pub async fn logs_self_stat(State(state): State<AppState>, uri: Uri) -> Response {
+/// （`SumUsedTokenInternal(logType, start, end, model, "", tokenName)`），
+/// 唯一有意偏差：按会话 user_id 限定（Go 在 1bd571ec9 重构时丢失该限定，
+/// 跨用户聚合属数据泄露，按仓库安全立场修复；详见 docs/p2-auth-contract.md
+/// §8.10）。Go 对查询错误零处理（`Scan` 的错误被丢弃），失败即 0；响应体
+/// 没有 `message` 字段，`data` 只有 `token` 一个键。
+pub async fn logs_self_stat(
+    State(state): State<AppState>,
+    Extension(auth_user): Extension<AuthenticatedUser>,
+    uri: Uri,
+) -> Response {
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let query = log_query(&uri);
     let filter = LogFilter::from_query(&query);
-    let token = match load_self_token_stat(&db, &filter).await {
+    let token = match load_self_token_stat(&db, &filter, auth_user.0.user_id).await {
         Ok(token) => token,
         Err(LogReadError::Db(error)) => {
             tracing::warn!(
@@ -1074,16 +1082,21 @@ struct LogStat {
 
 /// 自助端统计（Go `SumUsedTokenInternal`）：prompt+completion 的 token 总量，
 /// type 恒为 2。
-async fn load_self_token_stat(db: &Database, filter: &LogFilter<'_>) -> Result<i64, LogReadError> {
+async fn load_self_token_stat(
+    db: &Database,
+    filter: &LogFilter<'_>,
+    user_id: i64,
+) -> Result<i64, LogReadError> {
     match db {
-        Database::Sqlite(pool) => self_token_stat::<sqlx::Sqlite>(pool, filter).await,
-        Database::Postgres(pool) => self_token_stat::<sqlx::Postgres>(pool, filter).await,
+        Database::Sqlite(pool) => self_token_stat::<sqlx::Sqlite>(pool, filter, user_id).await,
+        Database::Postgres(pool) => self_token_stat::<sqlx::Postgres>(pool, filter, user_id).await,
     }
 }
 
 async fn self_token_stat<DB: sqlx::Database>(
     pool: &sqlx::Pool<DB>,
     filter: &LogFilter<'_>,
+    user_id: i64,
 ) -> Result<i64, LogReadError>
 where
     for<'c> &'c str: sqlx::ColumnIndex<DB::Row>,
@@ -1094,9 +1107,10 @@ where
 {
     let mut query = QueryBuilder::new(concat!(
         "SELECT CAST(COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) ",
-        "AS BIGINT) AS token FROM logs",
+        "AS BIGINT) AS token FROM logs WHERE user_id = ",
     ));
-    let mut pushed = false;
+    query.push_bind(user_id);
+    let mut pushed = true;
     filter.push_self_stat(&mut query, &mut pushed)?;
     let row = query.build().fetch_one(pool).await?;
     Ok(row.try_get::<i64, _>("token")?)
