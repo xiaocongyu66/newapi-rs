@@ -119,6 +119,7 @@ async fn permission_allowed(
 }
 
 /// Go 路由级 `security.RequirePermission`：403 + `success:false` + i18n 消息。
+#[allow(clippy::result_large_err)]
 async fn require_permission(
     state: &AppState,
     user: &AuthenticatedUser,
@@ -1483,11 +1484,16 @@ mod tests {
     fn page_info_defaults_and_caps() {
         let query = ChannelQuery::default();
         assert_eq!(go_page_info(&query), (1, 10));
-        let mut query = ChannelQuery::default();
-        query.p = Some("3".to_owned());
-        query.page_size = Some("20".to_owned());
+        let query = ChannelQuery {
+            p: Some("3".to_owned()),
+            page_size: Some("20".to_owned()),
+            ..ChannelQuery::default()
+        };
         assert_eq!(go_page_info(&query), (3, 20));
-        query.page_size = Some("1000".to_owned());
+        let query = ChannelQuery {
+            page_size: Some("1000".to_owned()),
+            ..ChannelQuery::default()
+        };
         assert_eq!(go_page_info(&query).1, 100);
     }
 
