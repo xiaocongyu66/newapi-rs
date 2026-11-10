@@ -436,8 +436,14 @@ pub async fn add_redemption(
     let mut params = Map::new();
     params.insert("name".to_owned(), json!(name));
     params.insert("count".to_owned(), json!(count));
-    // Go `logger.LogQuota`：带币种符号与“ 额度”后缀的展示串。
-    params.insert("quota".to_owned(), json!(display.format_quota(quota, true)));
+    // Go `logger.LogQuota(redemption.Quota)`（redeem_code.go:91）：带币种符号
+    // 与“ 额度”后缀的展示串，记的是请求体里的原始 `quota` 字段，而不是换算后
+    // 入库的 `QuotaFromDisplayAmount`（redeem_code.go:73）——请求未带该字段时
+    // 为零值。按 Go 口径对齐（Go 侧原始缺陷见 docs/p2-auth-contract.md §8.9）。
+    params.insert(
+        "quota".to_owned(),
+        json!(display.format_quota(request.quota.unwrap_or(0), true)),
+    );
     let client_ip = crate::http::request_ip(&state, &headers, peer);
     newapi_identity::audit::record_manage_audit_with_params(
         &db,

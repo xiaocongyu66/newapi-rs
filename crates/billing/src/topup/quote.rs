@@ -98,8 +98,9 @@ pub fn amount_discount(settings: &TopUpSettings, amount: i64) -> f64 {
 /// credited quota is a whole multiple of `quota_per_unit`; `USD/CNY`
 /// multiplies directly. The product runs through Go's
 /// `QuotaFromDecimalStrict` (`quota_math.go:152`): round to an integer, then
-/// reject anything at or above `MaxQuota`, which is why `None` means "not
-/// representable" rather than a saturated number.
+/// reject anything at or beyond either closed int32 bound (`>= MaxQuota` or
+/// `<= MinQuota`), which is why `None` means "not representable" rather than
+/// a saturated number.
 pub fn top_up_quota(
     _settings: &TopUpSettings,
     amount: i64,
@@ -564,12 +565,14 @@ fn div_round(numerator: i128, denominator: i128) -> i128 {
 }
 
 /// Go `common.QuotaFromDecimalStrict` (`quota_math.go:152`): round to an
-/// integer, then reject anything at or above `MaxQuota` (Go's `saturateQuota`
-/// clamps there and `strictQuota` turns the clamp into the error the callers
-/// render as `充值额度超出系统可表示范围`).
+/// integer, then reject anything outside the open int32 range. Go's
+/// `saturateQuota` clamps on both **closed** bounds — `value >= MaxQuota` and
+/// `value <= MinQuota` (`quota_math.go:77-80`) — and `strictQuota` turns
+/// either clamp into the error the callers render as
+/// `充值额度超出系统可表示范围`, so `i32::MIN` itself is rejected.
 fn quota_from_scaled(product: i128) -> Option<i64> {
     let quota = mul_div_round(product, 1, SCALE);
-    if quota >= i128::from(MAX_QUOTA) || quota < i128::from(i32::MIN) {
+    if quota >= i128::from(MAX_QUOTA) || quota <= i128::from(i32::MIN) {
         return None;
     }
     Some(quota as i64)
@@ -818,6 +821,25 @@ mod tests {
         // A non-positive `QuotaPerUnit` divides by zero in Go; the amount is
         // unusable either way.
         assert_eq!(top_up_quota(&settings, 10, true, 0.0), None);
+    }
+
+    #[test]
+    fn quota_from_scaled_rejects_both_closed_int32_bounds() {
+        // Go `saturateQuota` clamps on `value >= MaxQuota` and on
+        // `value <= MinQuota` (`quota_math.go:77-80`), and `strictQuota` turns
+        // either clamp into the not-representable error — both ends are
+        // closed, so `i32::MIN` is rejected, not accepted as in-range.
+        assert_eq!(quota_from_scaled(i128::from(MAX_QUOTA) * SCALE), None);
+        assert_eq!(quota_from_scaled(i128::from(i32::MIN) * SCALE), None);
+        // One inside each bound is still representable.
+        assert_eq!(
+            quota_from_scaled(i128::from(MAX_QUOTA - 1) * SCALE),
+            Some(MAX_QUOTA - 1)
+        );
+        assert_eq!(
+            quota_from_scaled((i128::from(i32::MIN) + 1) * SCALE),
+            Some(i32::MIN as i64 + 1)
+        );
     }
 
     #[test]
