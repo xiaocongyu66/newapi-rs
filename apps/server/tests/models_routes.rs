@@ -1000,6 +1000,9 @@ async fn contract(db: &Database) {
     ]);
     let vendors = json!([{"name": "UpVendor"}]);
     let fake = FakeUpstream::with_envelope(upstream, vendors);
+    // fetch 失败场景删掉了 abilities-only；补回它（sync_official=0 不参与
+    // 可覆盖比对），使 missing 不含它。
+    seed_model(db, 6, "abilities-only", 1, 0).await;
     let response = models_http::sync_upstream_preview_with(
         db,
         &Default::default(),
@@ -1008,8 +1011,7 @@ async fn contract(db: &Database) {
     )
     .await;
     let body = assert_success(response).await;
-    // abilities-only 不在“缺失”里（本地已建）；本地可覆盖模型与上游无差异
-    // 时 conflicts 为 null（Go nil 切片）。
+    // 本地可覆盖模型与上游无差异时 conflicts 为 null（Go nil 切片）。
     assert_eq!(body["data"]["missing"], json!(null));
     assert_eq!(body["data"]["conflicts"], json!(null));
     assert_eq!(body["data"]["source"]["locale"], json!(""));
