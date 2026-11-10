@@ -8,6 +8,11 @@
 //! Every business result is HTTP 200 with `{success,message}`; success also
 //! carries `data` with the generated plaintext password. Storage failures
 //! collapse to `common.database_error` and never expose SQL text.
+//!
+//! 重置事务提交后撤销该用户全部活跃会话（Go
+//! `ResetUserPasswordByEmail` → `RevokeAllUserSessions(user.Id,
+//! "password_reset")`，`store_users_lifecycle.go:191-192`）；撤销失败时整个
+//! 重置按 Go 语义失败，验证码因此不被删除。
 
 use std::net::SocketAddr;
 
@@ -67,7 +72,24 @@ pub async fn reset_password(
         return rejected(translate(&headers, "common.database_error"));
     };
     match repository.reset_by_email(&email, &password).await {
-        Ok(()) => {
+        Ok(user_id) => {
+            // Go `ResetUserPasswordByEmail`（`store_users_lifecycle.go:191-192`）：
+            // 重置事务提交后调用 `RevokeAllUserSessions(user.Id,
+            // "password_reset")`，把该用户全部活跃会话行即时置 revoked；
+            // 失败则整个重置失败。Rust 无 `PublishUserAuthCache` 步骤，
+            // 撤销紧跟事务提交，同样是独立批次事务。
+            let Some(auth) = state.auth() else {
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            };
+            let now = crate::http::now_seconds();
+            if let Err(error) = auth.revoke_all(user_id, "password_reset", now).await {
+                tracing::warn!(
+                    event = "password_reset_session_revoke_failed",
+                    error = ?error,
+                    "password reset session revoke failed"
+                );
+                return rejected(translate(&headers, "common.database_error"));
+            }
             // Go 仅在成功后 `DeleteKey`，验证码因此是一次性的。
             delete_verification_code(PASSWORD_RESET_PURPOSE, &email);
             Json(json!({

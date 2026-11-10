@@ -19,10 +19,13 @@
 //! 的字符串结果。
 //!
 //! Go 在禁用成功后还会 `RevokeAllUserSessions(userId, "admin_twofa_disabled")`
-//! 与 `writeManageAudit(c, userId, "user.2fa_disable", nil)`：前者在 Rust 由
-//! `disable_with_auth_version` 递增 `users.auth_version` 等效完成
-//! （`sessions::validate_access` 会拒绝版本不匹配的会话），后者由
-//! `newapi_identity::audit::record_manage_audit` 写入，失败仅告警。
+//! （`manage_twofa.go:580-583`）与 `writeManageAudit(c, userId,
+//! "user.2fa_disable", nil)`：前者把该用户全部活跃会话行即时置 revoked
+//! （会话列表随即不再显示），由本模块在禁用事务提交后调用
+//! `SessionAuth::revoke_all` 完成；失败按 Go `common.CtxApiError` 的端口
+//! 分类回 200 success:false + common.database_error（此时审计不写，与
+//! Go 的调用顺序一致）。后者由 `newapi_identity::audit::record_manage_audit`
+//! 写入，失败仅告警。
 
 use std::net::SocketAddr;
 
@@ -132,7 +135,8 @@ pub async fn admin_disable(
     }
 
     // Go `DisableTwoFAWithAuthVersion`：同一事务硬删除因子/备用码并递增
-    // `users.auth_version`（会话版本失配即拒绝，等效 Go 的撤销全部会话）。
+    // `users.auth_version`（旧令牌随即被版本检查拒绝，但活跃会话行要靠
+    // 下面的撤销批次立即失效）。
     match TwoFaRepository::new(db.clone())
         .disable_with_auth_version(user_id, now)
         .await
@@ -142,6 +146,22 @@ pub async fn admin_disable(
         Ok(_next_auth_version) => {}
         Err(TwoFaError::NotEnabled) => return api_error_literal(MSG_NOT_ENABLED),
         Err(error) => return two_fa_error_response(&headers, error),
+    }
+
+    // Go `manage_twofa.go:580-583`：禁用事务提交后撤销该用户全部活跃会话
+    // （`RevokeAllUserSessions(userId, "admin_twofa_disabled")`），失败回
+    // `common.CtxApiError`——Rust 沿用本端口分类，且不写审计（Go 在撤销
+    // 失败时直接返回，`writeManageAudit` 不会执行）。
+    let Some(auth) = state.auth() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    if let Err(error) = auth.revoke_all(user_id, "admin_twofa_disabled", now).await {
+        tracing::warn!(
+            event = "admin_twofa_session_revoke_failed",
+            error = ?error,
+            "admin 2FA session revoke failed"
+        );
+        return api_error(&headers, MSG_DATABASE_ERROR);
     }
 
     // Go `writeManageAudit(c, userId, "user.2fa_disable", nil)`：失败仅告警。

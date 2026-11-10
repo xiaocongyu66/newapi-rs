@@ -481,6 +481,19 @@ async fn stored_auth_version(db: &Database, user_id: i64) -> i64 {
     })
 }
 
+/// `user_sessions` 行的撤销投影：status 与 revoked_reason。
+async fn session_row(db: &Database, sid: &str) -> (String, String) {
+    backend!(db, pool, {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT status, COALESCE(revoked_reason, '') FROM user_sessions WHERE sid=$1",
+        )
+        .bind(sid)
+        .fetch_one(pool)
+        .await
+        .expect("session row")
+    })
+}
+
 /// `logs` 行的最小投影：归属用户、类型、英文兜底文案、用户名、`other` JSON。
 async fn audit_logs(db: &Database) -> Vec<(i64, i64, String, String, String)> {
     backend!(db, pool, {
@@ -520,6 +533,9 @@ async fn seed_all(db: &Database) {
     seed_session(db, "sid-root", 4, 1, 1, at).await;
     seed_session(db, "sid-common", 5, 1, 1, at).await;
     seed_session(db, "sid-guest", 9, 1, 1, at).await;
+    // 2 号普通用户也带一条活跃会话：管理员禁用其 2FA 后，该会话行应被
+    // `RevokeAllUserSessions(userId, "admin_twofa_disabled")` 撤销。
+    seed_session(db, "sid-target", 2, 1, 1, at).await;
 }
 
 fn admin_token() -> String {
@@ -697,6 +713,14 @@ async fn run_contract(db: Database) {
     assert_eq!(factor_rows(&db, 2).await, 0);
     assert_eq!(backup_code_rows(&db, 2).await, 0);
     assert_eq!(stored_auth_version(&db, 2).await, 2);
+    // Go `RevokeAllUserSessions(userId, "admin_twofa_disabled")`
+    // （`manage_twofa.go:580`）：目标的活跃会话行即时 revoked，原因固定。
+    let (status, reason) = session_row(&db, "sid-target").await;
+    assert_eq!(status, "revoked", "目标会话应被撤销");
+    assert_eq!(reason, "admin_twofa_disabled");
+    // 未涉及的用户会话保持活跃。
+    let (status, _) = session_row(&db, "sid-common").await;
+    assert_eq!(status, "active", "无关用户的会话不受影响");
 
     // ---- disable: idempotent retry on an already-disabled user --------------
     // Go `DisableTwoFAWithAuthVersion` 第二次调用时 `LockForUpdate` 找不到

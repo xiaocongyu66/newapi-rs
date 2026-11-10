@@ -15,7 +15,11 @@
 //! `GenerateVerificationCode(12)`. The verification cache is the in-process map
 //! from `identity::registration`, seeded here through `register_verification_code`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
@@ -25,9 +29,14 @@ use axum::{
     response::Response,
     routing::post,
 };
+use newapi_config::SessionCookieSettings;
 use newapi_identity::{
-    crypto::verify_password, registration::PASSWORD_RESET_PURPOSE,
+    auth_session::{AuthFence, SessionAuth},
+    crypto::AuthKeys,
+    crypto::verify_password,
+    registration::PASSWORD_RESET_PURPOSE,
     registration::register_verification_code,
+    sessions::NoCache,
 };
 use newapi_security::client_ip::ProxyPolicy;
 use newapi_server::{AppState, RateLimiter, limit::RateLimitSettings, reset_http};
@@ -100,6 +109,18 @@ const POSTGRES_USERS: &str = r#"CREATE TABLE users (
 
 const OPTIONS: &str = "CREATE TABLE options (\"key\" TEXT PRIMARY KEY, value TEXT)";
 
+/// `user_sessions` 的契约最小列集（与 `admin_2fa_routes.rs` 同构）：
+/// 密码重置成功后 `RevokeAllUserSessions` 只写 status/revoked_at/revoked_reason。
+const SESSIONS: &str = r#"CREATE TABLE user_sessions (
+    sid VARCHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL,
+    version BIGINT NOT NULL DEFAULT 1, user_auth_version BIGINT NOT NULL,
+    status VARCHAR(16) NOT NULL, refresh_hash CHAR(64) NOT NULL,
+    previous_refresh_hash VARCHAR(64), previous_valid_until BIGINT NOT NULL DEFAULT 0,
+    login_method VARCHAR(32) NOT NULL, ip VARCHAR(64), user_agent TEXT,
+    created_at BIGINT, last_active_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
+    revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason VARCHAR(64)
+)"#;
+
 macro_rules! exec {
     ($db:expr, $sql:expr $(, $arg:expr)* $(,)?) => {{
         match $db {
@@ -149,10 +170,51 @@ fn router(state: AppState) -> Router {
 }
 
 async fn state(db: &Database) -> AppState {
+    // 密码重置成功后会调用 `SessionAuth::revoke_all`，state 必须注入认证
+    // 编排（生产入口同样绑定）；fence 取显式禁用缓存的 NoCache。
+    let auth = Arc::new(SessionAuth::with_fence(
+        db.clone(),
+        AuthKeys::new(SECRET),
+        AuthFence::Disabled(NoCache::explicitly_disabled()),
+    ));
     AppState::initialize(db)
         .await
         .expect("state snapshot")
+        .bind_auth(
+            auth,
+            SessionCookieSettings {
+                secure: false,
+                trusted_origins: Vec::new(),
+            },
+        )
         .bind_runtime(db.clone(), SECRET)
+}
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// `user_sessions` 行的撤销投影：status 与 revoked_reason。
+async fn session_row(db: &Database, sid: &str) -> (String, String) {
+    match db {
+        Database::Sqlite(pool) => sqlx::query_as::<_, (String, String)>(
+            "SELECT status, COALESCE(revoked_reason, '') FROM user_sessions WHERE sid=$1",
+        )
+        .bind(sid)
+        .fetch_one(pool)
+        .await
+        .expect("session row"),
+        Database::Postgres(pool) => sqlx::query_as::<_, (String, String)>(
+            "SELECT status, COALESCE(revoked_reason, '') FROM user_sessions WHERE sid=$1",
+        )
+        .bind(sid)
+        .fetch_one(pool)
+        .await
+        .expect("session row"),
+    }
 }
 
 fn reset_request(body: &str) -> Request<Body> {
@@ -193,6 +255,7 @@ fn assert_link_invalid(body: &Value) {
 
 async fn run_contract(db: Database) {
     exec!(&db, OPTIONS);
+    exec!(&db, SESSIONS);
     let app = state(&db).await;
 
     // ---- binding and empty guards (Go `MsgInvalidParams`) ----
@@ -280,6 +343,25 @@ async fn run_contract(db: Database) {
         "resetme@example.com",
         1_i64,
     );
+    // 给重置目标先种一条活跃会话：重置成功后它应被撤销。
+    let reset_user_id: i64 = fetch_one!(
+        &db,
+        "SELECT CAST(id AS BIGINT) FROM users WHERE username = $1",
+        "resetuser",
+    );
+    let at = now();
+    exec!(
+        &db,
+        r#"INSERT INTO user_sessions
+            (sid,user_id,version,user_auth_version,status,refresh_hash,
+             previous_refresh_hash,previous_valid_until,login_method,ip,
+             user_agent,created_at,last_active_at,expires_at,revoked_at,revoked_reason)
+            VALUES ('sid-reset',$1,1,1,'active','fixture-hash',NULL,0,'password','',
+                    '',$2,$2,$3,0,'')"#,
+        reset_user_id,
+        at,
+        at + 3600,
+    );
     register_verification_code(PASSWORD_RESET_PURPOSE, "resetme@example.com", TOKEN);
     let response = send_body(
         &app,
@@ -315,6 +397,13 @@ async fn run_contract(db: Database) {
         "resetuser",
     );
     assert_eq!(auth_version, 2);
+
+    // Go `RevokeAllUserSessions(user.Id, "password_reset")`
+    // （`store_users_lifecycle.go:191-192`）：重置事务提交后，该用户全部
+    // 活跃会话行即时置 revoked，原因固定 password_reset。
+    let (status, reason) = session_row(&db, "sid-reset").await;
+    assert_eq!(status, "revoked", "重置后目标会话应被撤销");
+    assert_eq!(reason, "password_reset");
 
     // The code is one-shot: replaying it fails verification now.
     let body = body_json(

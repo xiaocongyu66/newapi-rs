@@ -11,9 +11,12 @@
 //! - 密码以 bcrypt(cost 10) 写入，并在同一事务内递增 `auth_version`
 //!   （NULL/0 旧值从 2 起步，否则 +1）。
 //!
-//! 已确认的移植缺口（不伪造）：Go 还会 `PublishUserAuthCache` 并
-//! `RevokeAllUserSessions(userId, "password_reset")`。Rust 目前没有用户缓存，
-//! 且会话撤销属于另一个仓储；本实现只做密码与 `auth_version`。
+//! 已确认的移植缺口（不伪造）：Go 还会 `PublishUserAuthCache`，Rust 目前
+//! 没有用户缓存发布步骤。Go 的 `RevokeAllUserSessions(userId,
+//! "password_reset")`（`store_users_lifecycle.go:191-192`）由 HTTP 层
+//! （`reset_http::reset_password`）在本仓储事务提交后调用
+//! （`SessionAuth::revoke_all`），事务边界与 Go 对齐：撤销是独立批次，
+//! 不在密码重置事务内。
 
 use newapi_storage::Database;
 
@@ -68,12 +71,14 @@ impl PasswordResetRepository {
     }
 
     /// Go `ResetUserPasswordByEmail`：唯一邮箱 → bcrypt → 事务内递增
-    /// `auth_version` 并替换密码。`password` 原文不在此模块外记录。
+    /// `auth_version` 并替换密码。成功时返回被重置用户的 id，供调用方在
+    /// 事务提交后撤销会话（Go `RevokeAllUserSessions(id, "password_reset")`）。
+    /// `password` 原文不在此模块外记录。
     pub async fn reset_by_email(
         &self,
         email: &str,
         password: &str,
-    ) -> Result<(), PasswordResetError> {
+    ) -> Result<i64, PasswordResetError> {
         let email = normalize_email(email);
         if email.is_empty() || password.is_empty() {
             return Err(PasswordResetError::InvalidInput);
@@ -87,7 +92,8 @@ impl PasswordResetRepository {
         match &self.db {
             Database::Sqlite(pool) => reset_sqlite(pool, user_id, &password_hash).await,
             Database::Postgres(pool) => reset_postgres(pool, user_id, &password_hash).await,
-        }
+        }?;
+        Ok(user_id)
     }
 
     /// Go `GetUniqueUserByEmail`：空邮箱、0 条、2 条及以上分别返回固定分类。
