@@ -628,18 +628,20 @@ mod tests {
             .await
             .expect("fixture schema");
         for row in [
-            (10i64, 1i64, 100i64, "alpha", 1i64, 0i64),
-            (20, 1, 100, "apple", 2, 0),
-            (30, 1, 100, "beta", 3, 0),
+            (10i64, 1i64, "kk10", "alpha", 1i64, 100i64),
+            (20, 1, "kk20", "apple", 2, 100),
+            (30, 1, "kk30", "beta", 3, 100),
         ] {
             sqlx::query(
-                r#"INSERT INTO redemptions (id,user_id,status,name,quota) VALUES (?,?,?,?,?)"#,
+                r#"INSERT INTO redemptions (id,user_id,"key",status,name,quota)
+                   VALUES (?,?,?,?,?,?)"#,
             )
             .bind(row.0)
             .bind(row.1)
+            .bind(row.2)
             .bind(row.4)
             .bind(row.3)
-            .bind(row.2)
+            .bind(row.5)
             .execute(&pool)
             .await
             .expect("seed row");
@@ -651,12 +653,12 @@ mod tests {
             .expect("search must succeed against the fixture");
         assert_eq!(total, 2);
         assert_eq!(records.len(), 2);
-        // 数字 keyword 走 `id = ? OR name LIKE ?` 分支。
+        // 数字 keyword 走 `id = ? OR name LIKE ?` 分支（id=30 为 used）。
         let (records, total) = repository
-            .search("20", RedemptionStatusFilter::Used, 0, 10, 1_000_000)
+            .search("30", RedemptionStatusFilter::Used, 0, 10, 1_000_000)
             .await
             .expect("numeric keyword search must succeed");
         assert_eq!(total, 1);
-        assert_eq!(records[0].id, 20);
+        assert_eq!(records[0].id, 30);
     }
 }
