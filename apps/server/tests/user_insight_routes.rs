@@ -257,7 +257,7 @@ async fn reset(db: &Database) {
         "users",
     ] {
         backend!(db, pool, {
-            sqlx::query(&format!("DELETE FROM {table}"))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
                 .execute(pool)
                 .await
                 .expect("reset table");
@@ -297,7 +297,7 @@ async fn seed_profile(db: &Database, columns: &str, values: Value) {
         placeholders.join(",")
     );
     backend!(db, pool, {
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
         for name in &names {
             let value = fields.get(*name).cloned().unwrap_or(json!(0));
             match value {
