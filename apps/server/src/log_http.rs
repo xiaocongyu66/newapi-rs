@@ -96,16 +96,7 @@ pub async fn list_logs(State(state): State<AppState>, uri: Uri, headers: HeaderM
                 category = crate::database_error_class(&error),
                 "admin log query failed"
             );
-            // TODO-REMOVE: temporary diagnosis, surfaces the sqlx error payload.
-            let detail = format!("{error}");
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "success": false,
-                    "message": detail,
-                })),
-            )
-                .into_response()
+            api_error(&headers, MSG_DATABASE_ERROR)
         }
     }
 }
@@ -800,9 +791,9 @@ where
         channel_id: row
             .try_get::<Option<i64>, _>("channel_id")?
             .unwrap_or_default(),
-        channel_name: row
-            .try_get::<Option<String>, _>("channel_name")?
-            .unwrap_or_default(),
+        // channel_name 不在 SELECT 白名单里：管理端由 channels 表回填，
+        // 自助端被 formatUserLogs 清空，此处恒为空串起步。
+        channel_name: String::new(),
         token_id: row
             .try_get::<Option<i64>, _>("token_id")?
             .unwrap_or_default(),
