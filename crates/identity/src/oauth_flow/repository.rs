@@ -20,7 +20,8 @@
 //! 互转，绝不把 BIGINT 直接写进这些列。
 
 use newapi_storage::Database;
-use sqlx::QueryBuilder;
+// flow_row! 在调用点展开：Row trait 需在此作用域可见。
+use sqlx::{QueryBuilder, Row};
 
 use crate::SecretString;
 use crate::auth_flow::token::{generate_token, token_hash};
@@ -190,24 +191,8 @@ pub struct OAuthFlowMatch<'a> {
     pub session_id: &'a str,
 }
 
-/// 追加 `provider` / `intent` / `user_id` / `session_id` 的非零值过滤。
-fn push_optional_match_sqlite<'a>(
-    query: &mut QueryBuilder<sqlx::Sqlite>,
-    matching: &OAuthFlowMatch<'a>,
-) {
-    push_optional_match_impl!(query, matching);
-}
-
-/// 追加非零值过滤（PG）。
-fn push_optional_match_postgres<'a>(
-    query: &mut QueryBuilder<sqlx::Postgres>,
-    matching: &OAuthFlowMatch<'a>,
-) {
-    push_optional_match_impl!(query, matching);
-}
-
 /// 非零值过滤的共享体（宏展开到具体后端；泛型 `DB: Database` 上的
-/// push_bind 无法满足 Encode 绑定）。
+/// push_bind 无法满足 Encode 绑定）。宏必须先于使用点定义。
 macro_rules! push_optional_match_impl {
     ($query:expr, $matching:expr) => {{
         if !$matching.provider.is_empty() {
@@ -225,6 +210,26 @@ macro_rules! push_optional_match_impl {
                 .push_bind($matching.session_id);
         }
     }};
+}
+
+// 固定列投影常量（与 Dialect::columns 同源；fetch_flow 直接引用）。
+const FLOW_COLUMNS_SQLITE: &str = "id,purpose,provider,intent,CAST(user_id AS BIGINT) AS user_id,session_id,payload,CAST(strftime('%s',expires_at) AS INTEGER) AS expires_at,CAST(strftime('%s',consumed_at) AS INTEGER) AS consumed_at";
+const FLOW_COLUMNS_POSTGRES: &str = "id,purpose,provider,intent,CAST(user_id AS BIGINT) AS user_id,session_id,payload,CAST(EXTRACT(EPOCH FROM expires_at) AS BIGINT) AS expires_at,CAST(EXTRACT(EPOCH FROM consumed_at) AS BIGINT) AS consumed_at";
+
+/// 追加 `provider` / `intent` / `user_id` / `session_id` 的非零值过滤。
+fn push_optional_match_sqlite<'a>(
+    query: &mut QueryBuilder<sqlx::Sqlite>,
+    matching: &OAuthFlowMatch<'a>,
+) {
+    push_optional_match_impl!(query, matching);
+}
+
+/// 追加非零值过滤（PG）。
+fn push_optional_match_postgres<'a>(
+    query: &mut QueryBuilder<sqlx::Postgres>,
+    matching: &OAuthFlowMatch<'a>,
+) {
+    push_optional_match_impl!(query, matching);
 }
 
 /// Go `TelegramBind` 的事务闭包体（`bind_telegram.go:144-199`）：消费 flow →
@@ -322,14 +327,16 @@ macro_rules! telegram_bind_body {
         {
             return Err(TelegramFlowError::SessionInvalid);
         }
-        // 6. 目标用户的 Telegram 槽位必须为空。
+        // 6. 目标用户的 Telegram 槽位必须为空（Go 的空串语义）。
         let current: Option<String> =
             sqlx::query_scalar("SELECT telegram_id FROM users WHERE id = $1")
                 .bind(user_id)
                 .fetch_optional($executor)
                 .await?
                 .unwrap_or_default();
-        if !current.is_empty() {
+        if current.as_deref().unwrap_or_default().is_empty() {
+            // 槽位为空，继续绑定。
+        } else {
             return Err(TelegramFlowError::AlreadyBound);
         }
         // 7. external_identity_claims 认领（Go `ClaimExternalIdentityWithTx`）：
@@ -600,7 +607,7 @@ impl OAuthFlowRepository {
                     .push_bind(matching.purpose);
                 push_optional_match_sqlite(&mut query, matching);
                 let row = query.build().fetch_optional(pool).await?;
-                row.map(|row| flow_row!(row))
+                row.map(|row| Ok(flow_row!(row)))
                     .transpose()
                     .map_err(sqlx::Error::into)
             }
@@ -614,7 +621,7 @@ impl OAuthFlowRepository {
                     .push_bind(matching.purpose);
                 push_optional_match_postgres(&mut query, matching);
                 let row = query.build().fetch_optional(pool).await?;
-                row.map(|row| flow_row!(row))
+                row.map(|row| Ok(flow_row!(row)))
                     .transpose()
                     .map_err(sqlx::Error::into)
             }
