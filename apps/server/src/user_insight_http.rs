@@ -49,7 +49,6 @@ use axum::{
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
-use newapi_identity::user_auth::UserAuthIdentity;
 use serde_json::{Value, json};
 use sqlx::Row;
 
@@ -864,7 +863,10 @@ async fn aggregate_client_usage(
     }
     let mut stats: Vec<(String, i64, i64)> = requests
         .into_iter()
-        .map(|(client, count)| (client, count, users.get(&client).copied().unwrap_or(0)))
+        .map(|(client, count)| {
+            let users_count = users.get(&client).copied().unwrap_or(0);
+            (client, count, users_count)
+        })
         .collect();
     stats.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
     Ok(stats)
@@ -883,7 +885,7 @@ async fn fetch_users_by_ids(
     let mut users = BTreeMap::new();
     match db {
         newapi_storage::Database::Sqlite(pool) => {
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
             for id in ids {
                 query = query.bind(*id);
             }
@@ -895,7 +897,7 @@ async fn fetch_users_by_ids(
             }
         }
         newapi_storage::Database::Postgres(pool) => {
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
             for id in ids {
                 query = query.bind(*id);
             }
@@ -944,7 +946,7 @@ async fn fetch_client_bans_by_users(
     let sql = format!("{}({})", BANS_BY_USERS_SQL, placeholders.join(", "));
     match db {
         newapi_storage::Database::Sqlite(pool) => {
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
             for id in ids {
                 query = query.bind(*id);
             }
@@ -957,7 +959,7 @@ async fn fetch_client_bans_by_users(
             }
         }
         newapi_storage::Database::Postgres(pool) => {
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
             for id in ids {
                 query = query.bind(*id);
             }
