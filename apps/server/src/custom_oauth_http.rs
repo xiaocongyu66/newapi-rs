@@ -1175,16 +1175,12 @@ fn translate(headers: &HeaderMap, key: &str) -> String {
     newapi_i18n::translate(&language, key, std::iter::empty::<(&str, &str)>())
 }
 
-/// Go `resp.Status`：`"<code> <reason>"`。
+/// Go `resp.Status`：`"<code> <reason>"`。`StatusCode` 的 Display 本身就是
+/// 该格式（无标准短语时只剩 code），无需再拼一次 canonical_reason。
 fn status_line(status: u16) -> String {
     StatusCode::from_u16(status)
-        .ok()
-        .and_then(|status| {
-            status
-                .canonical_reason()
-                .map(|reason| format!("{status} {reason}"))
-        })
-        .unwrap_or_else(|| status.to_string())
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| format!("{status}"))
 }
 
 // ---------------------------------------------------------------------------
