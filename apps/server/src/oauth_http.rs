@@ -400,6 +400,9 @@ async fn setup_login(
     let outcome = login
         .complete_session(user_id, method, ip, &user_agent, crate::http::now_seconds())
         .await;
+    if let Err(failure) = &outcome {
+        eprintln!("[oauth-debug] complete_session({method}): {failure:?}");
+    }
     render_login(state, outcome, headers)
 }
 
@@ -687,7 +690,10 @@ pub async fn handle_provider(
         Err(OAuthFlowError::EmailTaken) => {
             rejected(translate(&headers, "user.email_already_taken"))
         }
-        Err(_) => storage_error(&headers),
+        Err(error) => {
+            eprintln!("[oauth-debug] find_or_create_user: {error:?}");
+            storage_error(&headers)
+        }
     }
 }
 
@@ -1054,7 +1060,10 @@ pub async fn wechat_login(
         }
         match create_wechat_user(&state, &store, &wechat_id).await {
             Ok(user) => user,
-            Err(_) => return storage_error(&headers),
+            Err(error) => {
+                eprintln!("[oauth-debug] create_wechat_user: {error:?}");
+                return storage_error(&headers);
+            }
         }
     };
     if user.status != 1 {
