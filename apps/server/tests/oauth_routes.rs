@@ -1079,7 +1079,7 @@ async fn run_telegram_bind_contract(db: Database) {
     );
 
     // 坏签名 → 302 INVALID_REQUEST。
-    let bad_params = vec![
+    let bad_params = [
         ("id".to_owned(), "9000000002".to_owned()),
         ("auth_date".to_owned(), now().to_string()),
     ];
