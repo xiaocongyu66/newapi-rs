@@ -1119,7 +1119,14 @@ async fn run_telegram_bind_contract(db: Database) {
     seed_user(&db, USER_ID, PAT, 1, 1).await;
     // 绑定守卫是 `telegram_id = ''`（Go 空串语义），fixture 默认列是 NULL。
     match &db {
-        Database::Sqlite(pool) | Database::Postgres(pool) => {
+        Database::Sqlite(pool) => {
+            sqlx::query("UPDATE users SET telegram_id = '' WHERE id = $1")
+                .bind(USER_ID)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        Database::Postgres(pool) => {
             sqlx::query("UPDATE users SET telegram_id = '' WHERE id = $1")
                 .bind(USER_ID)
                 .execute(pool)
