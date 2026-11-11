@@ -517,8 +517,24 @@ fn injected(transport: FakeTransport) -> InjectedOAuthTransport {
 async fn run_state_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
+    seed_session(&db, "sess-1", USER_ID, 1).await;
     let app = state(&db).await;
-    let auth = format!("Bearer {PAT}");
+    // Go ReadSessionAuthIdentity 语义：bind intent 需要仪表板会话 JWT。
+    let jwt = AuthKeys::new(SECRET)
+        .issue_access(
+            &AuthIdentity {
+                user_id: USER_ID,
+                sid: "sess-1".into(),
+                user_auth_version: 1,
+                session_version: 1,
+            },
+            now(),
+        )
+        .expect("issue access token")
+        .token
+        .expose_secret()
+        .to_owned();
+    let auth = format!("Bearer {jwt}");
 
     // 未登录 + bind intent → 401 固定文案。
     let response = send(
@@ -714,6 +730,10 @@ async fn run_provider_login_contract(db: Database) {
         .body(Body::empty())
         .unwrap();
     let mut request = request;
+    // 生产 critical_guard 注入 ClientIp；测试路由器直接补上同一扩展。
+    request
+        .extensions_mut()
+        .insert(ClientIp("127.0.0.1".into()));
     request.extensions_mut().insert(injected(FakeTransport {
         responses: std::sync::Mutex::new(vec![
             (
@@ -777,6 +797,9 @@ async fn run_wechat_login_contract(db: Database) {
     assert_eq!(body["success"], json!(false), "{body}");
 
     // 远端返回新 wechat id + 注册关闭 → 管理员关闭了新用户注册。
+    // 先关注册并重建快照，再发请求（state() 每次重建装载 options）。
+    set_option(&db, "RegisterEnabled", "false").await;
+    let app = state(&db).await;
     let response = send_injected(
         &app,
         Method::GET,
@@ -790,8 +813,6 @@ async fn run_wechat_login_contract(db: Database) {
         ),
     )
     .await;
-    set_option(&db, "RegisterEnabled", "false").await;
-    let app = state(&db).await;
     assert_eq!(
         body_json(response).await["message"],
         json!(MSG_WECHAT_REGISTER_DISABLED)
@@ -1096,6 +1117,16 @@ async fn run_telegram_login_contract(db: Database) {
 async fn run_telegram_bind_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
+    // 绑定守卫是 `telegram_id = ''`（Go 空串语义），fixture 默认列是 NULL。
+    match &db {
+        Database::Sqlite(pool) | Database::Postgres(pool) => {
+            sqlx::query("UPDATE users SET telegram_id = '' WHERE id = $1")
+                .bind(USER_ID)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
     seed_session(&db, "sess-1", USER_ID, 1).await;
     let app = state(&db).await;
     // Go ReadSessionAuthIdentity 语义：bind/start 需要仪表板会话 JWT（PAT 不行）。
@@ -1256,12 +1287,18 @@ async fn sqlite_oauth_provider_disabled_contract() {
 
 #[tokio::test]
 async fn sqlite_oauth_provider_unknown_and_state_contract() {
+    // 两个契约各自 fixture（建表非幂等），分别用独立内存库。
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("in-memory SQLite fixture");
-    run_provider_unknown_contract(Database::Sqlite(pool.clone())).await;
+    run_provider_unknown_contract(Database::Sqlite(pool)).await;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite fixture");
     run_provider_state_invalid_contract(Database::Sqlite(pool)).await;
 }
 
