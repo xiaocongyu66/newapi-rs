@@ -325,17 +325,6 @@ async fn fixture(db: &Database) {
         Database::Sqlite(_) => exec(db, CASBIN_RULE).await,
         Database::Postgres(_) => exec(db, CASBIN_RULE_PG).await,
     }
-    // PG：seed_user 用显式 id 插入，序列需要追到 MAX(id)，否则
-    // BIGSERIAL 下一次 nextval 与已存在行冲突。
-    if let Database::Postgres(pool) = db {
-        sqlx::query(
-            "SELECT setval(pg_get_serial_sequence('users','id'), \
-             COALESCE((SELECT MAX(id) FROM users), 0) + 1, false)",
-        )
-        .execute(pool)
-        .await
-        .expect("sync users id sequence");
-    }
 }
 
 fn user_sessions_ddl(_db: &Database) -> &'static str {
@@ -394,6 +383,14 @@ async fn seed_user(db: &Database, id: i64, pat: &str, role: i64, auth_version: i
                 .execute(pool)
                 .await
                 .expect("seed user");
+            // 显式 id 绕过 BIGSERIAL 序列，插入后追平，避免后续创建冲突。
+            sqlx::query(
+                "SELECT setval(pg_get_serial_sequence('users','id'), \
+                 COALESCE((SELECT MAX(id) FROM users), 0) + 1, false)",
+            )
+            .execute(pool)
+            .await
+            .expect("sync users id sequence");
         }
     }
 }
