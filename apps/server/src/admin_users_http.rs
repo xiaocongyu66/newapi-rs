@@ -456,9 +456,11 @@ fn api_error_literal(message: &str) -> Response {
 }
 
 fn database_error(headers: &HeaderMap, error: &sqlx::Error) -> Response {
+    // 诊断：输出原始错误文本以定位双后端差异（不进入对外响应）。
     tracing::warn!(
         event = "admin_users_database_operation_failed",
         category = crate::database_error_class(error),
+        detail = %error,
         "admin user database operation failed"
     );
     api_error(headers, MSG_DATABASE_ERROR)
