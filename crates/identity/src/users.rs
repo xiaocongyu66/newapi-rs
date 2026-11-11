@@ -123,6 +123,8 @@ macro_rules! profile {
     }};
 }
 
+pub(crate) use profile;
+
 #[derive(Clone)]
 pub struct UserProfileRepository {
     db: Database,

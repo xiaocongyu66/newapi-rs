@@ -10,6 +10,7 @@ pub mod custom_oauth;
 pub mod email;
 pub mod login;
 pub mod oauth_bindings;
+pub mod oauth_flow;
 pub mod passkey;
 pub mod password_reset;
 pub mod policy;

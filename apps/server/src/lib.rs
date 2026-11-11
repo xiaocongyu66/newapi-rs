@@ -24,6 +24,7 @@ pub mod log_http;
 mod login_http;
 pub mod models_http;
 pub mod oauth_bindings_http;
+pub mod oauth_http;
 pub mod option_defaults;
 pub mod option_http;
 pub mod option_store;

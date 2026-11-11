@@ -996,6 +996,117 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // OAuth 登录/绑定八条路由（`register_api.go:103-112`）。链路逐条复刻：
+    // - `/api/oauth/state`：CT → NC → TryUserAuth → 匿名体上限 → handler；
+    // - `/api/oauth/:provider`：CT → NC → TryUserAuth → handler；
+    // - `wechat` GET / `telegram/login` GET / `telegram/bind/:flow_token` GET：
+    //   CT → NC → handler（回调 302 不带 no-cache 头？Go 的 DisableCache 在
+    //   handler 之前写头，302 同样带；本端口由 oauth_guard 统一补）；
+    // - `email/bind` POST / `wechat/bind` POST：UserAuth → CT → handler（无 NC）；
+    // - `telegram/bind/start` POST：UserAuth → CT → NC → handler。
+    // Go 在 UserAuth 路由上先挂鉴权再挂 CT；Axum 的 route_layer 后加先执行，
+    // 因此 oauth 组把鉴权层写在 CT/NC 层之后（鉴权先跑）。
+    let oauth_state_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/oauth/state", post(crate::oauth_http::oauth_state))
+            .route_layer(middleware::from_fn_with_state(
+                oauth_state_state.clone(),
+                oauth_anonymous_body_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                oauth_state_state.clone(),
+                crate::auth::try_user_auth,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                oauth_state_state,
+                oauth_disable_cache_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                critical_guard,
+            )),
+    );
+    let oauth_callback_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/oauth/{provider}",
+                get(crate::oauth_http::handle_provider),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                oauth_callback_state.clone(),
+                crate::auth::try_user_auth,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                oauth_callback_state,
+                oauth_disable_cache_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                critical_guard,
+            )),
+    );
+    let oauth_anon_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/oauth/wechat", get(crate::oauth_http::wechat_login))
+            .route(
+                "/api/oauth/telegram/login",
+                get(crate::oauth_http::telegram_login),
+            )
+            .route(
+                "/api/oauth/telegram/bind/{flow_token}",
+                get(crate::oauth_http::telegram_bind),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                oauth_anon_state,
+                oauth_disable_cache_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                critical_guard,
+            )),
+    );
+    // 无 NC 的两条绑定 POST：UserAuth → CT → handler。
+    let oauth_bind_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/oauth/email/bind", post(crate::oauth_http::email_bind))
+            .route(
+                "/api/oauth/wechat/bind",
+                post(crate::oauth_http::wechat_bind),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                oauth_bind_state.clone(),
+                crate::auth::user_auth,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                oauth_bind_state,
+                critical_guard,
+            )),
+    );
+    // telegram bind start：UserAuth → CT → NC → handler。
+    let oauth_tg_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/oauth/telegram/bind/start",
+                post(crate::oauth_http::telegram_bind_start),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                oauth_tg_state.clone(),
+                oauth_disable_cache_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                oauth_tg_state,
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::user_auth,
+            )),
+    );
     // 登录路由：Go 顺序 CriticalRateLimit → DisableCache → 匿名体上限 → handler。
     // 中间件依赖 AppState，必须用 from_fn_with_state 才能在 with_state 之前布层。
     let login_state = state.clone();
@@ -1419,6 +1530,27 @@ async fn critical_guard(State(state): State<AppState>, request: Request, next: N
             response
         }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// OAuth 路由的 Go `middleware.DisableCache()`：与 qq 同形状——在 CT 之后的
+/// 层补三个 no-cache 头，限流的 429/500 不带缓存头。
+async fn oauth_disable_cache_guard(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    disable_cache_headers(&mut response);
+    response
+}
+
+/// `POST /api/oauth/state` 的 Go `anonymousRequestBodyLimit`：与登录路由的
+/// 体限制同一实现（裸 413），位于 TryUserAuth 之后、handler 之前。
+async fn oauth_anonymous_body_guard(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match crate::login_http::read_limited_body(state.anonymous_body_limit(), request).await {
+        Ok(request) => next.run(request).await,
+        Err(status) => status.into_response(),
     }
 }
 
