@@ -463,9 +463,11 @@ pub async fn oauth_state(
     let Some(db) = state.db() else {
         return unavailable();
     };
-    let Ok(settings) = settings_of(&db).await else {
+    // settings 读取成功性校验（与 Go 选项读取失败一致折叠为存储错误）；
+    // state 生成不消费具体开关值。
+    if settings_of(&db).await.is_err() {
         return storage_error(&headers);
-    };
+    }
     let Some(flow) = flow_repo(&state) else {
         return unavailable();
     };
@@ -1135,6 +1137,9 @@ async fn wechat_id_by_code(
     struct WeChatResponse {
         #[serde(default)]
         success: bool,
+        // Go 把远端 message 透传给用户；本仓库统一折叠为固定文案，
+        // 该字段仅为完整反序列化保留。
+        #[allow(dead_code)]
         #[serde(default)]
         message: String,
         #[serde(default)]
