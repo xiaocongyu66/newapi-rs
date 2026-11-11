@@ -1289,7 +1289,9 @@ async fn run_contract(db: Database) {
         0
     );
     assert_eq!(row_count(&db, "qq_bindings", "user_id = 3").await, 0);
-    assert_eq!(row_count(&db, "casbin_rule", "v0 = 'user:3'").await, 0);
+    // Go `HardDeleteUserById` 不清理 casbin_rule（仅 demote/create 走
+    // ClearUserAuthorizationInTx），覆盖行按 Go 语义保留。
+    assert_eq!(row_count(&db, "casbin_rule", "v0 = 'user:3'").await, 1);
     // root 不能删除 root（同级严格拒绝）。
     assert_business_message(
         send(&app, Method::DELETE, "/api/user/4", Some(&root), None).await,
