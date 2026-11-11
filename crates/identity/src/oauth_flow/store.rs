@@ -586,7 +586,8 @@ pub enum CreateUserError {
 }
 
 impl From<sqlx::Error> for CreateUserError {
-    fn from(_: sqlx::Error) -> Self {
+    fn from(error: sqlx::Error) -> Self {
+        eprintln!("[oauth-debug] create_user sqlx: {error}");
         Self::Storage
     }
 }
