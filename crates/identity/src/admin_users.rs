@@ -413,7 +413,8 @@ macro_rules! backend {
 
 /// Go `UpdateWithTx` 的 scoped `First` 等价：软删除/不存在目标在此终止
 /// 事务（Go 报 ErrRecordNotFound）。
-const ENSURE_LIVE_ROW: &str = "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL";
+const ENSURE_LIVE_ROW: &str =
+    "SELECT CAST(1 AS BIGINT) FROM users WHERE id = $1 AND deleted_at IS NULL";
 
 macro_rules! tx_ensure_live_row {
     ($tx:expr, $user_id:expr) => {{
