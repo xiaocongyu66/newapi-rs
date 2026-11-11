@@ -75,7 +75,8 @@ const USERS: &str = r#"CREATE TABLE users (
     oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, "group" TEXT,
     quota BIGINT, used_quota BIGINT, request_count BIGINT, aff_code TEXT,
     aff_count BIGINT, aff_quota BIGINT, aff_history BIGINT, inviter_id BIGINT,
-    linux_do_id TEXT, setting TEXT, stripe_customer TEXT, auth_version BIGINT,
+    linux_do_id TEXT, setting TEXT, remark VARCHAR(255), stripe_customer TEXT,
+    created_at BIGINT, last_login_at BIGINT, auth_version BIGINT,
     access_token TEXT, deleted_at TIMESTAMP
 )"#;
 
