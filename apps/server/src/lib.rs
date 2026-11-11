@@ -21,6 +21,7 @@ pub mod limit_email;
 pub mod limit_redis;
 pub mod log_http;
 mod login_http;
+pub mod models_http;
 pub mod oauth_bindings_http;
 pub mod option_defaults;
 pub mod option_http;

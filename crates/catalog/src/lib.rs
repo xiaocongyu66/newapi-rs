@@ -9,6 +9,7 @@ pub mod auth_settings;
 pub mod channels;
 pub mod email_settings;
 pub mod group_settings;
+pub mod models;
 pub mod public_config;
 pub mod registration_settings;
 
