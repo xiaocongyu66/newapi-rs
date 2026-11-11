@@ -33,6 +33,7 @@ use axum::{
 };
 use newapi_config::SessionCookieSettings;
 use newapi_identity::{
+    AuthIdentity,
     auth_session::{AuthFence, SessionAuth},
     crypto::AuthKeys,
     oauth_flow::providers::{
@@ -44,7 +45,7 @@ use newapi_server::{
     AppState,
     auth::{try_user_auth, user_auth},
     oauth_http::{
-        InjectedOAuthTransport, email_bind, handle_provider, oauth_state, telegram_bind,
+        ClientIp, InjectedOAuthTransport, email_bind, handle_provider, oauth_state, telegram_bind,
         telegram_bind_start, telegram_login, wechat_bind, wechat_login,
     },
 };
@@ -417,10 +418,12 @@ async fn send(
             .body(Body::from(value.to_string())),
         None => builder.body(Body::empty()),
     };
-    router(state.clone())
-        .oneshot(builder.unwrap())
-        .await
-        .unwrap()
+    let mut request = builder.unwrap();
+    // 生产 critical_guard 注入 ClientIp；测试路由器直接补上同一扩展。
+    request
+        .extensions_mut()
+        .insert(ClientIp("127.0.0.1".into()));
+    router(state.clone()).oneshot(request).await.unwrap()
 }
 
 /// `send` + 出站传输注入（假 transport 经 Request 扩展进入 handler）。
@@ -448,6 +451,9 @@ async fn send_injected(
     };
     let mut request = builder.unwrap();
     request.extensions_mut().insert(injected(transport));
+    request
+        .extensions_mut()
+        .insert(ClientIp("127.0.0.1".into()));
     router(state.clone()).oneshot(request).await.unwrap()
 }
 
@@ -856,7 +862,8 @@ async fn run_wechat_bind_contract(db: Database) {
     set_option(&db, "WeChatServerAddress", "http://wechat.internal").await;
     set_option(&db, "WeChatServerToken", "wtok").await;
     let app = state(&db).await;
-    // 已被占用。
+    // 已被占用：先落另一个用户的微信 ID（先 seed 再 UPDATE，保证行存在）。
+    seed_user(&db, USER_ID + 1, "pat-other", 1, 1).await;
     match &db {
         Database::Sqlite(pool) => {
             sqlx::query("UPDATE users SET wechat_id = 'wx-taken' WHERE id = $1")
@@ -873,7 +880,6 @@ async fn run_wechat_bind_contract(db: Database) {
                 .unwrap();
         }
     }
-    seed_user(&db, USER_ID + 1, "pat-other", 1, 1).await;
     let response = send_injected(
         &app,
         Method::POST,
@@ -1092,7 +1098,22 @@ async fn run_telegram_bind_contract(db: Database) {
     seed_user(&db, USER_ID, PAT, 1, 1).await;
     seed_session(&db, "sess-1", USER_ID, 1).await;
     let app = state(&db).await;
-    let auth = format!("Bearer {PAT}");
+    // Go ReadSessionAuthIdentity 语义：bind/start 需要仪表板会话 JWT（PAT 不行）。
+    let jwt = AuthKeys::new(SECRET)
+        .issue_access(
+            &AuthIdentity {
+                user_id: USER_ID,
+                sid: "sess-1".into(),
+                user_auth_version: 1,
+                session_version: 1,
+            },
+            now(),
+        )
+        .expect("issue access token")
+        .token
+        .expose_secret()
+        .to_owned();
+    let auth = format!("Bearer {jwt}");
     set_option(&db, "TelegramOAuthEnabled", "true").await;
     set_option(&db, "TelegramBotToken", "bot-token").await;
 

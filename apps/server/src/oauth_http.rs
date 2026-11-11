@@ -65,7 +65,9 @@ use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::auth::{AuthCredential, AuthenticatedUser, parse_authorization};
-use crate::login_http::ClientIp;
+// 生产路由由 critical_guard 注入 ClientIp；测试路由器无该守护，
+// 这里重导出同一类型供集成测试直接插入请求扩展。
+pub use crate::login_http::ClientIp;
 
 /// Go `oauthAuthFlowTTL`（10 分钟）/ `telegramBindFlowTTL`（5 分钟）。
 const OAUTH_TTL: i64 = oauth_flow::OAUTH_FLOW_TTL_SECONDS;
