@@ -402,7 +402,11 @@ async fn send(
     authorization: Option<&str>,
     body: Option<Value>,
 ) -> Response {
-    let builder = Request::builder().method(method).uri(uri);
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        // 与 Go 默认 locale（zh-CN）一致，断言固定中文文案。
+        .header(header::ACCEPT_LANGUAGE, "zh-CN");
     let builder = match authorization {
         Some(value) => builder.header(header::AUTHORIZATION, value),
         None => builder,
@@ -428,7 +432,10 @@ async fn send_injected(
     body: Option<Value>,
     transport: FakeTransport,
 ) -> Response {
-    let builder = Request::builder().method(method).uri(uri);
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::ACCEPT_LANGUAGE, "zh-CN");
     let builder = match authorization {
         Some(value) => builder.header(header::AUTHORIZATION, value),
         None => builder,
@@ -745,6 +752,7 @@ async fn run_wechat_login_contract(db: Database) {
     set_option(&db, "WeChatAuthEnabled", "true").await;
     set_option(&db, "WeChatServerAddress", "http://wechat.internal").await;
     set_option(&db, "WeChatServerToken", "wtok").await;
+    let app = state(&db).await;
     // 远端 success=false → 固定折叠文案。
     let response = send_injected(
         &app,
@@ -777,11 +785,13 @@ async fn run_wechat_login_contract(db: Database) {
     )
     .await;
     set_option(&db, "RegisterEnabled", "false").await;
+    let app = state(&db).await;
     assert_eq!(
         body_json(response).await["message"],
         json!(MSG_WECHAT_REGISTER_DISABLED)
     );
     set_option(&db, "RegisterEnabled", "true").await;
+    let app = state(&db).await;
 
     // 新用户注册路径：远端 id → 创建用户 → SetupLogin bundle。
     let response = send_injected(
@@ -845,6 +855,7 @@ async fn run_wechat_bind_contract(db: Database) {
     set_option(&db, "WeChatAuthEnabled", "true").await;
     set_option(&db, "WeChatServerAddress", "http://wechat.internal").await;
     set_option(&db, "WeChatServerToken", "wtok").await;
+    let app = state(&db).await;
     // 已被占用。
     match &db {
         Database::Sqlite(pool) => {
