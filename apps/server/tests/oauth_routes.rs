@@ -325,6 +325,17 @@ async fn fixture(db: &Database) {
         Database::Sqlite(_) => exec(db, CASBIN_RULE).await,
         Database::Postgres(_) => exec(db, CASBIN_RULE_PG).await,
     }
+    // PG：seed_user 用显式 id 插入，序列需要追到 MAX(id)，否则
+    // BIGSERIAL 下一次 nextval 与已存在行冲突。
+    if let Database::Postgres(pool) = db {
+        sqlx::query(
+            "SELECT setval(pg_get_serial_sequence('users','id'), \
+             COALESCE((SELECT MAX(id) FROM users), 0) + 1, false)",
+        )
+        .execute(pool)
+        .await
+        .expect("sync users id sequence");
+    }
 }
 
 fn user_sessions_ddl(_db: &Database) -> &'static str {
@@ -787,7 +798,6 @@ async fn run_provider_login_contract(db: Database) {
 
 async fn run_wechat_login_contract(db: Database) {
     fixture(&db).await;
-    seed_user(&db, USER_ID, PAT, 1, 1).await;
     let app = state(&db).await;
     // 未启用 → 固定文案。
     let response = send(&app, Method::GET, "/api/oauth/wechat?code=c", None, None).await;
