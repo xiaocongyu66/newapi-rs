@@ -1725,8 +1725,8 @@ async fn run_contract(db: Database) {
     let body = assert_success(send(&app, Method::GET, "/api/user/", Some(&pat), None).await).await;
     assert_eq!(
         body["data"]["total"],
-        json!(10),
-        "种子 7 行 + newbie + perm-admin + cleared-target"
+        json!(9),
+        "Unscoped 计数：种子 7 行 − 硬删 user3 + newbie + perm-admin + cleared-target"
     );
     assert_success(
         send_json(
@@ -1763,6 +1763,11 @@ async fn run_contract(db: Database) {
 
 #[tokio::test]
 async fn sqlite_admin_users_routes_contract() {
+    // 诊断：让 handler 的 tracing 警告（含数据库错误分类）进入测试输出。
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -1773,6 +1778,11 @@ async fn sqlite_admin_users_routes_contract() {
 
 #[tokio::test]
 async fn postgres_admin_users_routes_contract() {
+    // 诊断：同上；PG-only 失败需要看到服务端的错误分类。
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
     let Ok(dsn) = std::env::var("TEST_POSTGRES_DSN") else {
         return;
     };
