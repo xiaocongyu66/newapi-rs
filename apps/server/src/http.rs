@@ -383,6 +383,45 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::admin_auth,
             )),
     );
+    // 用户管理端七路由：Go `adminRoute`（`register_api.go:204-218`）中
+    // `identity.GetAllUsers`/`GetUser`/`CreateUser`/`UpdateUser`/`DeleteUser`/
+    // `SearchUsersHandler`/`ManageUser` 七条。组级同样只有 `AdminAuth()`
+    // （role >= 10）一道，无 DisableCache、无限流；401/403 只来自鉴权链。
+    // `/api/user/{id}` 与静态段 `/api/user/search`、`/api/user/manage` 共存，
+    // axum 的 matchit 静态段优先匹配；Fiber 非严格路由使 `/api/user` 等价于
+    // `/api/user/`，两种形态都注册（与 `/api/token` 一致）。
+    let admin_users_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/user/",
+                get(crate::admin_users_http::list_users)
+                    .post(crate::admin_users_http::create_user)
+                    .put(crate::admin_users_http::update_user),
+            )
+            .route(
+                "/api/user",
+                get(crate::admin_users_http::list_users)
+                    .post(crate::admin_users_http::create_user)
+                    .put(crate::admin_users_http::update_user),
+            )
+            .route(
+                "/api/user/search",
+                get(crate::admin_users_http::search_users),
+            )
+            .route(
+                "/api/user/manage",
+                post(crate::admin_users_http::manage_user),
+            )
+            .route(
+                "/api/user/{id}",
+                get(crate::admin_users_http::get_user).delete(crate::admin_users_http::delete_user),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                admin_users_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // OAuth 绑定的 self 路由：Go `selfRoute`（`register_api.go:200-201`），组内
     // 纯 `UserAuth`，无限流、无 `DisableCache`。`UserAuth` 的 minRole 低于
     // `RoleAdminUser`，Go 的 `beginAdminAudit` 不开捕获，因此这两条不写审计。

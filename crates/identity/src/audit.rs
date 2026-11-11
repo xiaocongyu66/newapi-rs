@@ -237,6 +237,14 @@ fn audit_content_en(action: &str, params: Option<&Map<String, Value>>) -> String
         "channel.delete" => "Deleted channel ${name} (ID: ${id})",
         "channel.delete_batch" => "Batch deleted ${count} channels",
         "channel.delete_disabled" => "Deleted all disabled channels (${count})",
+        // `usage/write_audit.go:17-23` 用户管理域模板（管理端七路由切片）。
+        "user.create" => "Created user ${username} (role ${role})",
+        "user.update" => "Updated user ${username} (ID: ${id})",
+        "user.delete" => "Deleted user ${username} (ID: ${id})",
+        "user.manage" => "Performed ${action} on user ${username} (ID: ${id})",
+        "user.quota_add" => "Increased user quota by ${quota}",
+        "user.quota_subtract" => "Decreased user quota by ${quota}",
+        "user.quota_override" => "Overrode user quota from ${from} to ${to}",
         _ => return action.to_owned(),
     };
     match params {
