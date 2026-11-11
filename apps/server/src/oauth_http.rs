@@ -621,7 +621,7 @@ pub async fn handle_provider(
         return rejected(description);
     }
     let code = first_value(&pairs, "code").unwrap_or_default();
-    let transport = transport_of(injected.as_ref().map(|v| &**v));
+    let transport = transport_of(injected.as_deref());
     if pending.intent == oauth_flow::INTENT_BIND {
         return bind_flow(
             &state,
@@ -1028,7 +1028,7 @@ pub async fn wechat_login(
     }
     let pairs = query_values(query.as_deref());
     let code = first_value(&pairs, "code").unwrap_or_default();
-    let transport = transport_of(injected.as_ref().map(|v| &**v));
+    let transport = transport_of(injected.as_deref());
     let wechat_id = match wechat_id_by_code(&settings, &code, transport).await {
         Ok(wechat_id) => wechat_id,
         Err(message) => return rejected(message),
@@ -1182,7 +1182,7 @@ pub async fn wechat_bind(
         Some(request) => request,
         None => return rejected(MSG_WECHAT_INVALID_REQUEST.to_owned()),
     };
-    let transport = transport_of(injected.as_ref().map(|v| &**v));
+    let transport = transport_of(injected.as_deref());
     let wechat_id = match wechat_id_by_code(&settings, &request.code, transport).await {
         Ok(wechat_id) => wechat_id,
         Err(message) => return rejected(message),
@@ -1526,7 +1526,8 @@ async fn session_reference(
 pub async fn telegram_login(
     State(state): State<AppState>,
     Extension(ClientIp(ip)): Extension<ClientIp>,
-    injected: Option<Extension<InjectedOAuthTransport>>,
+    // telegram_login 不发起出站调用；transport 注入仅供其它 handler 使用。
+    #[allow(unused_variables)] injected: Option<Extension<InjectedOAuthTransport>>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {

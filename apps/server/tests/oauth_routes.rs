@@ -138,8 +138,21 @@ const LOGS: &str = r#"CREATE TABLE logs (
     is_stream INTEGER, ip TEXT, request_id VARCHAR(64), other TEXT
 )"#;
 
+const LOGS_PG: &str = r#"CREATE TABLE logs (
+    id BIGSERIAL PRIMARY KEY, user_id BIGINT,
+    created_at BIGINT NOT NULL, type BIGINT, content TEXT, username TEXT,
+    token_name TEXT, model_name TEXT, quota BIGINT,
+    prompt_tokens BIGINT, completion_tokens BIGINT, use_time BIGINT,
+    is_stream BIGINT, ip TEXT, request_id VARCHAR(64), other TEXT
+)"#;
+
 const CASBIN_RULE: &str = r#"CREATE TABLE casbin_rule (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ptype TEXT,
+    v0 TEXT, v1 TEXT, v2 TEXT, v3 TEXT, v4 TEXT, v5 TEXT
+)"#;
+
+const CASBIN_RULE_PG: &str = r#"CREATE TABLE casbin_rule (
+    id BIGSERIAL PRIMARY KEY, ptype TEXT,
     v0 TEXT, v1 TEXT, v2 TEXT, v3 TEXT, v4 TEXT, v5 TEXT
 )"#;
 
@@ -258,8 +271,14 @@ async fn fixture(db: &Database) {
     exec(db, user_sessions_ddl(db)).await;
     exec(db, custom_providers_ddl(db)).await;
     exec(db, bindings_ddl(db)).await;
-    exec(db, LOGS).await;
-    exec(db, CASBIN_RULE).await;
+    match db {
+        Database::Sqlite(_) => exec(db, LOGS).await,
+        Database::Postgres(_) => exec(db, LOGS_PG).await,
+    }
+    match db {
+        Database::Sqlite(_) => exec(db, CASBIN_RULE).await,
+        Database::Postgres(_) => exec(db, CASBIN_RULE_PG).await,
+    }
 }
 
 fn user_sessions_ddl(_db: &Database) -> &'static str {
