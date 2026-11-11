@@ -1317,12 +1317,26 @@ async fn run_contract(db: Database) {
         &translated("common.invalid_params"),
     )
     .await;
+    // admin 对 root：门禁在先（Go `canManageTargetRole` 于 special 分支前）。
     assert_business_message(
         send_json(
             &app,
             Method::POST,
             "/api/user/manage",
             &admin,
+            &json!({"id": 4, "action": "disable"}),
+        )
+        .await,
+        &translated("user.no_permission_higher_level"),
+    )
+    .await;
+    // root 对 root：过门禁（operator==100），命中 cannot_disable_root。
+    assert_business_message(
+        send_json(
+            &app,
+            Method::POST,
+            "/api/user/manage",
+            &root,
             &json!({"id": 4, "action": "disable"}),
         )
         .await,
@@ -1387,12 +1401,25 @@ async fn run_contract(db: Database) {
     assert_eq!(session_status(&db, "sid-target2").await, "active");
 
     // ---- manage: delete（软删除） ---------------------------------------------
+    // admin 对 root：门禁在先；root 对 root：cannot_delete_root。
     assert_business_message(
         send_json(
             &app,
             Method::POST,
             "/api/user/manage",
             &admin,
+            &json!({"id": 4, "action": "delete"}),
+        )
+        .await,
+        &translated("user.no_permission_higher_level"),
+    )
+    .await;
+    assert_business_message(
+        send_json(
+            &app,
+            Method::POST,
+            "/api/user/manage",
+            &root,
             &json!({"id": 4, "action": "delete"}),
         )
         .await,
