@@ -31,8 +31,14 @@ use axum::{
     middleware,
     response::Response,
 };
-use newapi_identity::oauth_flow::providers::{
-    OutboundError, OutboundFuture, OutboundRequest, OutboundResponse, OutboundTransport,
+use newapi_config::SessionCookieSettings;
+use newapi_identity::{
+    auth_session::{AuthFence, SessionAuth},
+    crypto::AuthKeys,
+    oauth_flow::providers::{
+        OutboundError, OutboundFuture, OutboundRequest, OutboundResponse, OutboundTransport,
+    },
+    sessions::NoCache,
 };
 use newapi_server::{
     AppState,
@@ -242,8 +248,26 @@ fn router(state: AppState) -> Router {
     anonymous.merge(user).merge(callback).with_state(state)
 }
 
-fn state(db: &Database) -> AppState {
-    AppState::default().bind_runtime(db.clone(), SECRET)
+async fn state(db: &Database) -> AppState {
+    // 与 login_success 等切片一致：先 initialize（装载 auth_settings 快照
+    // 等），再注入 SessionAuth 与运行时；仅 bind_runtime 会让 register_enabled
+    // 等快照停留在默认值。
+    let auth = SessionAuth::with_fence(
+        db.clone(),
+        AuthKeys::new(SECRET),
+        AuthFence::Disabled(NoCache::explicitly_disabled()),
+    );
+    AppState::initialize(db)
+        .await
+        .expect("initialize app state")
+        .bind_auth(
+            Arc::new(auth),
+            SessionCookieSettings {
+                secure: false,
+                trusted_origins: Vec::new(),
+            },
+        )
+        .bind_runtime(db.clone(), SECRET)
 }
 
 async fn exec(db: &Database, statement: &'static str) {
@@ -480,7 +504,7 @@ fn injected(transport: FakeTransport) -> InjectedOAuthTransport {
 async fn run_state_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
-    let app = state(&db);
+    let app = state(&db).await;
     let auth = format!("Bearer {PAT}");
 
     // 未登录 + bind intent → 401 固定文案。
@@ -581,7 +605,7 @@ async fn run_state_contract(db: Database) {
 
 async fn run_provider_disabled_contract(db: Database) {
     fixture(&db).await;
-    let app = state(&db);
+    let app = state(&db).await;
     // 未启用：state 有效 + provider 恒注册 → oauth.not_enabled（200）。
     let response = send(
         &app,
@@ -617,7 +641,7 @@ async fn run_provider_disabled_contract(db: Database) {
 
 async fn run_provider_unknown_contract(db: Database) {
     fixture(&db).await;
-    let app = state(&db);
+    let app = state(&db).await;
     // 未知 provider → 400 + oauth.unknown_provider（无需 state）。
     let response = send(&app, Method::GET, "/api/oauth/nope?state=x", None, None).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -627,7 +651,7 @@ async fn run_provider_unknown_contract(db: Database) {
 
 async fn run_provider_state_invalid_contract(db: Database) {
     fixture(&db).await;
-    let app = state(&db);
+    let app = state(&db).await;
     // state 缺失/无效 → 403 + oauth.state_invalid。
     let response = send(&app, Method::GET, "/api/oauth/github", None, None).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -649,7 +673,7 @@ async fn run_provider_state_invalid_contract(db: Database) {
 async fn run_provider_login_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, 1, "pat-existing", 1, 1).await;
-    let app = state(&db);
+    let app = state(&db).await;
     // 启用 GitHub OAuth。
     set_option(&db, "GitHubOAuthEnabled", "true").await;
     set_option(&db, "GitHubClientId", "cid").await;
@@ -710,7 +734,7 @@ async fn run_provider_login_contract(db: Database) {
 async fn run_wechat_login_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
-    let app = state(&db);
+    let app = state(&db).await;
     // 未启用 → 固定文案。
     let response = send(&app, Method::GET, "/api/oauth/wechat?code=c", None, None).await;
     assert_eq!(
@@ -802,7 +826,7 @@ async fn run_wechat_login_contract(db: Database) {
 async fn run_wechat_bind_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
-    let app = state(&db);
+    let app = state(&db).await;
     let auth = format!("Bearer {PAT}");
     // 未启用。
     let response = send(
@@ -896,7 +920,7 @@ async fn run_wechat_bind_contract(db: Database) {
 async fn run_email_bind_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
-    let app = state(&db);
+    let app = state(&db).await;
     let auth = format!("Bearer {PAT}");
     // 验证码错误。
     let response = send(
@@ -975,7 +999,7 @@ fn telegram_params(auth_date: i64) -> Vec<(String, String)> {
 async fn run_telegram_login_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
-    let app = state(&db);
+    let app = state(&db).await;
     // 未启用。
     let response = send(&app, Method::GET, "/api/oauth/telegram/login", None, None).await;
     assert_eq!(
@@ -1056,7 +1080,7 @@ async fn run_telegram_bind_contract(db: Database) {
     fixture(&db).await;
     seed_user(&db, USER_ID, PAT, 1, 1).await;
     seed_session(&db, "sess-1", USER_ID, 1).await;
-    let app = state(&db);
+    let app = state(&db).await;
     let auth = format!("Bearer {PAT}");
     set_option(&db, "TelegramOAuthEnabled", "true").await;
     set_option(&db, "TelegramBotToken", "bot-token").await;
