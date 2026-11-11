@@ -896,6 +896,9 @@ async fn contract(db: &Database) {
 
     // ---- sync_upstream：缺失补建 + 供应商补建 + 上游缺失跳过 --------
     exec(db, "DELETE FROM models WHERE id = 5").await;
+    // 前面又有显式 id 插入（2/3/5），再推一次 models 序列，避免 sync
+    // 创建的 auto id 撞种入行主键。
+    bump_sequences(db).await;
     let upstream = json!([
         {"model_name": "abilities-only", "description": "up desc", "icon": "up-icon",
          "tags": "up-tag", "vendor_name": "UpVendor", "status": 0, "name_rule": 1},
