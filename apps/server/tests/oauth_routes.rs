@@ -70,7 +70,19 @@ const PAT: &str = "pat-oauth";
 // ---------------------------------------------------------------------------
 
 const USERS: &str = r#"CREATE TABLE users (
-    id BIGINT PRIMARY KEY, username TEXT NOT NULL, password TEXT NOT NULL DEFAULT '',
+    id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL,
+    password TEXT NOT NULL DEFAULT '', display_name TEXT,
+    role BIGINT, status INTEGER, email TEXT, github_id TEXT, discord_id TEXT,
+    oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, "group" TEXT,
+    quota BIGINT, used_quota BIGINT, request_count BIGINT, aff_code TEXT,
+    aff_count BIGINT, aff_quota BIGINT, aff_history BIGINT, inviter_id BIGINT,
+    linux_do_id TEXT, setting TEXT, remark VARCHAR(255), stripe_customer TEXT,
+    created_at BIGINT, last_login_at BIGINT, auth_version BIGINT,
+    access_token TEXT, deleted_at TIMESTAMP
+)"#;
+
+const USERS_PG: &str = r#"CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, password TEXT NOT NULL DEFAULT '',
     display_name TEXT,
     role BIGINT, status INTEGER, email TEXT, github_id TEXT, discord_id TEXT,
     oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, "group" TEXT,
@@ -80,6 +92,13 @@ const USERS: &str = r#"CREATE TABLE users (
     created_at BIGINT, last_login_at BIGINT, auth_version BIGINT,
     access_token TEXT, deleted_at TIMESTAMP
 )"#;
+
+fn users_ddl(db: &Database) -> &'static str {
+    match db {
+        Database::Sqlite(_) => USERS,
+        Database::Postgres(_) => USERS_PG,
+    }
+}
 
 const OPTIONS: &str = r#"CREATE TABLE options ("key" TEXT PRIMARY KEY, "value" TEXT)"#;
 
@@ -291,7 +310,7 @@ async fn exec(db: &Database, statement: &'static str) {
 }
 
 async fn fixture(db: &Database) {
-    exec(db, USERS).await;
+    exec(db, users_ddl(db)).await;
     exec(db, OPTIONS).await;
     exec(db, auth_flows_ddl(db)).await;
     exec(db, external_claims_ddl(db)).await;
