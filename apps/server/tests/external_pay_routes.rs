@@ -100,6 +100,7 @@ fn pay_router(
     pancake: &Arc<FakePancake>,
 ) -> Router {
     Router::new()
+        .route(
             "/api/user/stripe/pay",
             post(newapi_server::external_pay_http::request_stripe_pay),
         )
@@ -111,7 +112,6 @@ fn pay_router(
             "/api/user/waffo/pay",
             post(newapi_server::external_pay_http::request_waffo_pay),
         )
-        .route(
         .route(
             "/api/user/waffo-pancake/pay",
             post(newapi_server::external_pay_http::request_waffo_pancake_pay),
@@ -130,6 +130,7 @@ fn pay_router(
 // more without the user-auth layer by routing through the same state.
 fn anonymous_router(state: AppState) -> Router {
     Router::new()
+        .route(
             "/api/stripe/webhook",
             post(newapi_server::external_pay_http::stripe_webhook),
         )
@@ -141,7 +142,6 @@ fn anonymous_router(state: AppState) -> Router {
             "/api/waffo/webhook",
             post(newapi_server::external_pay_http::waffo_webhook),
         )
-        .route(
         .route(
             "/api/waffo-pancake/webhook/{env}",
             post(newapi_server::external_pay_http::waffo_pancake_webhook),
