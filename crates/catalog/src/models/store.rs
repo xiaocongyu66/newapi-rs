@@ -500,28 +500,23 @@ impl ModelRepository {
     pub async fn soft_delete(&self, id: i64, deleted_at: i64) -> Result<bool, sqlx::Error> {
         let db = &self.db;
         crate::mutate_routing!(db, pool, {
-            let result = match self.db {
+            // 时间戳写法按后端选 SQL 串后单次执行（两个驱动共用 `$N` 占位符）；
+            // match 直接返回行结果会因两臂类型不同而无法统一。
+            let sql = match self.db {
                 Database::Sqlite(_) => {
-                    sqlx::query(
-                        "UPDATE models SET deleted_at = datetime($1, 'unixepoch') \
-                         WHERE id = $2 AND deleted_at IS NULL",
-                    )
-                    .bind(deleted_at)
-                    .bind(id)
-                    .execute(pool)
-                    .await?
+                    "UPDATE models SET deleted_at = datetime($1, 'unixepoch') \
+                     WHERE id = $2 AND deleted_at IS NULL"
                 }
                 Database::Postgres(_) => {
-                    sqlx::query(
-                        "UPDATE models SET deleted_at = to_timestamp($1::BIGINT) \
-                         WHERE id = $2 AND deleted_at IS NULL",
-                    )
-                    .bind(deleted_at)
-                    .bind(id)
-                    .execute(pool)
-                    .await?
+                    "UPDATE models SET deleted_at = to_timestamp($1::BIGINT) \
+                     WHERE id = $2 AND deleted_at IS NULL"
                 }
             };
+            let result = sqlx::query(sql)
+                .bind(deleted_at)
+                .bind(id)
+                .execute(pool)
+                .await?;
             Ok(result.rows_affected() > 0)
         })
     }

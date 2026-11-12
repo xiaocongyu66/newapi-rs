@@ -130,7 +130,7 @@ pub async fn bump_routing_revision_sqlite(
 /// [`bump_routing_revision_sqlite`] 的 PostgreSQL 形式，语义逐条一致
 /// （单行 UPDATE 行锁天然串行化并发 bump）。
 pub async fn bump_routing_revision_postgres(
-    tx: &mut sqlx::PostgresConnection,
+    tx: &mut sqlx::PgConnection,
 ) -> Result<i64, sqlx::Error> {
     let result = sqlx::query(BUMP_SQL)
         .bind(GATEWAY_CONFIG_REVISION_ID)
@@ -164,7 +164,7 @@ pub async fn bump_routing_revision_postgres(
 macro_rules! mutate_routing {
     ($db:expr, $conn:ident, $body:block) => {
         match $db {
-            $crate::Database::Sqlite(pool) => {
+            newapi_storage::Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await?;
                 let outcome: Result<_, sqlx::Error> = async {
                     let $conn = &mut *tx;
@@ -184,7 +184,7 @@ macro_rules! mutate_routing {
                     }
                 }
             }
-            $crate::Database::Postgres(pool) => {
+            newapi_storage::Database::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
                 let outcome: Result<_, sqlx::Error> = async {
                     let $conn = &mut *tx;
@@ -311,17 +311,24 @@ pub async fn list_pending_gateway_config_outbox(
     }
     let sql = "SELECT id, routing_revision FROM gateway_config_outboxes \
                WHERE published_at IS NULL ORDER BY routing_revision ASC LIMIT $1";
-    let rows = match db {
-        Database::Sqlite(pool) => sqlx::query(sql).bind(limit).fetch_all(pool).await?,
-        Database::Postgres(pool) => sqlx::query(sql).bind(limit).fetch_all(pool).await?,
-    };
-    Ok(rows
-        .iter()
-        .map(|row| GatewayOutboxRow {
-            id: row.try_get("id").unwrap_or_default(),
-            routing_revision: row.try_get("routing_revision").unwrap_or_default(),
-        })
-        .collect())
+    fn outbox_rows<R: sqlx::Row>(rows: &[R]) -> Vec<GatewayOutboxRow> {
+        rows.iter()
+            .map(|row| GatewayOutboxRow {
+                id: row.try_get("id").unwrap_or_default(),
+                routing_revision: row.try_get("routing_revision").unwrap_or_default(),
+            })
+            .collect()
+    }
+    match db {
+        Database::Sqlite(pool) => {
+            let rows = sqlx::query(sql).bind(limit).fetch_all(pool).await?;
+            Ok(outbox_rows(&rows))
+        }
+        Database::Postgres(pool) => {
+            let rows = sqlx::query(sql).bind(limit).fetch_all(pool).await?;
+            Ok(outbox_rows(&rows))
+        }
+    }
 }
 
 /// Go `RecordGatewayConfigOutboxAttempt`（`store_gateway_revision.go:146-155`）：
