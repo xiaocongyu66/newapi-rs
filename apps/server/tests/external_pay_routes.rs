@@ -416,7 +416,10 @@ impl TestRsa {
 
     fn sign_base64(&self, data: &[u8]) -> String {
         let signing = SigningKey::<Sha256>::new(self.private_key.clone());
-        signing.sign(data).to_string()
+        // 显式 STANDARD base64：`Signature` 的 `Display` 不是 base64（CI 曾报
+        // SignatureEncoding unused），验证端按 STANDARD 解码。
+        base64::engine::general_purpose::STANDARD
+            .encode(signing.sign(data).as_bytes())
     }
 }
 
