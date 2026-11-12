@@ -77,6 +77,29 @@ macro_rules! backend {
     };
 }
 
+fn pay_router(
+    state: AppState,
+    stripe: &Arc<FakeStripe>,
+    creem: &Arc<FakeCreem>,
+    waffo: &Arc<FakeWaffo>,
+    pancake: &Arc<FakePancake>,
+) -> Router {
+    Router::new()
+        .route("/api/user/stripe/pay", post(newapi_server::external_pay_http::request_stripe_pay))
+        .route("/api/user/creem/pay", post(newapi_server::external_pay_http::request_creem_pay))
+        .route("/api/user/waffo/pay", post(newapi_server::external_pay_http::request_waffo_pay))
+        .route(
+            "/api/user/waffo-pancake/pay",
+            post(newapi_server::external_pay_http::request_waffo_pancake_pay),
+        )
+        .layer(axum::Extension(InjectedStripeTransport(stripe.clone())))
+        .layer(axum::Extension(InjectedCreemTransport(creem.clone())))
+        .layer(axum::Extension(InjectedWaffoTransport(waffo.clone())))
+        .layer(axum::Extension(InjectedPancakeCheckoutTransport(pancake.clone())))
+        .route_layer(middleware::from_fn_with_state(state.clone(), user_auth))
+        .with_state(state)
+}
+
 // The webhooks are anonymous in Go (`apiRouter` 直下); register them once
 // more without the user-auth layer by routing through the same state.
 fn anonymous_router(state: AppState) -> Router {
@@ -96,7 +119,7 @@ fn state(db: &Database) -> AppState {
 }
 
 async fn exec(db: &Database, statement: &str) {
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query(sqlx::AssertSqlSafe(statement.to_owned()))
             .execute(pool)
             .await
@@ -105,7 +128,7 @@ async fn exec(db: &Database, statement: &str) {
 }
 
 async fn seed_user(db: &Database, id: i64, token: &str, email: &str) {
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query(
             r#"INSERT INTO users
                 (id,username,display_name,role,status,email,"group",quota,auth_version,access_token)
@@ -121,7 +144,7 @@ async fn seed_user(db: &Database, id: i64, token: &str, email: &str) {
 }
 
 async fn seed_option(db: &Database, key: &str, value: &str) {
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query("INSERT INTO options (\"key\", \"value\") VALUES ($1, $2)")
             .bind(key)
             .bind(value)
@@ -425,7 +448,7 @@ async fn run_contract(db: Database) {
     exec(&db, TOP_UPS).await;
     seed_user(&db, 7, "pat-pay", "user7@example.com").await;
     // Creem 回填邮箱的空邮箱用户。
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query(
             r#"INSERT INTO users
                 (id,username,display_name,role,status,email,"group",quota,auth_version,access_token)
@@ -538,7 +561,7 @@ async fn run_contract(db: Database) {
     drop(calls);
 
     // 订单落库：Amount=units、Money=ratio 换算（默认倍率 1）。
-    let row: (i64, f64, String, String) = backend!(db, pool, {
+    let row: (i64, f64, String, String) = backend!(&db, pool, {
         sqlx::query_as(
             r#"SELECT amount, money, payment_method, payment_provider
                FROM top_ups WHERE payment_method = 'stripe' ORDER BY id DESC LIMIT 1"#,
@@ -621,7 +644,7 @@ async fn run_contract(db: Database) {
     assert_eq!(seen.2["product_id"], json!("p1"));
     assert_eq!(seen.2["request_id"], json!(order_id));
 
-    let row: (i64, f64) = backend!(db, pool, {
+    let row: (i64, f64) = backend!(&db, pool, {
         sqlx::query_as(
             r#"SELECT amount, money FROM top_ups WHERE trade_no = $1"#,
         )
@@ -686,7 +709,7 @@ async fn run_contract(db: Database) {
     assert_eq!(seen.1["goodsInfo"]["appName"], json!("New API"));
     assert_eq!(seen.1["notifyUrl"], json!("http://localhost:3000/api/waffo/webhook"));
     assert_eq!(seen.1["merchantInfo"]["merchantId"], json!("MCH_W"));
-    let row: (i64, String) = backend!(db, pool, {
+    let row: (i64, String) = backend!(&db, pool, {
         sqlx::query_as(
             r#"SELECT amount, status FROM top_ups WHERE trade_no = $1"#,
         )
@@ -722,7 +745,7 @@ async fn run_contract(db: Database) {
         .unwrap();
     let body = body_json(response).await;
     assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
-    let status: String = backend!(db, pool, {
+    let status: String = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
             .fetch_one(pool)
             .await
@@ -791,7 +814,7 @@ async fn run_contract(db: Database) {
         .unwrap();
     let body = body_json(response).await;
     assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
-    let status: String = backend!(db, pool, {
+    let status: String = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
             .fetch_one(pool)
             .await
@@ -805,7 +828,7 @@ async fn run_contract(db: Database) {
     seed_option(&db, "StripePriceId", "price_1").await;
     seed_option(&db, "StripeWebhookSecret", "whsec_1").await;
     // 待履约的 Stripe 订单（Money × QuotaPerUnit = 10）。
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query(
             r#"INSERT INTO top_ups (id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,complete_time,status)
                VALUES (903,7,10,10.0,'ref_stripe_main','stripe','stripe',0,0,'pending')"#,
@@ -846,14 +869,14 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let quota: i64 = backend!(db, pool, {
+    let quota: i64 = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT quota FROM users WHERE id = 7"#)
             .fetch_one(pool)
             .await
             .expect("user quota")
     });
     assert_eq!(quota, 10, "stripe credited Money x QuotaPerUnit");
-    let (status, customer): (String, String) = backend!(db, pool, {
+    let (status, customer): (String, String) = backend!(&db, pool, {
         sqlx::query_as(
             r#"SELECT status, COALESCE(stripe_customer, '') FROM top_ups WHERE trade_no = 'ref_stripe_main'"#,
         )
@@ -874,7 +897,7 @@ async fn run_contract(db: Database) {
     })
     .to_string()
     .into_bytes();
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query(
             r#"INSERT INTO top_ups (id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,complete_time,status)
                VALUES (900,7,10,10.0,'ref_expired','stripe','stripe',0,0,'pending')"#,
@@ -894,7 +917,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let status: String = backend!(db, pool, {
+    let status: String = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT status FROM top_ups WHERE trade_no = 'ref_expired'"#)
             .fetch_one(pool)
             .await
@@ -949,7 +972,7 @@ async fn run_contract(db: Database) {
 
     // 换一个 Creem 订单：入账 + 空邮箱回填。
     let creem_trade = format!("ref_creem_{}", now_millis());
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query(
             r#"INSERT INTO top_ups (id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,complete_time,status)
                VALUES (901,8,5,9.9,$1,'creem','creem',0,0,'pending')"#,
@@ -979,7 +1002,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let (quota, email): (i64, String) = backend!(db, pool, {
+    let (quota, email): (i64, String) = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT quota, COALESCE(email, '') FROM users WHERE id = 8"#)
             .fetch_one(pool)
             .await
@@ -1041,14 +1064,14 @@ async fn run_contract(db: Database) {
         .unwrap_or_default()
         .to_owned();
     assert!(!signature_header.is_empty(), "response carries X-SIGNATURE");
-    let quota: i64 = backend!(db, pool, {
+    let quota: i64 = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT quota FROM users WHERE id = 7"#)
             .fetch_one(pool)
             .await
             .expect("waffo user quota")
     });
     assert_eq!(quota, 20, "stripe 10 + waffo 10");
-    let status: String = backend!(db, pool, {
+    let status: String = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT status FROM top_ups WHERE trade_no = $1"#)
             .bind(&waffo_order_id)
             .fetch_one(pool)
@@ -1068,7 +1091,7 @@ async fn run_contract(db: Database) {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     // 非成功状态 → pending 订单标 failed，回 signed success。
-    backend!(db, pool, {
+    backend!(&db, pool, {
         sqlx::query(
             r#"INSERT INTO top_ups (id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,complete_time,status)
                VALUES (902,7,3,3.0,'WAFFO-7-fail','waffo','waffo',0,0,'pending')"#,
@@ -1095,7 +1118,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let status: String = backend!(db, pool, {
+    let status: String = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT status FROM top_ups WHERE trade_no = 'WAFFO-7-fail'"#)
             .fetch_one(pool)
             .await
@@ -1146,7 +1169,7 @@ async fn run_contract(db: Database) {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     assert_eq!(bytes.as_ref(), b"OK");
-    let quota: i64 = backend!(db, pool, {
+    let quota: i64 = backend!(&db, pool, {
         sqlx::query_as(r#"SELECT quota FROM users WHERE id = 7"#)
             .fetch_one(pool)
             .await
