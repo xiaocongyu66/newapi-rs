@@ -161,7 +161,7 @@ pub(crate) async fn upsert_options_bulk(
     }
     let has_gateway_option = values
         .keys()
-        .any(newapi_catalog::gateway_revision::is_gateway_routing_option_key);
+        .any(|key| newapi_catalog::gateway_revision::is_gateway_routing_option_key(key));
     if has_gateway_option {
         return newapi_catalog::mutate_routing!(db, tx, {
             for (key, value) in values {
