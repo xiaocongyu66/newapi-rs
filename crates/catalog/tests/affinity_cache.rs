@@ -1,12 +1,17 @@
 //! 亲和缓存原语契约（Go `internal/catalog/track_affinity.go` 写侧 +
 //! `cachex` 的内存面语义）。纯进程内测试，不依赖数据库。
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use newapi_catalog::affinity::{
     self, ChannelAffinityRule, ChannelAffinitySetting, ChannelAffinityStatsContext, TtlLruCache,
     UsageObservation,
 };
+
+/// 依赖全局缓存的测试在同一进程内并发运行（cargo 的测试线程模型），
+/// 必须串行化才能钉住全局状态断言。
+static GLOBAL_CACHE_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn full_key_is_idempotent_like_go_namespace() {
@@ -102,6 +107,7 @@ fn key_suffix_order_follows_the_rule_flags() {
 
 #[tokio::test]
 async fn record_channel_affinity_uses_setting_ttl_fallback() {
+    let _guard = GLOBAL_CACHE_LOCK.lock().expect("global cache lock");
     affinity::reset_caches_for_test();
     affinity::set_channel_affinity_setting(ChannelAffinitySetting {
         enabled: true,
@@ -122,6 +128,7 @@ async fn record_channel_affinity_uses_setting_ttl_fallback() {
 
 #[tokio::test]
 async fn clear_all_and_by_rule_name() {
+    let _guard = GLOBAL_CACHE_LOCK.lock().expect("global cache lock");
     affinity::reset_caches_for_test();
     affinity::set_channel_affinity_setting(ChannelAffinitySetting {
         enabled: true,
@@ -173,6 +180,7 @@ async fn clear_all_and_by_rule_name() {
 
 #[tokio::test]
 async fn cache_stats_classifies_rule_names_and_unknown() {
+    let _guard = GLOBAL_CACHE_LOCK.lock().expect("global cache lock");
     affinity::reset_caches_for_test();
     affinity::set_channel_affinity_setting(ChannelAffinitySetting {
         enabled: true,
@@ -201,6 +209,7 @@ async fn cache_stats_classifies_rule_names_and_unknown() {
 
 #[tokio::test]
 async fn usage_counters_observe_and_mixed_mode() {
+    let _guard = GLOBAL_CACHE_LOCK.lock().expect("global cache lock");
     affinity::reset_caches_for_test();
     let ctx = ChannelAffinityStatsContext {
         rule_name: "codex cli trace".to_owned(),
@@ -239,6 +248,7 @@ async fn usage_counters_observe_and_mixed_mode() {
 
 #[tokio::test]
 async fn usage_counters_miss_echoes_params_with_zeroes() {
+    let _guard = GLOBAL_CACHE_LOCK.lock().expect("global cache lock");
     affinity::reset_caches_for_test();
     let stats = affinity::get_channel_affinity_usage_cache_stats("r", "g", "fp");
     assert_eq!(stats.rule_name, "r");
@@ -254,6 +264,7 @@ async fn usage_counters_miss_echoes_params_with_zeroes() {
 
 #[tokio::test]
 async fn usage_observation_requires_positive_ttl_window() {
+    let _guard = GLOBAL_CACHE_LOCK.lock().expect("global cache lock");
     affinity::reset_caches_for_test();
     let ctx = ChannelAffinityStatsContext {
         rule_name: "r".to_owned(),
