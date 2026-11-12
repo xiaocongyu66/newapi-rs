@@ -17,6 +17,10 @@ base64 = "=0.22.1"
 # Waffo Pancake 管理端签名（RSA PKCS#1v15 SHA-256 + 私钥解析）：锁内已有
 # 0.17.14（rustls-webpki 传递依赖），直连不改变解析结果。
 ring = "=0.17.14"
+# Waffo / Waffo Pancake webhook 验签（RSA PKCS#1v15 SHA-256 公钥验证）：ring
+# 不暴露 RSA verify 公开 API；0.10.0-rc.19 已在锁内（webauthn-rs → crypto-glue
+# 传递依赖），显式引用不改变解析结果。
+rsa = "=0.10.0-rc.19"
 newapi-config.workspace = true
 newapi-storage.workspace = true
 newapi-billing.workspace = true
@@ -31,3 +35,6 @@ regex.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
+# 契约测试的 RSA 密钥生成：rsa 0.10-rc 依赖 rand_core 0.10，故开发依赖取
+# 同族 rand 0.10（锁内已有 0.10.3）。
+rand = "0.10.3"

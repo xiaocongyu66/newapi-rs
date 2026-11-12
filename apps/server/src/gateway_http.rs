@@ -96,7 +96,7 @@ fn text_body(body: &str) -> Response {
 
 /// Go `url.QueryEscape`：字母数字与 `-_.~` 保留，空格 → `+`，其余按 UTF-8
 /// 百分号转义（大写十六进制）。
-fn query_escape(value: &str) -> String {
+pub(crate) fn query_escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {
@@ -189,7 +189,7 @@ fn bind_pay_request(headers: &HeaderMap, body: &[u8]) -> Result<PayRequest, ()> 
     Ok(request)
 }
 
-fn parses_as_json(headers: &HeaderMap) -> bool {
+pub(crate) fn parses_as_json(headers: &HeaderMap) -> bool {
     match headers
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -206,12 +206,12 @@ fn parses_as_json(headers: &HeaderMap) -> bool {
 
 /// Go `GetCallbackAddress` + `PaymentReturnURL`：回调地址可被
 /// `CustomCallbackAddress` 覆盖，回跳地址始终基于 `ServerAddress`。
-struct CallbackAddresses {
-    callback: String,
-    server: String,
+pub(crate) struct CallbackAddresses {
+    pub(crate) callback: String,
+    pub(crate) server: String,
 }
 
-async fn callback_addresses(db: &newapi_storage::Database) -> CallbackAddresses {
+pub(crate) async fn callback_addresses(db: &newapi_storage::Database) -> CallbackAddresses {
     const DEFAULT_SERVER: &str = "http://localhost:3000";
     let rows: Vec<(String, Option<String>)> = match db {
         newapi_storage::Database::Sqlite(pool) => {
@@ -256,7 +256,7 @@ async fn callback_addresses(db: &newapi_storage::Database) -> CallbackAddresses 
 }
 
 /// Go `paymentReturnPath(suffix)`：`TrimRight(ServerAddress, "/") + suffix`。
-fn payment_return_path(server: &str, suffix: &str) -> String {
+pub(crate) fn payment_return_path(server: &str, suffix: &str) -> String {
     format!("{}{suffix}", server.trim_end_matches('/'))
 }
 

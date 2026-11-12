@@ -29,11 +29,14 @@ mod quote;
 mod store;
 
 pub use gateway::{
-    PROVIDER_CODEPAY, PROVIDER_EPAY, PROVIDER_STRIPE, PROVIDER_VMQ, RechargeError, RechargeOutcome,
-    RechargeParams, RechargeRecord, RedeemFailed, STATUS_EXPIRED, STATUS_FAILED, STATUS_PENDING,
-    STATUS_SUCCESS, codepay_sign, constant_time_eq, epay_sign, gateway_pay_type_code, insert_topup,
-    manual_complete_top_up, md5_hex, now_seconds, random_string, recharge_top_up, record_topup_log,
-    redeem, round2_cents, vmq_create_sign, vmq_notify_sign,
+    ExternalQuotaSource, ExternalRechargeParams, ExternalUserUpdate, PROVIDER_CODEPAY,
+    PROVIDER_CREEM, PROVIDER_EPAY, PROVIDER_STRIPE, PROVIDER_VMQ, PROVIDER_WAFFO,
+    PROVIDER_WAFFO_PANCAKE, RechargeError, RechargeOutcome, RechargeParams, RechargeRecord,
+    RedeemFailed, STATUS_EXPIRED, STATUS_FAILED, STATUS_PENDING, STATUS_SUCCESS, base62_string,
+    codepay_sign, constant_time_eq, epay_sign, gateway_pay_type_code, insert_topup,
+    manual_complete_top_up, md5_hex, now_seconds, random_string, recharge_external_top_up,
+    recharge_top_up, record_topup_log, redeem, round2_cents, set_topup_status, sha1_hex,
+    update_pending_top_up_status, vmq_create_sign, vmq_notify_sign,
 };
 
 pub use quote::{
@@ -95,6 +98,9 @@ pub struct TopUpSettings {
     pub waffo_min_topup: i64,
     pub waffo_pancake_min_topup: i64,
     pub price: f64,
+    /// Go `StripePromotionCodesEnabled`（`pay_subscription.go:169`，option
+    /// `StripePromotionCodesEnabled`）。
+    pub stripe_promotion_codes_enabled: bool,
     /// Go `StripeUnitPrice`（`pay_subscription.go:168`，option `StripeUnitPrice`）。
     pub stripe_unit_price: f64,
     /// Go `WaffoUnitPrice`（`pay_subscription.go:189`，option `WaffoUnitPrice`）。
@@ -113,6 +119,10 @@ pub struct TopUpSettings {
     pub stripe_webhook_secret: String,
     pub stripe_price_id: String,
     pub creem_api_key: String,
+    /// Go `CreemWebhookSecret`（`pay_subscription.go:19`，option `CreemWebhookSecret`）。
+    pub creem_webhook_secret: String,
+    /// Go `CreemTestMode`（`pay_subscription.go:18`，option `CreemTestMode`）。
+    pub creem_test_mode: bool,
     /// Raw JSON string, exactly like Go `CreemProducts`.
     pub creem_products: String,
     pub waffo_enabled: bool,
@@ -123,9 +133,19 @@ pub struct TopUpSettings {
     pub waffo_sandbox_api_key: String,
     pub waffo_sandbox_private_key: String,
     pub waffo_sandbox: bool,
+    /// Go `WaffoMerchantId`（option `WaffoMerchantId`）。
+    pub waffo_merchant_id: String,
+    /// Go `WaffoCurrency`（option `WaffoCurrency`，空回落 `USD`）。
+    pub waffo_currency: String,
+    /// Go `WaffoNotifyUrl`（option `WaffoNotifyUrl`）。
+    pub waffo_notify_url: String,
+    /// Go `WaffoReturnUrl`（option `WaffoReturnUrl`）。
+    pub waffo_return_url: String,
     pub waffo_pancake_merchant_id: String,
     pub waffo_pancake_private_key: String,
     pub waffo_pancake_product_id: String,
+    /// Go `WaffoPancakeStoreID`（option `WaffoPancakeStoreID`）。
+    pub waffo_pancake_store_id: String,
     /// Raw JSON string, exactly like Go `WaffoPayMethods`.
     pub waffo_pay_methods: String,
     pub vmq_address: String,
@@ -148,6 +168,7 @@ impl Default for TopUpSettings {
             waffo_min_topup: 1,
             waffo_pancake_min_topup: 1,
             price: 7.3,
+            stripe_promotion_codes_enabled: false,
             stripe_unit_price: 8.0,
             waffo_unit_price: 1.0,
             waffo_pancake_unit_price: 1.0,
@@ -160,6 +181,8 @@ impl Default for TopUpSettings {
             stripe_webhook_secret: String::new(),
             stripe_price_id: String::new(),
             creem_api_key: String::new(),
+            creem_webhook_secret: String::new(),
+            creem_test_mode: false,
             creem_products: "[]".to_owned(),
             waffo_enabled: false,
             waffo_api_key: String::new(),
@@ -169,9 +192,14 @@ impl Default for TopUpSettings {
             waffo_sandbox_api_key: String::new(),
             waffo_sandbox_private_key: String::new(),
             waffo_sandbox: false,
+            waffo_merchant_id: String::new(),
+            waffo_currency: String::new(),
+            waffo_notify_url: String::new(),
+            waffo_return_url: String::new(),
             waffo_pancake_merchant_id: String::new(),
             waffo_pancake_private_key: String::new(),
             waffo_pancake_product_id: String::new(),
+            waffo_pancake_store_id: String::new(),
             waffo_pay_methods: "[]".to_owned(),
             vmq_address: String::new(),
             vmq_key: String::new(),

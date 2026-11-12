@@ -95,7 +95,7 @@ pub enum PairOutcome {
 }
 
 /// 上游调用失败；`message` 进入 `data.error`（pair 孤儿分支）或仅入日志。
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PancakeError(pub String);
 
 pub type PancakeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, PancakeError>> + Send + 'a>>;
@@ -442,6 +442,21 @@ async fn signed_post(
     })
 }
 
+/// 共享的签名 POST（结账会话等外呼复用）：返回信封 `data` 字段（`null`
+/// 或缺失折叠为 `None`）。
+pub(crate) async fn signed_post_data(
+    merchant_id: &str,
+    private_key: &str,
+    path: &str,
+    body: &str,
+) -> Result<Option<Value>, PancakeError> {
+    let envelope = signed_post(merchant_id, private_key, path, body, true).await?;
+    if !envelope.errors.is_empty() {
+        return Err(PancakeError(envelope.errors[0].clone()));
+    }
+    Ok(envelope.data)
+}
+
 fn trim_ascii(bytes: &[u8]) -> &[u8] {
     let start = bytes
         .iter()
@@ -482,12 +497,21 @@ fn sign_request(
 ) -> Result<String, ring::error::Unspecified> {
     let body_hash = base64::engine::general_purpose::STANDARD.encode(sha256(body));
     let canonical = format!("{method}\n{path}\n{timestamp}\n{body_hash}");
+    sign_pkcs1_sha256(key, canonical.as_bytes())
+}
+
+/// Waffo SDK `utils.Sign`：对原始数据（无规范串）做 RSA PKCS#1v15 SHA-256
+/// 签名后 base64。
+pub(crate) fn sign_pkcs1_sha256(
+    key: &ring::signature::RsaKeyPair,
+    data: &[u8],
+) -> Result<String, ring::error::Unspecified> {
     let mut signature = vec![0u8; key.public().modulus_len()];
     let rng = ring::rand::SystemRandom::new();
     key.sign(
         &ring::signature::RSA_PKCS1_SHA256,
         &rng,
-        canonical.as_bytes(),
+        data,
         &mut signature,
     )?;
     Ok(base64::engine::general_purpose::STANDARD.encode(signature))
@@ -496,7 +520,7 @@ fn sign_request(
 /// Go `signing.NormalizePrivateKey` + `ParsePrivateKey` 的合并复刻：接受
 /// PEM（PKCS#8 `PRIVATE KEY` / PKCS#1 `RSA PRIVATE KEY`）、字面 `\n`、
 /// CRLF 与裸 base64（按 PKCS#8 处理），解析为 ring 密钥。
-fn parse_private_key(raw: &str) -> Result<ring::signature::RsaKeyPair, String> {
+pub(crate) fn parse_private_key(raw: &str) -> Result<ring::signature::RsaKeyPair, String> {
     if raw.trim().is_empty() {
         return Err("private key is empty; provide an RSA private key in PEM format".to_owned());
     }

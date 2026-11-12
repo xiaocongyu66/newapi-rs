@@ -309,6 +309,33 @@ fn build_router(state: AppState) -> Router {
                 crate::gateway_http::notify_body_limit,
             )),
     );
+    // 四路外呼网关的 webhook：Go `apiRouter` 直下、匿名可打（仅匿名体上限，
+    // `register_api.go:115-120`）。Stripe/Creem/Waffo 恒 JSON 回体，Pancake
+    // 为纯文本。
+    let webhook_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/stripe/webhook",
+                post(crate::external_pay_http::stripe_webhook),
+            )
+            .route(
+                "/api/creem/webhook",
+                post(crate::external_pay_http::creem_webhook),
+            )
+            .route(
+                "/api/waffo/webhook",
+                post(crate::external_pay_http::waffo_webhook),
+            )
+            .route(
+                "/api/waffo-pancake/webhook/{env}",
+                post(crate::external_pay_http::waffo_pancake_webhook),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                webhook_state,
+                crate::gateway_http::notify_body_limit,
+            )),
+    );
     // 支付发起与兑换：Go `selfRoute` 组内 `UserAuth → CriticalRateLimit`
     // （`register_api.go:167,170,177,178`）。
     let pay_state = state.clone();
@@ -322,6 +349,22 @@ fn build_router(state: AppState) -> Router {
             .route(
                 "/api/user/codepay/pay",
                 post(crate::gateway_http::request_codepay_pay),
+            )
+            .route(
+                "/api/user/stripe/pay",
+                post(crate::external_pay_http::request_stripe_pay),
+            )
+            .route(
+                "/api/user/creem/pay",
+                post(crate::external_pay_http::request_creem_pay),
+            )
+            .route(
+                "/api/user/waffo/pay",
+                post(crate::external_pay_http::request_waffo_pay),
+            )
+            .route(
+                "/api/user/waffo-pancake/pay",
+                post(crate::external_pay_http::request_waffo_pancake_pay),
             )
             .route("/api/user/topup", post(crate::gateway_http::topup_redeem))
             .route_layer(middleware::from_fn_with_state(
