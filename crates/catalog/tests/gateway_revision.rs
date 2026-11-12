@@ -394,12 +394,12 @@ async fn contract(db: &Database) -> Result<(), sqlx::Error> {
     ));
     assert!(outbox_revisions(db).await.is_empty());
 
-    // -- 水位非正：硬错误，原样回滚不动 --
+    // -- 水位非正：硬错误，原样回滚不动（-1 bump 后读回 0，仍是非法）--
     reset_revision(db, -1).await;
     let error = mutate_routing!(db, _tx, { Ok(()) }).unwrap_err();
     assert!(matches!(
         revision_error_of(&error),
-        GatewayRevisionError::NotPositive(-1)
+        GatewayRevisionError::NotPositive(0)
     ));
     assert_eq!(current_gateway_revision(db).await.unwrap(), -1);
     assert!(outbox_revisions(db).await.is_empty());
@@ -528,7 +528,8 @@ async fn contract(db: &Database) -> Result<(), sqlx::Error> {
 #[tokio::test]
 async fn sqlite_gateway_revision_contract() {
     let pool = SqlitePoolOptions::new()
-        .max_connections(2)
+        // sqlite 内存库按连接独立，必须单连接，否则建表只在其中一个连接可见。
+        .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(SqliteConnectOptions::new().in_memory(true))
