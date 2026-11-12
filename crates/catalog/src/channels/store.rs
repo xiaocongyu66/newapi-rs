@@ -173,9 +173,9 @@ macro_rules! backend {
     };
 }
 
-/// 事务体展开改由 [`crate::mutate_routing!`] 承担：域写入成功后、commit 前
-/// 强制推进网关路由修订号，与 Go `MutateGatewayRouting` 的单事务语义一致
-/// （失败整体回滚、修订号不推进）。
+// 事务体展开改由 [`crate::mutate_routing!`] 承担：域写入成功后、commit 前
+// 强制推进网关路由修订号，与 Go `MutateGatewayRouting` 的单事务语义一致
+// （失败整体回滚、修订号不推进）。
 
 /// Go `parseStatusFilter`（`handle_channel.go:59-68`）：`enabled`/`1` 只取
 /// 启用，`disabled`/`0` 取全部非启用状态，其余值（含缺省）不过滤。

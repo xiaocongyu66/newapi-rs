@@ -334,6 +334,7 @@ fn new_channel(name: &str, key: &str, models: &str) -> NewChannel {
 
 // 宏内部 begin/commit 用 `?` 传播错误，contract 需返回 Result。
 async fn contract(db: &Database) -> Result<(), sqlx::Error> {
+    create_schema(db).await;
     // -- 初始化：空库 → 修订号 1；重复初始化绝不倒退；表保持单例 --
     assert_eq!(current_gateway_revision(db).await.unwrap(), 1);
     mutate_routing!(db, _tx, { Ok(()) }).unwrap();
