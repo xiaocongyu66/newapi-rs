@@ -9,7 +9,8 @@
 //!   `GetAllUserSubscriptions`）
 //! - `apps/api/internal/common/str.go:91`（`NormalizeBillingPreference`）
 //!
-//! 管理侧（`/api/subscription/admin/*`）、支付下单（`/balance/pay` 等七条）、
+//! 管理侧（`/api/subscription/admin/*`）在 `admin_store` / `period`；支付下单
+//! （`/balance/pay` 等七条）、
 //! 支付回调（`/epay/notify` 等）留待后续切片。
 //!
 //! 表名沿用 Go GORM 约定：`subscription_plans`（自建 bootstrap DDL，
@@ -20,9 +21,14 @@
 //!（`total_amount_display` 等）在 server 适配层完成——那里已依赖
 //! `newapi_identity::self_user::QuotaDisplaySettings`，本 crate 不引入该边。
 
+mod admin_store;
+mod period;
 mod store;
 
+pub use admin_store::{AdminError, MSG_RECORD_NOT_FOUND, PlanWrite, SubscriptionResetResult};
 pub use store::{SubscriptionPlanRow, SubscriptionRepository, UserSubscriptionRow};
+
+pub use period::{calc_next_reset_time, calc_plan_end_time, normalize_reset_period};
 
 /// Go `common.NormalizeBillingPreference`（`common/str.go:91-100`）：
 /// 修剪空白后仅接受四个合法值，其余（含空串）回退 `subscription_first`。
