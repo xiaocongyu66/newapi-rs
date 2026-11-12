@@ -164,7 +164,7 @@ pub fn calc_next_reset_time(base: i64, plan: &SubscriptionPlanRow, end_unix: i64
 mod tests {
     use super::*;
 
-    fn plan(
+    fn mk_plan(
         unit: &str,
         value: i32,
         reset: &str,
@@ -211,39 +211,39 @@ mod tests {
     fn plan_end_matches_go_add_date() {
         // 2026-01-31 12:00 UTC + 1 month → 2026-02-28 12:00（UTC 偏移 0 下）。
         let start = days_from_civil(2026, 1, 31) * 86_400 + 43_200;
-        let plan = plan("month", 1, "never", 0, 0);
-        std::env::set_var("SUBSCRIPTION_TZ_OFFSET_MINUTES", "0");
+        let plan = mk_plan("month", 1, "never", 0, 0);
+        unsafe { std::env::set_var("SUBSCRIPTION_TZ_OFFSET_MINUTES", "0") };
         assert_eq!(
             calc_plan_end_time(start, &plan).unwrap(),
             days_from_civil(2026, 2, 28) * 86_400 + 43_200
         );
         // +1 year on a leap day: 2024-02-29 → 2025-02-28.
         let start = days_from_civil(2024, 2, 29) * 86_400;
-        let plan = plan("year", 1, "never", 0, 0);
+        let plan = mk_plan("year", 1, "never", 0, 0);
         assert_eq!(
             calc_plan_end_time(start, &plan).unwrap(),
             days_from_civil(2025, 2, 28) * 86_400
         );
         // day/hour/custom are absolute additions.
-        let plan = plan("day", 30, "never", 0, 0);
+        let plan = mk_plan("day", 30, "never", 0, 0);
         assert_eq!(
             calc_plan_end_time(1_000, &plan).unwrap(),
             1_000 + 30 * 86_400
         );
-        let plan = plan("custom", 0, "never", 3_600, 0);
+        let plan = mk_plan("custom", 0, "never", 3_600, 0);
         assert_eq!(calc_plan_end_time(1_000, &plan).unwrap(), 4_600);
         // Invalid units mirror the Go messages.
-        let plan = plan("week", 1, "never", 0, 0);
+        let plan = mk_plan("week", 1, "never", 0, 0);
         assert_eq!(
             calc_plan_end_time(0, &plan).unwrap_err(),
             "invalid duration_unit: week"
         );
-        let plan = plan("month", 0, "never", 0, 0);
+        let plan = mk_plan("month", 0, "never", 0, 0);
         assert_eq!(
             calc_plan_end_time(0, &plan).unwrap_err(),
             "duration_value must be > 0"
         );
-        let plan = plan("custom", 0, "never", 0, 0);
+        let plan = mk_plan("custom", 0, "never", 0, 0);
         assert_eq!(
             calc_plan_end_time(0, &plan).unwrap_err(),
             "custom_seconds must be > 0"
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn next_reset_aligns_like_go() {
-        std::env::set_var("SUBSCRIPTION_TZ_OFFSET_MINUTES", "0");
+        unsafe { std::env::set_var("SUBSCRIPTION_TZ_OFFSET_MINUTES", "0") };
         // 2026-11-07 是周六。daily → 周日 00:00。
         let saturday = days_from_civil(2026, 11, 7) * 86_400 + 100;
         let p = plan("month", 1, "daily", 0, 0);

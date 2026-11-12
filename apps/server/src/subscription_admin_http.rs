@@ -165,7 +165,7 @@ fn validate_and_resolve(
         return Err(MSG_TITLE_REQUIRED);
     }
     let price_amount = input.price_amount.unwrap_or_default();
-    if !(price_amount >= 0.0) {
+    if price_amount < 0.0 {
         return Err(MSG_PRICE_NEGATIVE);
     }
     if price_amount > 9999.0 {
@@ -266,16 +266,12 @@ fn validate_and_resolve(
 /// 零值（`body_bind` 的 Go 语义），由后续 title 等校验接管。
 async fn bind_body_value<T: serde::de::DeserializeOwned + Default>(
     request: Request,
-) -> Result<T, Response> {
+) -> Result<T, ()> {
     let (parts, body) = request.into_parts();
-    let bytes = match to_bytes(body, crate::http::MAX_BODY_BYTES).await {
-        Ok(bytes) => bytes,
-        Err(_) => return Err(invalid_params()),
-    };
-    match crate::body_bind::bind_body::<T>(&parts.headers, &bytes) {
-        Ok(value) => Ok(value),
-        Err(_) => Err(invalid_params()),
-    }
+    let bytes = to_bytes(body, crate::http::MAX_BODY_BYTES)
+        .await
+        .map_err(|_| ())?;
+    crate::body_bind::bind_body::<T>(&parts.headers, &bytes)
 }
 
 fn invalid_params() -> Response {
@@ -468,10 +464,9 @@ pub async fn admin_create_plan(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let envelope: PlanEnvelope = match bind_body_value(request).await {
-        Ok(envelope) => envelope,
-        Err(response) => return response,
-    };
+    let envelope: PlanEnvelope = bind_body_value(request)
+        .await
+        .map_err(|_| invalid_params())?;
     let input = envelope.plan.unwrap_or_default();
     let display = state.quota_display();
     let group_ratio = state.group_settings().group_ratio;
@@ -539,10 +534,9 @@ pub async fn admin_update_plan(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let envelope: PlanEnvelope = match bind_body_value(request).await {
-        Ok(envelope) => envelope,
-        Err(response) => return response,
-    };
+    let envelope: PlanEnvelope = bind_body_value(request)
+        .await
+        .map_err(|_| invalid_params())?;
     let input = envelope.plan.unwrap_or_default();
     let display = state.quota_display();
     let group_ratio = state.group_settings().group_ratio;
@@ -587,10 +581,9 @@ pub async fn admin_update_plan_status(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let envelope: StatusEnvelope = match bind_body_value(request).await {
-        Ok(envelope) => envelope,
-        Err(response) => return response,
-    };
+    let envelope: StatusEnvelope = bind_body_value(request)
+        .await
+        .map_err(|_| invalid_params())?;
     let Some(enabled) = envelope.enabled else {
         return literal_error(MSG_INVALID_PARAMS);
     };
@@ -639,10 +632,9 @@ pub async fn admin_bind(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let envelope: BindEnvelope = match bind_body_value(request).await {
-        Ok(envelope) => envelope,
-        Err(response) => return response,
-    };
+    let envelope: BindEnvelope = bind_body_value(request)
+        .await
+        .map_err(|_| invalid_params())?;
     let user_id = envelope.user_id.unwrap_or_default();
     let plan_id = envelope.plan_id.unwrap_or_default();
     if user_id <= 0 || plan_id <= 0 {
@@ -702,10 +694,9 @@ pub async fn admin_create_user_subscription(
     if user_id <= 0 {
         return literal_error(MSG_INVALID_USER_ID);
     }
-    let envelope: UserSubscriptionEnvelope = match bind_body_value(request).await {
-        Ok(envelope) => envelope,
-        Err(response) => return response,
-    };
+    let envelope: UserSubscriptionEnvelope = bind_body_value(request)
+        .await
+        .map_err(|_| invalid_params())?;
     let plan_id = envelope.plan_id.unwrap_or_default();
     if plan_id <= 0 {
         return literal_error(MSG_INVALID_PARAMS);
@@ -741,10 +732,9 @@ pub async fn admin_reset_user_subscriptions(
     if user_id <= 0 {
         return literal_error(MSG_INVALID_USER_ID);
     }
-    let envelope: ResetEnvelope = match bind_body_value(request).await {
-        Ok(envelope) => envelope,
-        Err(response) => return response,
-    };
+    let envelope: ResetEnvelope = bind_body_value(request)
+        .await
+        .map_err(|_| invalid_params())?;
     let plan_id = envelope.plan_id.unwrap_or_default();
     if plan_id <= 0 {
         return literal_error(MSG_INVALID_PARAMS);
@@ -776,10 +766,9 @@ pub async fn admin_reset_plan_subscriptions(
     if plan_id <= 0 {
         return literal_error(MSG_INVALID_ID);
     }
-    let envelope: ResetEnvelope = match bind_body_value(request).await {
-        Ok(envelope) => envelope,
-        Err(response) => return response,
-    };
+    let envelope: ResetEnvelope = bind_body_value(request)
+        .await
+        .map_err(|_| invalid_params())?;
     let Some(db) = state.db() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
