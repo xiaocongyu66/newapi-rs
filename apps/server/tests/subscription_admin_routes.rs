@@ -443,12 +443,14 @@ async fn run_contract(db: Database) {
             r#"{"plan":{"title":"X","total_amount_display":"1e999"}}"#,
             "参数错误",
         ),
+        // "ghost" is absent from the seeded GroupRatio; note "vip" IS known,
+        // so a vip plan falls through to the free-plan-cap check instead.
         (
-            r#"{"plan":{"title":"X","upgrade_group":"vip"}}"#,
+            r#"{"plan":{"title":"X","upgrade_group":"ghost"}}"#,
             "升级分组不存在",
         ),
         (
-            r#"{"plan":{"title":"X","downgrade_group":"vip"}}"#,
+            r#"{"plan":{"title":"X","downgrade_group":"ghost"}}"#,
             "降级分组不存在",
         ),
         (
