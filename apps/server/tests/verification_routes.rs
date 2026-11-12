@@ -426,3 +426,93 @@ async fn postgres_verification_routes_contract() {
     .expect("drop isolated schema");
     admin.close().await;
 }
+
+// ---- feat/log-write-email：发送端口接线契约 ----
+//
+// `bind_email_sender` 注入的替身被 verification/reset 两个 handler 真实调用：
+// - 验证码场景：发送成功 → 200 `{"success":true}`，替身收到 Go 模板的主题
+//   与正文（SystemName + 验证码占位）；
+// - 重置场景：发送成功 → 响应保持恒成功的 Go 形态。
+
+use std::sync::{Arc, Mutex as StdMutex};
+
+#[derive(Default)]
+struct CapturingSender {
+    messages: StdMutex<Vec<(String, String, String)>>,
+}
+
+impl newapi_identity::email::EmailSender for CapturingSender {
+    fn send<'a>(
+        &'a self,
+        message: &'a newapi_identity::email::OutgoingMessage<'a>,
+    ) -> newapi_identity::email::SendFuture<'a> {
+        Box::pin(async move {
+            self.messages.lock().unwrap().push((
+                message.subject.to_owned(),
+                message.receiver.to_owned(),
+                message.content.to_owned(),
+            ));
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn bound_sender_receives_the_verification_email() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite fixture");
+    let db = Database::Sqlite(pool);
+    exec!(&db, SQLITE_USERS);
+    exec!(&db, OPTIONS);
+    let sender = Arc::new(CapturingSender::default());
+    let app = state(&db)
+        .await
+        .bind_email_sender(sender.clone() as Arc<dyn newapi_identity::email::EmailSender>);
+    let response = send(&app, verification_request("email=wired@example.com")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body, json!({"success": true, "message": ""}));
+    let messages = sender.messages.lock().unwrap();
+    assert_eq!(messages.len(), 1);
+    let (subject, receiver, content) = &messages[0];
+    assert_eq!(subject, "New API邮箱验证邮件");
+    assert_eq!(receiver, "wired@example.com");
+    assert!(content.contains("邮箱验证"));
+    assert!(content.contains("分钟内有效"));
+}
+
+#[tokio::test]
+async fn bound_sender_receives_the_password_reset_email() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite fixture");
+    let db = Database::Sqlite(pool);
+    exec!(&db, SQLITE_USERS);
+    exec!(&db, OPTIONS);
+    exec!(
+        &db,
+        "INSERT INTO users (username,password,role,status,email) VALUES ($1,$2,1,1,$3)",
+        "wired",
+        "fixture-hash",
+        "wired@example.com",
+    );
+    let sender = Arc::new(CapturingSender::default());
+    let app = state(&db)
+        .await
+        .bind_email_sender(sender.clone() as Arc<dyn newapi_identity::email::EmailSender>);
+    let response = send(&app, reset_request("email=wired@example.com")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body, json!({"success": true, "message": ""}));
+    let messages = sender.messages.lock().unwrap();
+    assert_eq!(messages.len(), 1);
+    let (subject, receiver, content) = &messages[0];
+    assert_eq!(subject, "New API密码重置");
+    assert_eq!(receiver, "wired@example.com");
+    assert!(content.contains("/user/reset?email=wired@example.com&token="));
+}

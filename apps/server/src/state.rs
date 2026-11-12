@@ -10,6 +10,7 @@ use newapi_catalog::{AuthSettings, PublicConfig, group_settings::GroupSettings};
 use newapi_config::SessionCookieSettings;
 use newapi_identity::auth_flow::auth_flow_key;
 use newapi_identity::auth_session::{AuthFence, SessionAuth};
+use newapi_identity::email::{EmailSender, UnconfiguredEmailSender};
 use newapi_identity::self_user::{QuotaDisplayKind, QuotaDisplaySettings};
 use newapi_identity::token_cache::RedisTokenCache;
 use newapi_identity::tokens::TokenRuntimeSettings;
@@ -164,6 +165,10 @@ pub struct AppState {
     /// （测试路径）。与上面的限流器不同：Go 的 EV 没有 enabled 开关，
     /// Redis 故障回退内存，拒绝响应是 429 + JSON。
     email_verification_rate_limiter: Option<Arc<crate::limit_email::EmailVerificationLimiter>>,
+    /// 邮件发送端口（Go `common.SendEmail`）；未注入时是
+    /// `UnconfiguredEmailSender`（复刻未配置 SMTP 的部署：发送恒报
+    /// "SMTP 服务器未配置"，验证码等副作用照常发生）。
+    email_sender: Arc<dyn EmailSender>,
     anonymous_body_limit: usize,
 }
 
@@ -191,6 +196,7 @@ impl Default for AppState {
             global_web_rate_limiter: None,
             token_cache: None,
             email_verification_rate_limiter: None,
+            email_sender: Arc::new(UnconfiguredEmailSender),
             anonymous_body_limit: anonymous_body_limit_bytes(512),
         }
     }
@@ -278,6 +284,18 @@ impl AppState {
     ) -> Self {
         self.email_verification_rate_limiter = Some(Arc::new(limiter));
         self
+    }
+
+    /// 注入邮件发送端口（Go `common.SendEmail` 的生产实现位置：SMTP 账号池
+    /// 构建后调用）。未注入的 state 保持 `UnconfiguredEmailSender`。
+    pub fn bind_email_sender(mut self, sender: Arc<dyn EmailSender>) -> Self {
+        self.email_sender = sender;
+        self
+    }
+
+    /// 邮件发送端口（`verification_http` 等发送场景共用）。
+    pub fn email_sender(&self) -> Arc<dyn EmailSender> {
+        self.email_sender.clone()
     }
 
     /// 解析客户端 IP：peer 不可信时忽略转发头，与 Go `resolveTrustedClientIP` 一致。
