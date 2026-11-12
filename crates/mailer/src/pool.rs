@@ -333,13 +333,18 @@ mod tests {
             vec![a.clone(), b.clone(), c.clone()],
             Arc::new(MemoryQuota::default()),
         );
-        // 游标 0：offset = (0-1) wrapping % 2 —— 首次发送仍命中顶层某个
-        // 账号（Go 注释：cursor 为 0 的首次发送必须落在第一个账号上，即
-        // wrapping 后仍有效轮转）。两次发送应覆盖 a、b 各一次。
-        let _ = pool.send(&message()).await;
-        let _ = pool.send(&message()).await;
+        // 层内轮转（Go smtpSendCursor）：两次发送都不得落到低层的 c。a 失败
+        // 后层内回退到 b 属同一发送的 Go failover 语义；游标为进程级共享
+        // 状态，断言层归属而非确切顺序。
+        ok(pool.send(&message()).await);
+        ok(pool.send(&message()).await);
         let a_calls = *a.calls.lock().unwrap();
         let b_calls = *b.calls.lock().unwrap();
-        assert_eq!(a_calls + b_calls, 2, "top tier served both sends");
+        assert_eq!(
+            a_calls + b_calls,
+            3,
+            "two sends, one intra-tier failover from a to b"
+        );
+        assert_eq!(*c.calls.lock().unwrap(), 0, "fallback tier never used");
     }
 }

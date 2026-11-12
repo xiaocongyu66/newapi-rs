@@ -73,8 +73,11 @@ mod tests {
     fn message_id_shape() {
         let now = Local::now();
         let id = generate_message_id("a@example.com", &now).unwrap();
-        let (local, domain) = id.trim_matches(|c| c != '<').split_once('@').unwrap();
-        assert!(domain == "example.com");
+        let inner = id.trim_start_matches('<').trim_end_matches('>');
+        let (local, domain) = inner
+            .split_once('@')
+            .expect("one @ separating local part and domain");
+        assert_eq!(domain, "example.com");
         assert!(local.len() > 12, "nanos + random12");
     }
 
@@ -107,8 +110,9 @@ mod tests {
 
     #[test]
     fn outlook_detection_matches_go() {
-        assert!(is_outlook_server("smtp.office365.com"));
-        assert!(is_outlook_server("example.onmicrosoft.com"));
-        assert!(!is_outlook_server("smtp.gmail.com"));
+        // Go 判定对象是账号（account.Account），不是服务器主机名。
+        assert!(is_outlook_server("user@outlook.com"));
+        assert!(is_outlook_server("user@example.onmicrosoft.com"));
+        assert!(!is_outlook_server("user@gmail.com"));
     }
 }
