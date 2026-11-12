@@ -306,6 +306,14 @@ impl<V: Clone> TtlLruCache<V> {
         self.len() == 0
     }
 
+    /// 测试辅助：清空全部条目（OnceLock 全局缓存不可重建）。
+    pub fn clear(&self) {
+        let mut inner = self.inner.lock().expect("affinity cache");
+        inner.map.clear();
+        inner.order.clear();
+        inner.seq = 0;
+    }
+
     /// 测试辅助：按完整键取值（不刷新顺位）。
     pub fn peek(&self, key: &str) -> Option<V> {
         let full = self.full_key(key);
@@ -710,10 +718,10 @@ pub fn get_channel_affinity_usage_cache_stats(
     }
 }
 
-/// 测试辅助：替换全局缓存（重新以当前设置容量重建）。
+/// 测试辅助：清空全局缓存与设置覆盖。OnceLock 缓存不可重建，只能就地清空。
 pub fn reset_caches_for_test() {
-    // OnceLock 全局不可替换；测试通过独立 TtlLruCache 实例覆盖原语，
-    // 全局面只依赖设置读取，此处清空设置覆盖即可。
+    channel_affinity_cache().clear();
+    usage_cache().clear();
     *SETTING.write().expect("channel affinity setting") = None;
 }
 
