@@ -168,9 +168,16 @@ macro_rules! mutate_routing {
                 let mut tx = pool.begin().await?;
                 let outcome: Result<_, sqlx::Error> = async {
                     let $conn = &mut *tx;
-                    let value = $body?;
-                    $crate::gateway_revision::bump_routing_revision_sqlite(&mut *tx).await?;
-                    Ok(value)
+                    // match 而非 `?`：body 的 E 经 outcome 的类型注解统一成
+                    // sqlx::Error（与原 `transactional!` 的推断路径一致）。
+                    match $body {
+                        Ok(value) => {
+                            $crate::gateway_revision::bump_routing_revision_sqlite(&mut *tx)
+                                .await?;
+                            Ok(value)
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
                 .await;
                 match outcome {
@@ -188,9 +195,14 @@ macro_rules! mutate_routing {
                 let mut tx = pool.begin().await?;
                 let outcome: Result<_, sqlx::Error> = async {
                     let $conn = &mut *tx;
-                    let value = $body?;
-                    $crate::gateway_revision::bump_routing_revision_postgres(&mut *tx).await?;
-                    Ok(value)
+                    match $body {
+                        Ok(value) => {
+                            $crate::gateway_revision::bump_routing_revision_postgres(&mut *tx)
+                                .await?;
+                            Ok(value)
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
                 .await;
                 match outcome {
@@ -311,22 +323,26 @@ pub async fn list_pending_gateway_config_outbox(
     }
     let sql = "SELECT id, routing_revision FROM gateway_config_outboxes \
                WHERE published_at IS NULL ORDER BY routing_revision ASC LIMIT $1";
-    fn outbox_rows<R: sqlx::Row>(rows: &[R]) -> Vec<GatewayOutboxRow> {
-        rows.iter()
-            .map(|row| GatewayOutboxRow {
-                id: row.try_get("id").unwrap_or_default(),
-                routing_revision: row.try_get("routing_revision").unwrap_or_default(),
-            })
-            .collect()
-    }
     match db {
         Database::Sqlite(pool) => {
             let rows = sqlx::query(sql).bind(limit).fetch_all(pool).await?;
-            Ok(outbox_rows(&rows))
+            Ok(rows
+                .iter()
+                .map(|row| GatewayOutboxRow {
+                    id: row.try_get("id").unwrap_or_default(),
+                    routing_revision: row.try_get("routing_revision").unwrap_or_default(),
+                })
+                .collect())
         }
         Database::Postgres(pool) => {
             let rows = sqlx::query(sql).bind(limit).fetch_all(pool).await?;
-            Ok(outbox_rows(&rows))
+            Ok(rows
+                .iter()
+                .map(|row| GatewayOutboxRow {
+                    id: row.try_get("id").unwrap_or_default(),
+                    routing_revision: row.try_get("routing_revision").unwrap_or_default(),
+                })
+                .collect())
         }
     }
 }
