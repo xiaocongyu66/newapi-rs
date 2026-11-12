@@ -203,14 +203,15 @@ pub fn base62_string(length: usize) -> String {
         .collect()
 }
 
-/// Go `common.Sha1`：小写十六进制 SHA-1。ring 仅在 `SHA1_FOR_INSECURE` 常量
-/// 下提供 SHA-1，与签名验证无关的引用串哈希正是其预期用途。
+/// Go `common.Sha1`：小写十六进制 SHA-1（仅用于非保密的引用串）。
 pub fn sha1_hex(input: &str) -> String {
-    use ring::digest;
-    let digest = digest::digest(&digest::SHA1_FOR_INSECURE, input.as_bytes());
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(input.as_bytes());
+    let digest = hasher.finalize();
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(digest.as_ref().len() * 2);
-    for byte in digest.as_ref() {
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
         out.push(HEX[(byte >> 4) as usize] as char);
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
@@ -1122,7 +1123,7 @@ pub async fn update_pending_top_up_status(
         .fetch_optional(pool)
         .await?,
     };
-    let Some((provider, status)) = row else {
+    let Some((provider, _status)) = row else {
         return Err(RechargeError::NotFound);
     };
     if provider.as_deref() != Some(expected_provider) {
