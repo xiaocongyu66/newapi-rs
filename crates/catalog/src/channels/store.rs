@@ -11,12 +11,16 @@
 //! 重建、随渠道删除）；`crate::abilities` 保持只读，两者不共享可变状态。
 //!
 //! 已知范围裁剪（后续切片接入）：
-//! - `MutateGatewayRouting` 的网关路由版本号不在此实现（catalog 尚无该机制），
-//!   事务边界保持 Go 的“渠道行 + 能力行同事务提交”语义。
 //! - `SyncChannelModelRoutesWithTx`（`channel_model_routes`）与
 //!   `deleteUnitHealth*`（`channel_model_health`）属于路由/健康子域，本切片
 //!   不触碰这两张表。
 //! - `InitChannelCache` 等渠道缓存刷新没有 Rust 对应物（缓存属于后续切片）。
+//!
+//! 网关路由修订（`crate::gateway_revision`）：Go 的
+//! `BatchInsertChannels`/`Update`/`Delete`/`DeleteDisabledChannel`/
+//! `BatchDeleteChannels` 都包在 `MutateGatewayRouting` 单事务里（域写入 +
+//! 修订号 bump + outbox 同提交同回滚），本模块所有写路径经
+//! [`crate::mutate_routing!`] 走同一原语。
 //!
 //! 两个后端共用 `$N` 占位符（sqlx-sqlite 与 sqlx-postgres 均接受），与
 //! `identity/src/oauth_bindings.rs` 的约定一致；事务内的写路径与行解码用
@@ -169,41 +173,9 @@ macro_rules! backend {
     };
 }
 
-/// 事务体展开：两个驱动各一份，失败回滚（回滚结果被忽略，保留原始错误）。
-macro_rules! transactional {
-    ($db:expr, $tx:ident, $body:block) => {
-        match $db {
-            Database::Sqlite(pool) => {
-                let mut $tx = pool.begin().await?;
-                let outcome: Result<_, sqlx::Error> = async { $body }.await;
-                match outcome {
-                    Ok(value) => {
-                        $tx.commit().await?;
-                        Ok(value)
-                    }
-                    Err(error) => {
-                        let _ = $tx.rollback().await;
-                        Err(error)
-                    }
-                }
-            }
-            Database::Postgres(pool) => {
-                let mut $tx = pool.begin().await?;
-                let outcome: Result<_, sqlx::Error> = async { $body }.await;
-                match outcome {
-                    Ok(value) => {
-                        $tx.commit().await?;
-                        Ok(value)
-                    }
-                    Err(error) => {
-                        let _ = $tx.rollback().await;
-                        Err(error)
-                    }
-                }
-            }
-        }
-    };
-}
+/// 事务体展开改由 [`crate::mutate_routing!`] 承担：域写入成功后、commit 前
+/// 强制推进网关路由修订号，与 Go `MutateGatewayRouting` 的单事务语义一致
+/// （失败整体回滚、修订号不推进）。
 
 /// Go `parseStatusFilter`（`handle_channel.go:59-68`）：`enabled`/`1` 只取
 /// 启用，`disabled`/`0` 取全部非启用状态，其余值（含缺省）不过滤。
@@ -1236,15 +1208,16 @@ impl ChannelRepository {
         })
     }
 
-    /// Go `BatchInsertChannels`：同事务逐行写入渠道，并逐行写入派生的
-    /// `abilities` 行。Go 的 `chunk(50)` 只影响批次切分，单行循环写入与之
-    /// 等价（自增 id 仍逐行取回，供能力行引用）。
+    /// Go `BatchInsertChannels`：`MutateGatewayRouting` 单事务逐行写入渠道
+    /// 与派生的 `abilities` 行，提交时推进一次修订号。Go 的 `chunk(50)` 只
+    /// 影响批次切分，单行循环写入与之等价（自增 id 仍逐行取回，供能力行
+    /// 引用）。
     pub async fn insert_channels(&self, channels: Vec<NewChannel>) -> Result<(), sqlx::Error> {
         if channels.is_empty() {
             return Ok(());
         }
         let db = &self.db;
-        transactional!(db, tx, {
+        crate::mutate_routing!(db, tx, {
             for channel in &channels {
                 let id = insert_channel!(tx, channel)?;
                 let models = channel.models.clone();
@@ -1274,7 +1247,7 @@ impl ChannelRepository {
         channel_info: Option<ChannelInfo>,
     ) -> Result<Option<ChannelRow>, sqlx::Error> {
         let db = &self.db;
-        transactional!(db, tx, {
+        crate::mutate_routing!(db, tx, {
             apply_patch!(tx, id, patch, channel_info.as_ref())?;
             let reloaded = reload_channel!(tx, id)?;
             let Some(channel) = reloaded else {
@@ -1285,10 +1258,11 @@ impl ChannelRepository {
         })
     }
 
-    /// Go `Channel.Delete`：硬删渠道行并删除其能力行。
+    /// Go `Channel.Delete`：`MutateGatewayRouting` 单事务硬删渠道行并删除其
+    /// 能力行，提交时推进一次修订号。
     pub async fn delete_by_id(&self, id: i64) -> Result<(), sqlx::Error> {
         let db = &self.db;
-        transactional!(db, tx, {
+        crate::mutate_routing!(db, tx, {
             sqlx::query("DELETE FROM channels WHERE id = $1")
                 .bind(id)
                 .execute(&mut *tx)
@@ -1301,11 +1275,11 @@ impl ChannelRepository {
         })
     }
 
-    /// Go `DeleteDisabledChannel`：删除手动禁用与自动禁用渠道及其能力行，
-    /// 返回实际删除的渠道行数。
+    /// Go `DeleteDisabledChannel`：`MutateGatewayRouting` 单事务删除手动禁用
+    /// 与自动禁用渠道及其能力行，返回实际删除的渠道行数。
     pub async fn delete_disabled(&self) -> Result<i64, sqlx::Error> {
         let db = &self.db;
-        transactional!(db, tx, {
+        crate::mutate_routing!(db, tx, {
             sqlx::query(
                 "DELETE FROM abilities WHERE channel_id IN \
                  (SELECT id FROM channels WHERE status = $1 OR status = $2)",
@@ -1323,34 +1297,21 @@ impl ChannelRepository {
         })
     }
 
-    /// Go `BatchDeleteChannels`：按 200 一批先删渠道行再删能力行，
-    /// 返回实际删除的渠道行数。
+    /// Go `BatchDeleteChannels`：**整个批次**包在一个 `MutateGatewayRouting`
+    /// 事务里（`batchDeleteWithTx` 的 chunk 循环在事务体内），先删渠道行再删
+    /// 能力行，提交时只推进一次修订号；任一批失败则全部回滚。
     pub async fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, sqlx::Error> {
         if ids.is_empty() {
             return Ok(0);
         }
-        let mut deleted = 0i64;
-        for chunk in ids.chunks(200) {
-            deleted += backend!(&self.db, pool, {
-                let mut transaction = pool.begin().await?;
-                let outcome: Result<i64, sqlx::Error> = async {
-                    let count = delete_in!(transaction, "channels", "id", chunk)?;
-                    delete_in!(transaction, "abilities", "channel_id", chunk)?;
-                    Ok(count)
-                }
-                .await;
-                match outcome {
-                    Ok(count) => {
-                        transaction.commit().await?;
-                        Ok(count)
-                    }
-                    Err(error) => {
-                        let _ = transaction.rollback().await;
-                        Err(error)
-                    }
-                }
-            })?;
-        }
-        Ok(deleted)
+        let db = &self.db;
+        crate::mutate_routing!(db, tx, {
+            let mut deleted = 0i64;
+            for chunk in ids.chunks(200) {
+                deleted += delete_in!(tx, "channels", "id", chunk)?;
+                delete_in!(tx, "abilities", "channel_id", chunk)?;
+            }
+            Ok(deleted)
+        })
     }
 }

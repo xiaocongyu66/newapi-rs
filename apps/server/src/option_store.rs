@@ -109,11 +109,26 @@ fn placeholders(count: usize, postgres: bool) -> String {
 
 /// Go `UpdateOptionWithTx` 的 FirstOrCreate + Save 等价 upsert。SQLite 与
 /// PostgreSQL 共用同一 SQL（`ON CONFLICT` 两端语义一致，`setup.rs` 同款）。
+///
+/// 网关路由键（Go `dbinfra.UpdateOption` 的 `IsGatewayRoutingOptionKey`
+/// 分支，`store_options.go:88-98`）包在 `MutateGatewayRouting` 单事务里：
+/// option 行与修订号 bump 同提交同回滚；未接修订机制前直接写库会让已发布
+/// 快照继续供应被取代的路由。
 pub(crate) async fn upsert_option(
     db: &Database,
     key: &str,
     value: &str,
 ) -> Result<(), sqlx::Error> {
+    if newapi_catalog::gateway_revision::is_gateway_routing_option_key(key) {
+        return newapi_catalog::mutate_routing!(db, tx, {
+            sqlx::query(UPSERT_SQL)
+                .bind(key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await?;
+            Ok(())
+        });
+    }
     match db {
         Database::Sqlite(pool) => sqlx::query(UPSERT_SQL)
             .bind(key)
@@ -134,13 +149,30 @@ const UPSERT_SQL: &str = "INSERT INTO options (\"key\", value) VALUES ($1, $2) \
 ON CONFLICT (\"key\") DO UPDATE SET value = excluded.value";
 
 /// Go `UpdateOptionsBulk`（`store_options.go:112-152`）：多键单事务写入，
-/// 任一失败整体回滚，不发布部分状态。
+/// 任一失败整体回滚，不发布部分状态。含任一网关路由键时整批走
+/// `MutateGatewayRouting`（Go `store_options.go:129-145` 的
+/// `hasGatewayOption` 分支）——一次逻辑变更恰好一个修订号。
 pub(crate) async fn upsert_options_bulk(
     db: &Database,
     values: &BTreeMap<String, String>,
 ) -> Result<(), sqlx::Error> {
     if values.is_empty() {
         return Ok(());
+    }
+    let has_gateway_option = values
+        .keys()
+        .any(newapi_catalog::gateway_revision::is_gateway_routing_option_key);
+    if has_gateway_option {
+        return newapi_catalog::mutate_routing!(db, tx, {
+            for (key, value) in values {
+                sqlx::query(UPSERT_SQL)
+                    .bind(key)
+                    .bind(value)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            Ok(())
+        });
     }
     macro_rules! bulk {
         ($pool:expr) => {{
