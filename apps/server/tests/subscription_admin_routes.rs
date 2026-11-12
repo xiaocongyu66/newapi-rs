@@ -298,6 +298,7 @@ async fn send(
         .unwrap()
 }
 
+#[track_caller]
 async fn body_json(response: Response) -> Value {
     let bytes = to_bytes(response.into_body(), 1024 * 1024)
         .await
@@ -305,6 +306,7 @@ async fn body_json(response: Response) -> Value {
     serde_json::from_slice(&bytes).expect("response JSON")
 }
 
+#[track_caller]
 async fn assert_success(response: Response) -> Value {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
@@ -313,6 +315,7 @@ async fn assert_success(response: Response) -> Value {
     body
 }
 
+#[track_caller]
 async fn assert_failure(response: Response, message: Value) -> Value {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
