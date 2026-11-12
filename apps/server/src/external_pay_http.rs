@@ -348,6 +348,7 @@ pub struct PancakeCheckoutParams {
     pub order_merchant_external_id: String,
 }
 
+#[derive(Clone)]
 pub struct PancakeCheckoutSession {
     pub session_id: String,
     pub checkout_url: String,

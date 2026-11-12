@@ -29,7 +29,7 @@ use newapi_server::{AppState, auth::user_auth};
 use newapi_storage::Database;
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use rsa::sha2::Sha256;
-use rsa::signature::{SignatureEncoding, Signer};
+use rsa::signature::Signer;
 use rsa::{RsaPrivateKey, pkcs1v15::SigningKey};
 use serde_json::{Value, json};
 use sqlx::{
@@ -746,7 +746,7 @@ async fn run_contract(db: Database) {
     let body = body_json(response).await;
     assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
     let status: String = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
+        sqlx::query_scalar(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
             .fetch_one(pool)
             .await
             .expect("waffo failed order")
@@ -815,7 +815,7 @@ async fn run_contract(db: Database) {
     let body = body_json(response).await;
     assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
     let status: String = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
+        sqlx::query_scalar(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
             .fetch_one(pool)
             .await
             .expect("pancake failed order")
@@ -870,7 +870,7 @@ async fn run_contract(db: Database) {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let quota: i64 = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT quota FROM users WHERE id = 7"#)
+        sqlx::query_scalar(r#"SELECT quota FROM users WHERE id = 7"#)
             .fetch_one(pool)
             .await
             .expect("user quota")
@@ -918,7 +918,7 @@ async fn run_contract(db: Database) {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let status: String = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT status FROM top_ups WHERE trade_no = 'ref_expired'"#)
+        sqlx::query_scalar(r#"SELECT status FROM top_ups WHERE trade_no = 'ref_expired'"#)
             .fetch_one(pool)
             .await
             .expect("expired order")
@@ -1065,14 +1065,14 @@ async fn run_contract(db: Database) {
         .to_owned();
     assert!(!signature_header.is_empty(), "response carries X-SIGNATURE");
     let quota: i64 = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT quota FROM users WHERE id = 7"#)
+        sqlx::query_scalar(r#"SELECT quota FROM users WHERE id = 7"#)
             .fetch_one(pool)
             .await
             .expect("waffo user quota")
     });
     assert_eq!(quota, 20, "stripe 10 + waffo 10");
     let status: String = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT status FROM top_ups WHERE trade_no = $1"#)
+        sqlx::query_scalar(r#"SELECT status FROM top_ups WHERE trade_no = $1"#)
             .bind(&waffo_order_id)
             .fetch_one(pool)
             .await
@@ -1119,7 +1119,7 @@ async fn run_contract(db: Database) {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let status: String = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT status FROM top_ups WHERE trade_no = 'WAFFO-7-fail'"#)
+        sqlx::query_scalar(r#"SELECT status FROM top_ups WHERE trade_no = 'WAFFO-7-fail'"#)
             .fetch_one(pool)
             .await
             .expect("waffo closed order")
@@ -1170,7 +1170,7 @@ async fn run_contract(db: Database) {
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     assert_eq!(bytes.as_ref(), b"OK");
     let quota: i64 = backend!(&db, pool, {
-        sqlx::query_as(r#"SELECT quota FROM users WHERE id = 7"#)
+        sqlx::query_scalar(r#"SELECT quota FROM users WHERE id = 7"#)
             .fetch_one(pool)
             .await
             .expect("pancake user quota")

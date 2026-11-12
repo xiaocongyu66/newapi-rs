@@ -95,7 +95,7 @@ pub enum PairOutcome {
 }
 
 /// 上游调用失败；`message` 进入 `data.error`（pair 孤儿分支）或仅入日志。
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PancakeError(pub String);
 
 pub type PancakeFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, PancakeError>> + Send + 'a>>;
