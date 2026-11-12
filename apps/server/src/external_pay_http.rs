@@ -1832,8 +1832,6 @@ struct StripeEvent {
     client_reference_id: String,
     status: String,
     payment_status: String,
-    amount_total: String,
-    currency: String,
 }
 
 fn parse_stripe_event(payload: &[u8]) -> Option<StripeEvent> {
@@ -1853,16 +1851,6 @@ fn parse_stripe_event(payload: &[u8]) -> Option<StripeEvent> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
-        amount_total: match object.get("amount_total") {
-            Some(Value::Number(number)) => number.to_string(),
-            Some(Value::String(text)) => text.clone(),
-            _ => String::new(),
-        },
-        currency: object
-            .get("currency")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_uppercase(),
     })
 }
 

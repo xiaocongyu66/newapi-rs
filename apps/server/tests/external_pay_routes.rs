@@ -27,7 +27,7 @@ use newapi_server::external_pay_http::{
 };
 use newapi_server::{AppState, auth::user_auth};
 use newapi_storage::Database;
-use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use rsa::sha2::Sha256;
 use rsa::signature::Signer;
 use rsa::{RsaPrivateKey, pkcs1v15::SigningKey};
@@ -1055,8 +1055,6 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body_json(response).await;
-    assert_eq!(body, json!({"message": "success"}), "{body}");
     let signature_header = response
         .headers()
         .get("X-SIGNATURE")
@@ -1064,6 +1062,8 @@ async fn run_contract(db: Database) {
         .unwrap_or_default()
         .to_owned();
     assert!(!signature_header.is_empty(), "response carries X-SIGNATURE");
+    let body = body_json(response).await;
+    assert_eq!(body, json!({"message": "success"}), "{body}");
     let quota: i64 = backend!(&db, pool, {
         sqlx::query_scalar(r#"SELECT quota FROM users WHERE id = 7"#)
             .fetch_one(pool)
