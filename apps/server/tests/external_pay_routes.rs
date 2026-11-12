@@ -920,15 +920,22 @@ async fn run_contract(db: Database) {
     });
     // Go `Recharge`：订单 Money(=10 美元) × QuotaPerUnit(500000)。
     assert_eq!(quota, 10 * 500_000, "stripe credited Money x QuotaPerUnit");
-    let (status, customer): (String, String) = backend!(&db, pool, {
-        sqlx::query_as(
-            r#"SELECT status, COALESCE(stripe_customer, '') FROM top_ups WHERE trade_no = 'ref_stripe_main'"#,
+    let status: String = backend!(&db, pool, {
+        sqlx::query_scalar(r#"SELECT status FROM top_ups WHERE trade_no = 'ref_stripe_main'"#)
+            .fetch_one(pool)
+            .await
+            .expect("stripe order after webhook")
+    });
+    assert_eq!(status, "success");
+    // Go `Recharge` 把 customer id 写进 users.stripe_customer。
+    let customer: String = backend!(&db, pool, {
+        sqlx::query_scalar(
+            r#"SELECT COALESCE(stripe_customer, '') FROM users WHERE id = 7"#,
         )
         .fetch_one(pool)
         .await
-        .expect("stripe order after webhook")
+        .expect("stripe customer after webhook")
     });
-    assert_eq!(status, "success");
     assert_eq!(customer, "cus_1");
 
     // 过期事件 → pending 订单翻转 expired。
