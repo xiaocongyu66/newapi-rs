@@ -918,7 +918,8 @@ async fn run_contract(db: Database) {
             .await
             .expect("user quota")
     });
-    assert_eq!(quota, 10, "stripe credited Money x QuotaPerUnit");
+    // Go `Recharge`：订单 Money(=10 美元) × QuotaPerUnit(500000)。
+    assert_eq!(quota, 10 * 500_000, "stripe credited Money x QuotaPerUnit");
     let (status, customer): (String, String) = backend!(&db, pool, {
         sqlx::query_as(
             r#"SELECT status, COALESCE(stripe_customer, '') FROM top_ups WHERE trade_no = 'ref_stripe_main'"#,
@@ -1113,8 +1114,12 @@ async fn run_contract(db: Database) {
             .await
             .expect("waffo user quota")
     });
-    // Go `RechargeWaffo`：Amount × QuotaPerUnit（默认 500000），订单 amount=10。
-    assert_eq!(quota, 10 + 10 * 500_000, "stripe 10 + waffo 10 x 500000");
+    // Go `RechargeWaffo`：Amount(10) × QuotaPerUnit(500000)，叠加 stripe 已入账。
+    assert_eq!(
+        quota,
+        10 * 500_000 + 10 * 500_000,
+        "stripe + waffo credited"
+    );
     let status: String = backend!(&db, pool, {
         sqlx::query_scalar(r#"SELECT status FROM top_ups WHERE trade_no = $1"#)
             .bind(&waffo_order_id)
@@ -1219,7 +1224,11 @@ async fn run_contract(db: Database) {
             .await
             .expect("pancake user quota")
     });
-    assert_eq!(quota, 10 + 10 * 500_000 + 10 * 500_000, "stripe + waffo + pancake");
+    assert_eq!(
+        quota,
+        10 * 500_000 + 10 * 500_000 + 10 * 500_000,
+        "stripe + waffo + pancake credited"
+    );
 
     // 买家身份不匹配 → 200 OK（错误日志），不入账。
     let payload = json!({
