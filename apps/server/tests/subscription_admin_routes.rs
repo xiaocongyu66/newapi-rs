@@ -153,9 +153,8 @@ async fn exec(db: &Database, statement: &'static str) {
     });
 }
 
-/// PostgreSQL `INTEGER PRIMARY KEY` has no default; wire named sequences and
-/// sync them after the explicit-id seeds so auto-generated inserts don't
-/// collide. SQLite's `INTEGER PRIMARY KEY` auto-assigns max(id)+1 natively.
+/// PostgreSQL `INTEGER PRIMARY KEY` has no default; wire named sequences.
+/// SQLite's `INTEGER PRIMARY KEY` auto-assigns max(id)+1 natively.
 async fn setup_pg_sequences(db: &Database) {
     if let Database::Postgres(pool) = db {
         for (table, seq) in [
@@ -175,6 +174,15 @@ async fn setup_pg_sequences(db: &Database) {
             .await
             .expect("wire sequence default");
         }
+        sync_pg_sequences(db).await;
+    }
+}
+
+/// Explicit-id seeds leave the sequence behind; resync so auto-generated
+/// inserts don't collide with seeded ids. Must re-run after every block of
+/// explicit-id seeds.
+async fn sync_pg_sequences(db: &Database) {
+    if let Database::Postgres(pool) = db {
         for (table, seq) in [
             ("subscription_plans", "subscription_plans_seq"),
             ("user_subscriptions", "user_subscriptions_seq"),
@@ -377,6 +385,7 @@ async fn run_contract(db: Database) {
     seed_plan(&db, 1, "Disabled", 99, false).await;
     seed_plan(&db, 2, "Pro", 10, true).await;
     seed_plan(&db, 3, "Max", 10, true).await;
+    sync_pg_sequences(&db).await;
     let body = assert_success(
         send(
             &app,
@@ -564,9 +573,10 @@ async fn run_contract(db: Database) {
     assert_eq!(pro["plan"]["price_amount"], json!(3.0));
     assert_eq!(pro["plan"]["allow_balance_pay"], json!(true));
     assert_eq!(pro["plan"]["total_amount"], json!(0));
-    assert_eq!(pro["plan"]["enabled"], json!(true));
+    // `enabled` omitted → Go map update writes the zero value false.
+    assert_eq!(pro["plan"]["enabled"], json!(false));
 
-    // enabled=false is an explicit zero-value overwrite (Go map update).
+    // An explicit enabled=false PUT is the same zero-value overwrite.
     let _ = send(
         &app,
         "PUT",
@@ -815,6 +825,7 @@ async fn run_contract(db: Database) {
     )
     .await;
     seed_subscription(&db, 14, 3, 1, 700, "active", future, "", "").await;
+    sync_pg_sequences(&db).await;
 
     let response = send(
         &app,
@@ -933,6 +944,8 @@ async fn run_contract(db: Database) {
         "default",
     )
     .await;
+    sync_pg_sequences(&db).await;
+
     let response = send(
         &app,
         "POST",
