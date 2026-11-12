@@ -332,7 +332,8 @@ fn new_channel(name: &str, key: &str, models: &str) -> NewChannel {
     }
 }
 
-async fn contract(db: &Database) {
+// 宏内部 begin/commit 用 `?` 传播错误，contract 需返回 Result。
+async fn contract(db: &Database) -> Result<(), sqlx::Error> {
     // -- 初始化：空库 → 修订号 1；重复初始化绝不倒退；表保持单例 --
     assert_eq!(current_gateway_revision(db).await.unwrap(), 1);
     mutate_routing!(db, _tx, { Ok(()) }).unwrap();
@@ -402,14 +403,13 @@ async fn contract(db: &Database) {
     assert_eq!(current_gateway_revision(db).await.unwrap(), -1);
     assert!(outbox_revisions(db).await.is_empty());
 
-    // -- 顺序变更严格递增，outbox 顺序一致 --
+    // -- 顺序变更严格递增，outbox 顺序一致（outbox 行即各次修订号）--
     reset_revision(db, 1).await;
-    let mut got = Vec::new();
     for _ in 0..5 {
-        got.push(mutate_routing!(db, _tx, { Ok(()) }).unwrap());
+        mutate_routing!(db, _tx, { Ok(()) }).unwrap();
     }
-    assert_eq!(got, vec![2, 3, 4, 5, 6]);
-    assert_eq!(outbox_revisions(db).await, got);
+    assert_eq!(current_gateway_revision(db).await.unwrap(), 6);
+    assert_eq!(outbox_revisions(db).await, vec![2, 3, 4, 5, 6]);
 
     // -- outbox routing_revision 唯一：一个修订号只发布一次 --
     let error = match db {
@@ -436,29 +436,27 @@ async fn contract(db: &Database) {
     );
 
     // -- 并发成功提交：修订号互不相同且递增（行锁串行化 bump）--
+    // 每次提交恰一条 outbox 行，outbox 的 routing_revision 唯一，因此两路
+    // 并发提交的修订号可从 outbox 行集读回：两行、互异、均 ≥ 2。
     reset_revision(db, 1).await;
     let db_a = db.clone();
     let db_b = db.clone();
-    let (left, right) = tokio::join!(
+    tokio::join!(
         async move { mutate_routing!(db_a, _tx, { Ok(()) }).unwrap() },
         async move { mutate_routing!(db_b, _tx, { Ok(()) }).unwrap() },
     );
-    assert_ne!(
-        left, right,
-        "two concurrent committed mutations must get distinct revisions"
-    );
-    assert!(left >= 2 && right >= 2);
-    let mut outbox = outbox_revisions(db).await;
-    outbox.sort_unstable();
+    let outbox = outbox_revisions(db).await;
     assert_eq!(
-        outbox,
-        {
-            let mut both = vec![left, right];
-            both.sort_unstable();
-            both
-        },
+        outbox.len(),
+        2,
         "each committed mutation published exactly one outbox row"
     );
+    assert_ne!(
+        outbox[0], outbox[1],
+        "two concurrent committed mutations must get distinct revisions"
+    );
+    assert!(outbox[0] >= 2 && outbox[1] >= 2);
+    assert_eq!(current_gateway_revision(db).await.unwrap(), outbox[1]);
 
     // -- 仓储接入：模型写路径逐次推进修订号 --
     reset_revision(db, 10).await;
@@ -520,6 +518,7 @@ async fn contract(db: &Database) {
     );
     let outbox = outbox_revisions(db).await;
     assert_eq!(outbox.last().copied(), Some(before + 1));
+    Ok(())
 }
 
 #[tokio::test]
@@ -531,7 +530,7 @@ async fn sqlite_gateway_revision_contract() {
         .connect_with(SqliteConnectOptions::new().in_memory(true))
         .await
         .unwrap();
-    contract(&Database::Sqlite(pool)).await;
+    contract(&Database::Sqlite(pool)).await.unwrap();
 }
 
 #[tokio::test]
@@ -574,7 +573,7 @@ async fn postgres_gateway_revision_contract() {
         .connect_with(options.disable_statement_logging())
         .await
         .unwrap();
-    contract(&Database::Postgres(pool.clone())).await;
+    contract(&Database::Postgres(pool.clone())).await.unwrap();
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA \"{schema}\" CASCADE"
