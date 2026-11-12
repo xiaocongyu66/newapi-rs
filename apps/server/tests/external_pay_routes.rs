@@ -22,8 +22,8 @@ use axum::{
 use base64::Engine;
 use newapi_server::external_pay_http::{
     CreemCheckoutRequest, InjectedCreemTransport, InjectedPancakeCheckoutTransport,
-    InjectedStripeTransport, InjectedWaffoTransport, PancakeCheckoutParams,
-    PancakeCheckoutSession, StripeCheckoutParams, WaffoCreds,
+    InjectedStripeTransport, InjectedWaffoTransport, PancakeCheckoutParams, PancakeCheckoutSession,
+    StripeCheckoutParams, WaffoCreds,
 };
 use newapi_server::{AppState, auth::user_auth};
 use newapi_storage::Database;
@@ -100,9 +100,18 @@ fn pay_router(
     pancake: &Arc<FakePancake>,
 ) -> Router {
     Router::new()
-        .route("/api/user/stripe/pay", post(newapi_server::external_pay_http::request_stripe_pay))
-        .route("/api/user/creem/pay", post(newapi_server::external_pay_http::request_creem_pay))
-        .route("/api/user/waffo/pay", post(newapi_server::external_pay_http::request_waffo_pay))
+            "/api/user/stripe/pay",
+            post(newapi_server::external_pay_http::request_stripe_pay),
+        )
+        .route(
+            "/api/user/creem/pay",
+            post(newapi_server::external_pay_http::request_creem_pay),
+        )
+        .route(
+            "/api/user/waffo/pay",
+            post(newapi_server::external_pay_http::request_waffo_pay),
+        )
+        .route(
         .route(
             "/api/user/waffo-pancake/pay",
             post(newapi_server::external_pay_http::request_waffo_pancake_pay),
@@ -110,7 +119,9 @@ fn pay_router(
         .layer(axum::Extension(InjectedStripeTransport(stripe.clone())))
         .layer(axum::Extension(InjectedCreemTransport(creem.clone())))
         .layer(axum::Extension(InjectedWaffoTransport(waffo.clone())))
-        .layer(axum::Extension(InjectedPancakeCheckoutTransport(pancake.clone())))
+        .layer(axum::Extension(InjectedPancakeCheckoutTransport(
+            pancake.clone(),
+        )))
         .route_layer(middleware::from_fn_with_state(state.clone(), user_auth))
         .with_state(state)
 }
@@ -119,9 +130,18 @@ fn pay_router(
 // more without the user-auth layer by routing through the same state.
 fn anonymous_router(state: AppState) -> Router {
     Router::new()
-        .route("/api/stripe/webhook", post(newapi_server::external_pay_http::stripe_webhook))
-        .route("/api/creem/webhook", post(newapi_server::external_pay_http::creem_webhook))
-        .route("/api/waffo/webhook", post(newapi_server::external_pay_http::waffo_webhook))
+            "/api/stripe/webhook",
+            post(newapi_server::external_pay_http::stripe_webhook),
+        )
+        .route(
+            "/api/creem/webhook",
+            post(newapi_server::external_pay_http::creem_webhook),
+        )
+        .route(
+            "/api/waffo/webhook",
+            post(newapi_server::external_pay_http::waffo_webhook),
+        )
+        .route(
         .route(
             "/api/waffo-pancake/webhook/{env}",
             post(newapi_server::external_pay_http::waffo_pancake_webhook),
@@ -191,7 +211,12 @@ async fn send_json(router: &Router, uri: &str, token: &str, body: Value) -> Resp
     response
 }
 
-async fn send_anon(state: &AppState, uri: &str, headers: &[(&str, &str)], body: Vec<u8>) -> Response {
+async fn send_anon(
+    state: &AppState,
+    uri: &str,
+    headers: &[(&str, &str)],
+    body: Vec<u8>,
+) -> Response {
     let mut builder = Request::builder()
         .method("POST")
         .uri(uri)
@@ -207,7 +232,8 @@ async fn send_anon(state: &AppState, uri: &str, headers: &[(&str, &str)], body: 
 
 async fn body_json(response: Response) -> Value {
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 // ---- 注入替身 ---------------------------------------------------------------
@@ -253,7 +279,9 @@ impl newapi_server::external_pay_http::StripeTransport for FakeStripe {
             },
         });
         Box::pin(std::future::ready(
-            self.result.clone().unwrap_or(Ok("https://pay.stripe.com/session".to_owned())),
+            self.result
+                .clone()
+                .unwrap_or(Ok("https://pay.stripe.com/session".to_owned())),
         ))
     }
 }
@@ -279,13 +307,11 @@ impl newapi_server::external_pay_http::CreemTransport for FakeCreem {
                 "quota": request.metadata_quota,
             },
         });
-        *self.seen_request.lock().unwrap() =
-            Some((api_key.to_owned(), test_mode, body));
-        Box::pin(std::future::ready(
-            self.result
-                .clone()
-                .unwrap_or(Ok(("https://creem.io/checkout".to_owned(), "co_1".to_owned()))),
-        ))
+        *self.seen_request.lock().unwrap() = Some((api_key.to_owned(), test_mode, body));
+        Box::pin(std::future::ready(self.result.clone().unwrap_or(Ok((
+            "https://creem.io/checkout".to_owned(),
+            "co_1".to_owned(),
+        )))))
     }
 }
 
@@ -299,7 +325,8 @@ impl newapi_server::external_pay_http::WaffoTransport for FakeWaffo {
         &'a self,
         creds: &'a WaffoCreds,
         body: &'a Value,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(String, String, Value), String>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(String, String, Value), String>> + Send + 'a>>
+    {
         *self.seen.lock().unwrap() = Some((creds.clone(), body.clone()));
         let order_action = json!({
             "actionType": "WEB",
@@ -338,10 +365,7 @@ impl newapi_server::external_pay_http::PancakeCheckoutTransport for FakePancake 
     ) -> std::pin::Pin<
         Box<
             dyn Future<
-                    Output = Result<
-                        PancakeCheckoutSession,
-                        newapi_server::pancake::PancakeError,
-                    >,
+                    Output = Result<PancakeCheckoutSession, newapi_server::pancake::PancakeError>,
                 > + Send
                 + 'a,
         >,
@@ -357,15 +381,15 @@ impl newapi_server::external_pay_http::PancakeCheckoutTransport for FakePancake 
                 order_merchant_external_id: params.order_merchant_external_id.clone(),
             },
         ));
-        Box::pin(std::future::ready(
-            self.result.clone().unwrap_or(Ok(PancakeCheckoutSession {
+        Box::pin(std::future::ready(self.result.clone().unwrap_or(Ok(
+            PancakeCheckoutSession {
                 session_id: "ses_1".to_owned(),
                 checkout_url: "https://pancake.waffo.ai/checkout#token=tok".to_owned(),
                 expires_at: "2026-01-01T00:00:00Z".to_owned(),
                 token: "tok".to_owned(),
                 token_expires_at: "2026-01-01T00:45:00Z".to_owned(),
-            })),
-        ))
+            },
+        ))))
     }
 }
 
@@ -381,8 +405,7 @@ fn test_rsa() -> TestRsa {
     static KEY: std::sync::OnceLock<TestRsa> = std::sync::OnceLock::new();
     KEY.get_or_init(|| {
         let mut rng = rand::rng();
-        let private_key =
-            RsaPrivateKey::new(&mut rng, 2048).expect("generate test RSA key");
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("generate test RSA key");
         TestRsa { private_key }
     })
     .clone()
@@ -419,8 +442,9 @@ impl TestRsa {
         // 显式 STANDARD base64：`Signature` 的 `Display` 不是 base64（CI 曾报
         // SignatureEncoding unused），验证端按 STANDARD 解码。签名原始字节经
         // `SignatureEncoding::to_vec` 取出。
-        base64::engine::general_purpose::STANDARD
-            .encode(rsa::signature::SignatureEncoding::to_vec(&signing.sign(data)))
+        base64::engine::general_purpose::STANDARD.encode(rsa::signature::SignatureEncoding::to_vec(
+            &signing.sign(data),
+        ))
     }
 }
 
@@ -514,29 +538,68 @@ async fn run_contract(db: Database) {
     // ---- Stripe pay ---------------------------------------------------------
     // 错误渠道。
     let body = body_json(
-        send_json(&pay, "/api/user/stripe/pay", auth, json!({
-            "amount": 10, "payment_method": "alipay"
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "不支持的支付渠道"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/stripe/pay",
+            auth,
+            json!({
+                "amount": 10, "payment_method": "alipay"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "不支持的支付渠道"}),
+        "{body}"
+    );
 
     // 低于最小值：message 字段承载文案，data = 10（Go 特例信封）。
     seed_option(&db, "StripeMinTopUp", "10").await;
     let body = body_json(
-        send_json(&pay, "/api/user/stripe/pay", auth, json!({
-            "amount": 9, "payment_method": "stripe"
-        })).await).await;
-    assert_eq!(body, json!({"message": "充值数量不能小于 10", "data": 10}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/stripe/pay",
+            auth,
+            json!({
+                "amount": 9, "payment_method": "stripe"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "充值数量不能小于 10", "data": 10}),
+        "{body}"
+    );
 
     // 超过硬上限 10000。
     let body = body_json(
-        send_json(&pay, "/api/user/stripe/pay", auth, json!({
-            "amount": 10001, "payment_method": "stripe"
-        })).await).await;
-    assert_eq!(body, json!({"message": "充值数量不能大于 10000", "data": 10}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/stripe/pay",
+            auth,
+            json!({
+                "amount": 10001, "payment_method": "stripe"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "充值数量不能大于 10000", "data": 10}),
+        "{body}"
+    );
 
     // 不可信跳转域名 → HTTP 400（无注入的独立路由，外呼不会发生）。
     let bare = Router::new()
-        .route("/api/user/stripe/pay", post(newapi_server::external_pay_http::request_stripe_pay))
+        .route(
+            "/api/user/stripe/pay",
+            post(newapi_server::external_pay_http::request_stripe_pay),
+        )
         .route_layer(middleware::from_fn_with_state(app.clone(), user_auth))
         .with_state(app.clone());
     let response = bare
@@ -547,11 +610,14 @@ async fn run_contract(db: Database) {
                 .uri("/api/user/stripe/pay")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, "Bearer pat-pay")
-                .body(Body::from(json!({
-                    "amount": 10,
-                    "payment_method": "stripe",
-                    "success_url": "https://evil.example.com/callback"
-                }).to_string()))
+                .body(Body::from(
+                    json!({
+                        "amount": 10,
+                        "payment_method": "stripe",
+                        "success_url": "https://evil.example.com/callback"
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -575,9 +641,17 @@ async fn run_contract(db: Database) {
     }
     let success_url = "https://sub.example.org/ok";
     let body = body_json(
-        send_json(&pay, "/api/user/stripe/pay", auth, json!({
-            "amount": 10, "payment_method": "stripe", "success_url": success_url
-        })).await).await;
+        send_json(
+            &pay,
+            "/api/user/stripe/pay",
+            auth,
+            json!({
+                "amount": 10, "payment_method": "stripe", "success_url": success_url
+            }),
+        )
+        .await,
+    )
+    .await;
     let pay_link = body["data"]["pay_link"]
         .as_str()
         .unwrap_or_else(|| panic!("stripe pay body: {body}"))
@@ -615,12 +689,16 @@ async fn run_contract(db: Database) {
     assert_eq!(row.3, "stripe");
 
     // 外呼失败 → 拉起支付失败（订单不落库，Go 同序：先外呼后插单）。
-    let failing: Arc<dyn newapi_server::external_pay_http::StripeTransport> = Arc::new(FakeStripe {
-        calls: Mutex::new(Vec::new()),
-        result: Some(Err("card_declined".to_owned())),
-    });
+    let failing: Arc<dyn newapi_server::external_pay_http::StripeTransport> =
+        Arc::new(FakeStripe {
+            calls: Mutex::new(Vec::new()),
+            result: Some(Err("card_declined".to_owned())),
+        });
     let failing_router = Router::new()
-        .route("/api/user/stripe/pay", post(newapi_server::external_pay_http::request_stripe_pay))
+        .route(
+            "/api/user/stripe/pay",
+            post(newapi_server::external_pay_http::request_stripe_pay),
+        )
         .layer(axum::Extension(InjectedStripeTransport(failing)))
         .route_layer(middleware::from_fn_with_state(app.clone(), user_auth))
         .with_state(app.clone());
@@ -631,58 +709,152 @@ async fn run_contract(db: Database) {
                 .uri("/api/user/stripe/pay")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, "Bearer pat-pay")
-                .body(Body::from(json!({"amount": 10, "payment_method": "stripe"}).to_string()))
+                .body(Body::from(
+                    json!({"amount": 10, "payment_method": "stripe"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
-    assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "拉起支付失败"}),
+        "{body}"
+    );
 
     // ---- Creem pay ----------------------------------------------------------
     let body = body_json(
-        send_json(&pay, "/api/user/creem/pay", auth, json!({
-            "amount": 10, "payment_method": "stripe"
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "不支持的支付渠道"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/creem/pay",
+            auth,
+            json!({
+                "amount": 10, "payment_method": "stripe"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "不支持的支付渠道"}),
+        "{body}"
+    );
     let body = body_json(
-        send_json(&pay, "/api/user/creem/pay", auth, json!({
-            "payment_method": "creem"
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "请选择产品"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/creem/pay",
+            auth,
+            json!({
+                "payment_method": "creem"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "请选择产品"}),
+        "{body}"
+    );
     // Go 默认 CreemProducts = "[]"：解析成功但为空 → 产品不存在；仅非法
     // JSON 才是 产品配置错误。
     let body = body_json(
-        send_json(&pay, "/api/user/creem/pay", auth, json!({
-            "product_id": "p1", "payment_method": "creem"
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "产品不存在"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/creem/pay",
+            auth,
+            json!({
+                "product_id": "p1", "payment_method": "creem"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "产品不存在"}),
+        "{body}"
+    );
     seed_option(&db, "CreemProducts", "not-json").await;
     let body = body_json(
-        send_json(&pay, "/api/user/creem/pay", auth, json!({
-            "product_id": "p1", "payment_method": "creem"
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "产品配置错误"}), "{body}");
-    seed_option(&db, "CreemProducts", r#"[{"productId":"p1","name":"Pack","price":9.9,"currency":"USD","quota":5000000}]"#).await;
+        send_json(
+            &pay,
+            "/api/user/creem/pay",
+            auth,
+            json!({
+                "product_id": "p1", "payment_method": "creem"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "产品配置错误"}),
+        "{body}"
+    );
+    seed_option(
+        &db,
+        "CreemProducts",
+        r#"[{"productId":"p1","name":"Pack","price":9.9,"currency":"USD","quota":5000000}]"#,
+    )
+    .await;
     let body = body_json(
-        send_json(&pay, "/api/user/creem/pay", auth, json!({
-            "product_id": "pX", "payment_method": "creem"
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "产品不存在"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/creem/pay",
+            auth,
+            json!({
+                "product_id": "pX", "payment_method": "creem"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "产品不存在"}),
+        "{body}"
+    );
     // Go genCreemLink：密钥未配置 → 订单已建但拉起失败。
     let body = body_json(
-        send_json(&pay, "/api/user/creem/pay", auth, json!({
-            "product_id": "p1", "payment_method": "creem"
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/creem/pay",
+            auth,
+            json!({
+                "product_id": "p1", "payment_method": "creem"
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "拉起支付失败"}),
+        "{body}"
+    );
     seed_option(&db, "CreemApiKey", "ck").await;
     let body = body_json(
-        send_json(&pay, "/api/user/creem/pay", auth, json!({
-            "product_id": "p1", "payment_method": "creem"
-        })).await).await;
+        send_json(
+            &pay,
+            "/api/user/creem/pay",
+            auth,
+            json!({
+                "product_id": "p1", "payment_method": "creem"
+            }),
+        )
+        .await,
+    )
+    .await;
     assert_eq!(body["message"], json!("success"), "{body}");
-    assert_eq!(body["data"]["checkout_url"], json!("https://creem.io/checkout"));
+    assert_eq!(
+        body["data"]["checkout_url"],
+        json!("https://creem.io/checkout")
+    );
     let order_id = body["data"]["order_id"].as_str().unwrap().to_owned();
     assert!(order_id.starts_with("ref_"));
     let seen = creem.seen_request.lock().unwrap().clone().unwrap();
@@ -692,35 +864,69 @@ async fn run_contract(db: Database) {
     assert_eq!(seen.2["request_id"], json!(order_id));
 
     let row: (i64, f64) = backend!(&db, pool, {
-        sqlx::query_as(
-            r#"SELECT amount, money FROM top_ups WHERE trade_no = $1"#,
-        )
-        .bind(&order_id)
-        .fetch_one(pool)
-        .await
-        .expect("creem order")
+        sqlx::query_as(r#"SELECT amount, money FROM top_ups WHERE trade_no = $1"#)
+            .bind(&order_id)
+            .fetch_one(pool)
+            .await
+            .expect("creem order")
     });
     assert_eq!(row.0, 5_000_000);
     assert_eq!(row.1, 9.9);
 
     // ---- Waffo pay ----------------------------------------------------------
     let body = body_json(
-        send_json(&pay, "/api/user/waffo/pay", auth, json!({
-            "amount": 10
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "Waffo 支付未启用"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/waffo/pay",
+            auth,
+            json!({
+                "amount": 10
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "Waffo 支付未启用"}),
+        "{body}"
+    );
     seed_option(&db, "WaffoEnabled", "true").await;
     seed_option(&db, "WaffoMinTopUp", "10").await;
     let body = body_json(
-        send_json(&pay, "/api/user/waffo/pay", auth, json!({
-            "amount": 5
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "充值数量不能小于 10"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/waffo/pay",
+            auth,
+            json!({
+                "amount": 5
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "充值数量不能小于 10"}),
+        "{body}"
+    );
     let body = body_json(
-        send_json(&pay, "/api/user/waffo/pay", auth, json!({
-            "amount": 10, "pay_method_index": 5
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "不支持的支付方式"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/waffo/pay",
+            auth,
+            json!({
+                "amount": 10, "pay_method_index": 5
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "不支持的支付方式"}),
+        "{body}"
+    );
     // 服务端支付方式列表 + 索引解析；SDK Build 的凭证格式校验在此前完成，
     // 因此先注入合法的 RSA 凭证。
     let waffo_private = test_rsa().pkcs8_base64();
@@ -736,11 +942,22 @@ async fn run_contract(db: Database) {
     )
     .await;
     let body = body_json(
-        send_json(&pay, "/api/user/waffo/pay", auth, json!({
-            "amount": 10, "pay_method_index": 0
-        })).await).await;
+        send_json(
+            &pay,
+            "/api/user/waffo/pay",
+            auth,
+            json!({
+                "amount": 10, "pay_method_index": 0
+            }),
+        )
+        .await,
+    )
+    .await;
     assert_eq!(body["message"], json!("success"), "{body}");
-    assert_eq!(body["data"]["payment_url"], json!("https://cashier.waffo.com/pay"));
+    assert_eq!(
+        body["data"]["payment_url"],
+        json!("https://cashier.waffo.com/pay")
+    );
     let waffo_order_id = body["data"]["order_id"].as_str().unwrap().to_owned();
     assert!(waffo_order_id.starts_with("WAFFO-7-"));
     let seen = waffo.seen.lock().unwrap().clone().unwrap();
@@ -754,27 +971,32 @@ async fn run_contract(db: Database) {
     assert_eq!(seen.1["userInfo"]["userEmail"], json!("7@examples.com"));
     assert_eq!(seen.1["paymentInfo"]["payMethodType"], json!("CARD"));
     assert_eq!(seen.1["goodsInfo"]["appName"], json!("New API"));
-    assert_eq!(seen.1["notifyUrl"], json!("http://localhost:3000/api/waffo/webhook"));
+    assert_eq!(
+        seen.1["notifyUrl"],
+        json!("http://localhost:3000/api/waffo/webhook")
+    );
     assert_eq!(seen.1["merchantInfo"]["merchantId"], json!("MCH_W"));
     let row: (i64, String) = backend!(&db, pool, {
-        sqlx::query_as(
-            r#"SELECT amount, status FROM top_ups WHERE trade_no = $1"#,
-        )
-        .bind(&waffo_order_id)
-        .fetch_one(pool)
-        .await
-        .expect("waffo order")
+        sqlx::query_as(r#"SELECT amount, status FROM top_ups WHERE trade_no = $1"#)
+            .bind(&waffo_order_id)
+            .fetch_one(pool)
+            .await
+            .expect("waffo order")
     });
     assert_eq!(row.0, 10);
     assert_eq!(row.1, "pending");
 
     // 上游业务失败 → 订单标 failed + 拉起支付失败。
-    let failing_waffo: Arc<dyn newapi_server::external_pay_http::WaffoTransport> = Arc::new(FakeWaffo {
-        result: Some(Ok(("E0002".to_owned(), "declined".to_owned(), Value::Null))),
-        seen: Mutex::new(None),
-    });
+    let failing_waffo: Arc<dyn newapi_server::external_pay_http::WaffoTransport> =
+        Arc::new(FakeWaffo {
+            result: Some(Ok(("E0002".to_owned(), "declined".to_owned(), Value::Null))),
+            seen: Mutex::new(None),
+        });
     let failing_router = Router::new()
-        .route("/api/user/waffo/pay", post(newapi_server::external_pay_http::request_waffo_pay))
+        .route(
+            "/api/user/waffo/pay",
+            post(newapi_server::external_pay_http::request_waffo_pay),
+        )
         .layer(axum::Extension(InjectedWaffoTransport(failing_waffo)))
         .route_layer(middleware::from_fn_with_state(app.clone(), user_auth))
         .with_state(app.clone());
@@ -785,13 +1007,19 @@ async fn run_contract(db: Database) {
                 .uri("/api/user/waffo/pay")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::AUTHORIZATION, "Bearer pat-pay")
-                .body(Body::from(json!({"amount": 10, "pay_method_index": 0}).to_string()))
+                .body(Body::from(
+                    json!({"amount": 10, "pay_method_index": 0}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     let body = body_json(response).await;
-    assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "拉起支付失败"}),
+        "{body}"
+    );
     let status: String = backend!(&db, pool, {
         sqlx::query_scalar(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
             .fetch_one(pool)
@@ -802,10 +1030,22 @@ async fn run_contract(db: Database) {
 
     // ---- Waffo Pancake pay --------------------------------------------------
     let body = body_json(
-        send_json(&pay, "/api/user/waffo-pancake/pay", auth, json!({
-            "amount": 10
-        })).await).await;
-    assert_eq!(body, json!({"message": "error", "data": "Waffo Pancake 配置不完整"}), "{body}");
+        send_json(
+            &pay,
+            "/api/user/waffo-pancake/pay",
+            auth,
+            json!({
+                "amount": 10
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "Waffo Pancake 配置不完整"}),
+        "{body}"
+    );
     seed_option(&db, "payment_setting.compliance_confirmed", "true").await;
     seed_option(&db, "payment_setting.compliance_terms_version", "v1").await;
     seed_option(&db, "WaffoPancakeMerchantID", "MCH_1").await;
@@ -813,9 +1053,17 @@ async fn run_contract(db: Database) {
     seed_option(&db, "WaffoPancakeProductID", "PROD_1").await;
     seed_option(&db, "WaffoPancakeMinTopUp", "10").await;
     let body = body_json(
-        send_json(&pay, "/api/user/waffo-pancake/pay", auth, json!({
-            "amount": 10
-        })).await).await;
+        send_json(
+            &pay,
+            "/api/user/waffo-pancake/pay",
+            auth,
+            json!({
+                "amount": 10
+            }),
+        )
+        .await,
+    )
+    .await;
     assert_eq!(body["message"], json!("success"), "{body}");
     assert_eq!(
         body["data"]["checkout_url"],
@@ -844,7 +1092,9 @@ async fn run_contract(db: Database) {
             "/api/user/waffo-pancake/pay",
             post(newapi_server::external_pay_http::request_waffo_pancake_pay),
         )
-        .layer(axum::Extension(InjectedPancakeCheckoutTransport(failing_pancake)))
+        .layer(axum::Extension(InjectedPancakeCheckoutTransport(
+            failing_pancake,
+        )))
         .route_layer(middleware::from_fn_with_state(app.clone(), user_auth))
         .with_state(app.clone());
     let response = failing_router
@@ -860,7 +1110,11 @@ async fn run_contract(db: Database) {
         .await
         .unwrap();
     let body = body_json(response).await;
-    assert_eq!(body, json!({"message": "error", "data": "拉起支付失败"}), "{body}");
+    assert_eq!(
+        body,
+        json!({"message": "error", "data": "拉起支付失败"}),
+        "{body}"
+    );
     let status: String = backend!(&db, pool, {
         sqlx::query_scalar(r#"SELECT status FROM top_ups ORDER BY id DESC LIMIT 1"#)
             .fetch_one(pool)
@@ -902,7 +1156,11 @@ async fn run_contract(db: Database) {
     // 此处用「price id 缺失」不可行，改为信任启用门由 settings 单测覆盖，
     // 这里只测验签与履约。
     let response = send_anon(&anon, "/api/stripe/webhook", &[], payload.clone()).await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "missing signature");
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "missing signature"
+    );
 
     // 正确签名 → 履约入账（Money × QuotaPerUnit = 10）。
     let timestamp = now_seconds().to_string();
@@ -933,12 +1191,10 @@ async fn run_contract(db: Database) {
     assert_eq!(status, "success");
     // Go `Recharge` 把 customer id 写进 users.stripe_customer。
     let customer: String = backend!(&db, pool, {
-        sqlx::query_scalar(
-            r#"SELECT COALESCE(stripe_customer, '') FROM users WHERE id = 7"#,
-        )
-        .fetch_one(pool)
-        .await
-        .expect("stripe customer after webhook")
+        sqlx::query_scalar(r#"SELECT COALESCE(stripe_customer, '') FROM users WHERE id = 7"#)
+            .fetch_one(pool)
+            .await
+            .expect("stripe customer after webhook")
     });
     assert_eq!(customer, "cus_1");
 

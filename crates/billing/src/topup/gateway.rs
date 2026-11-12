@@ -903,8 +903,7 @@ pub async fn recharge_external_top_up(
     match db {
         Database::Sqlite(pool) => {
             let mut tx = pool.begin().await?;
-            let outcome =
-                recharge_external_in_tx_sqlite(&mut tx, &params).await;
+            let outcome = recharge_external_in_tx_sqlite(&mut tx, &params).await;
             if outcome.is_err() {
                 tx.rollback().await.ok();
                 return outcome;
@@ -1003,33 +1002,29 @@ macro_rules! recharge_external_in_tx_impl {
                     .await?
                     .rows_affected()
             }
-            ExternalUserUpdate::StripeCustomer(customer) => {
-                sqlx::query(
-                    "UPDATE users SET quota = quota + $1, stripe_customer = $2 \
+            ExternalUserUpdate::StripeCustomer(customer) => sqlx::query(
+                "UPDATE users SET quota = quota + $1, stripe_customer = $2 \
                      WHERE id = $3 AND quota <= $4",
-                )
-                .bind(quota_added)
-                .bind(customer)
-                .bind(user_id)
-                .bind(max_current)
-                .execute(&mut **$tx)
-                .await?
-                .rows_affected()
-            }
-            ExternalUserUpdate::EmailIfEmpty(email) => {
-                sqlx::query(
-                    "UPDATE users SET quota = quota + $1, \
+            )
+            .bind(quota_added)
+            .bind(customer)
+            .bind(user_id)
+            .bind(max_current)
+            .execute(&mut **$tx)
+            .await?
+            .rows_affected(),
+            ExternalUserUpdate::EmailIfEmpty(email) => sqlx::query(
+                "UPDATE users SET quota = quota + $1, \
                      email = CASE WHEN email IS NULL OR email = '' THEN $2 ELSE email END \
                      WHERE id = $3 AND quota <= $4",
-                )
-                .bind(quota_added)
-                .bind(email)
-                .bind(user_id)
-                .bind(max_current)
-                .execute(&mut **$tx)
-                .await?
-                .rows_affected()
-            }
+            )
+            .bind(quota_added)
+            .bind(email)
+            .bind(user_id)
+            .bind(max_current)
+            .execute(&mut **$tx)
+            .await?
+            .rows_affected(),
         };
         if credited == 0 {
             let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
@@ -1085,50 +1080,46 @@ pub async fn update_pending_top_up_status(
         return Err(RechargeError::NotFound);
     }
     let updated = match db {
-        Database::Sqlite(pool) => {
-            sqlx::query(
-                "UPDATE top_ups SET status = $1 WHERE trade_no = $2 \
+        Database::Sqlite(pool) => sqlx::query(
+            "UPDATE top_ups SET status = $1 WHERE trade_no = $2 \
                  AND payment_provider = $3 AND status = $4",
-            )
-            .bind(target_status)
-            .bind(trade_no)
-            .bind(expected_provider)
-            .bind(STATUS_PENDING)
-            .execute(pool)
-            .await?
-            .rows_affected()
-        }
-        Database::Postgres(pool) => {
-            sqlx::query(
-                "UPDATE top_ups SET status = $1 WHERE trade_no = $2 \
+        )
+        .bind(target_status)
+        .bind(trade_no)
+        .bind(expected_provider)
+        .bind(STATUS_PENDING)
+        .execute(pool)
+        .await?
+        .rows_affected(),
+        Database::Postgres(pool) => sqlx::query(
+            "UPDATE top_ups SET status = $1 WHERE trade_no = $2 \
                  AND payment_provider = $3 AND status = $4",
-            )
-            .bind(target_status)
-            .bind(trade_no)
-            .bind(expected_provider)
-            .bind(STATUS_PENDING)
-            .execute(pool)
-            .await?
-            .rows_affected()
-        }
+        )
+        .bind(target_status)
+        .bind(trade_no)
+        .bind(expected_provider)
+        .bind(STATUS_PENDING)
+        .execute(pool)
+        .await?
+        .rows_affected(),
     };
     if updated > 0 {
         return Ok(());
     }
     // 条件翻转失败时重读订单行区分三种哨兵错误（与 Go 的先读后写等序）。
     let row: Option<(Option<String>, Option<String>)> = match db {
-        Database::Sqlite(pool) => sqlx::query_as(
-            "SELECT payment_provider, status FROM top_ups WHERE trade_no = $1",
-        )
-        .bind(trade_no)
-        .fetch_optional(pool)
-        .await?,
-        Database::Postgres(pool) => sqlx::query_as(
-            "SELECT payment_provider, status FROM top_ups WHERE trade_no = $1",
-        )
-        .bind(trade_no)
-        .fetch_optional(pool)
-        .await?,
+        Database::Sqlite(pool) => {
+            sqlx::query_as("SELECT payment_provider, status FROM top_ups WHERE trade_no = $1")
+                .bind(trade_no)
+                .fetch_optional(pool)
+                .await?
+        }
+        Database::Postgres(pool) => {
+            sqlx::query_as("SELECT payment_provider, status FROM top_ups WHERE trade_no = $1")
+                .bind(trade_no)
+                .fetch_optional(pool)
+                .await?
+        }
     };
     let Some((provider, _status)) = row else {
         return Err(RechargeError::NotFound);
@@ -1141,7 +1132,11 @@ pub async fn update_pending_top_up_status(
 
 /// Go 网关上游失败后把订单行标记为 failed（`topUp.Status = failed;
 /// topUp.Update()`，按 trade_no 直接覆盖，无状态谓词）。
-pub async fn set_topup_status(db: &Database, trade_no: &str, status: &str) -> Result<(), sqlx::Error> {
+pub async fn set_topup_status(
+    db: &Database,
+    trade_no: &str,
+    status: &str,
+) -> Result<(), sqlx::Error> {
     match db {
         Database::Sqlite(pool) => {
             sqlx::query("UPDATE top_ups SET status = $1 WHERE trade_no = $2")

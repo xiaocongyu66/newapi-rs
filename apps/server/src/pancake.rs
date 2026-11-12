@@ -508,7 +508,12 @@ pub(crate) fn sign_pkcs1_sha256(
 ) -> Result<String, ring::error::Unspecified> {
     let mut signature = vec![0u8; key.public().modulus_len()];
     let rng = ring::rand::SystemRandom::new();
-    key.sign(&ring::signature::RSA_PKCS1_SHA256, &rng, data, &mut signature)?;
+    key.sign(
+        &ring::signature::RSA_PKCS1_SHA256,
+        &rng,
+        data,
+        &mut signature,
+    )?;
     Ok(base64::engine::general_purpose::STANDARD.encode(signature))
 }
 

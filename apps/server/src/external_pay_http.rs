@@ -42,7 +42,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::Engine;
-use rsa::pkcs8::DecodePublicKey;
 use newapi_billing::topup::{
     ExternalQuotaSource, ExternalRechargeParams, ExternalUserUpdate, PROVIDER_CREEM,
     PROVIDER_STRIPE, PROVIDER_WAFFO, PROVIDER_WAFFO_PANCAKE, STATUS_EXPIRED, STATUS_FAILED,
@@ -53,13 +52,12 @@ use newapi_billing::topup::{
 };
 use newapi_identity::self_user::QuotaDisplayKind;
 use newapi_identity::users::UserProfileRepository;
+use rsa::pkcs8::DecodePublicKey;
 use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::auth::AuthenticatedUser;
-use crate::gateway_http::{
-    callback_addresses, parses_as_json, payment_return_path, query_escape,
-};
+use crate::gateway_http::{callback_addresses, parses_as_json, payment_return_path, query_escape};
 
 type PancakePayFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, crate::pancake::PancakeError>> + Send + 'a>>;
@@ -323,11 +321,7 @@ pub struct WaffoCreds {
 /// Waffo 订单创建外呼能力；实现内完成 RSA 请求签名、响应验签与信封解析，
 /// 返回 `(code, msg, data)` 原始三元组（`code == "0"` 即业务成功）。
 pub trait WaffoTransport: Send + Sync {
-    fn create_order<'a>(
-        &'a self,
-        creds: &'a WaffoCreds,
-        body: &'a Value,
-    ) -> WaffoFuture<'a>;
+    fn create_order<'a>(&'a self, creds: &'a WaffoCreds, body: &'a Value) -> WaffoFuture<'a>;
 }
 
 #[derive(Clone)]
@@ -380,8 +374,7 @@ impl StripeTransport for HttpStripeTransport {
         params: &'a StripeCheckoutParams,
     ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
         Box::pin(async move {
-            let client = external_client()
-                .ok_or_else(|| "transport unavailable".to_owned())?;
+            let client = external_client().ok_or_else(|| "transport unavailable".to_owned())?;
             // stripe-go 的 `url.Values.Encode`：与 `query_escape` 同为 `+` 空格。
             let mut form: Vec<(String, String)> = vec![
                 (
@@ -403,10 +396,7 @@ impl StripeTransport for HttpStripeTransport {
             ];
             if params.customer_id.is_empty() {
                 if !params.customer_email.is_empty() {
-                    form.push((
-                        "customer_email".to_owned(),
-                        params.customer_email.clone(),
-                    ));
+                    form.push(("customer_email".to_owned(), params.customer_email.clone()));
                 }
                 form.push(("customer_creation".to_owned(), "always".to_owned()));
             } else {
@@ -419,19 +409,21 @@ impl StripeTransport for HttpStripeTransport {
                 .join("&");
             let response = client
                 .post("https://api.stripe.com/v1/checkout/sessions")
-                .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_secret}"))
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {api_secret}"),
+                )
                 .body(body)
                 .send()
                 .await
                 .map_err(|error| error.to_string())?;
             let status = response.status();
-            let raw = response
-                .bytes()
-                .await
-                .map_err(|error| error.to_string())?;
-            let parsed: Value = serde_json::from_slice(&raw)
-                .map_err(|error| error.to_string())?;
+            let raw = response.bytes().await.map_err(|error| error.to_string())?;
+            let parsed: Value = serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
             if !status.is_success() {
                 // stripe-go `stripe.Error`：优先取 `error.message`。
                 let message = parsed
@@ -467,8 +459,7 @@ impl CreemTransport for HttpCreemTransport {
         request: &'a CreemCheckoutRequest,
     ) -> CreemFuture<'a> {
         Box::pin(async move {
-            let client = external_client()
-                .ok_or_else(|| "transport unavailable".to_owned())?;
+            let client = external_client().ok_or_else(|| "transport unavailable".to_owned())?;
             let api_url = if test_mode {
                 "https://test-api.creem.io/v1/checkouts"
             } else {
@@ -494,15 +485,11 @@ impl CreemTransport for HttpCreemTransport {
                 .await
                 .map_err(|error| error.to_string())?;
             let status = response.status().as_u16();
-            let raw = response
-                .bytes()
-                .await
-                .map_err(|error| error.to_string())?;
+            let raw = response.bytes().await.map_err(|error| error.to_string())?;
             if status / 100 != 2 {
                 return Err(format!("Creem API http status {status} "));
             }
-            let parsed: Value =
-                serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+            let parsed: Value = serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
             let checkout_url = parsed
                 .get("checkout_url")
                 .and_then(Value::as_str)
@@ -532,22 +519,14 @@ const WAFFO_SANDBOX_BASE_URL: &str = "https://api-sandbox.waffo.com/api/v1";
 const WAFFO_PRODUCTION_BASE_URL: &str = "https://api.waffo.com/api/v1";
 
 impl WaffoTransport for HttpWaffoTransport {
-    fn create_order<'a>(
-        &'a self,
-        creds: &'a WaffoCreds,
-        body: &'a Value,
-    ) -> WaffoFuture<'a> {
+    fn create_order<'a>(&'a self, creds: &'a WaffoCreds, body: &'a Value) -> WaffoFuture<'a> {
         Box::pin(async move {
-            let client = external_client()
-                .ok_or_else(|| "transport unavailable".to_owned())?;
+            let client = external_client().ok_or_else(|| "transport unavailable".to_owned())?;
             let body_text = body.to_string();
             let key = crate::pancake::parse_private_key(&creds.private_key)
                 .map_err(|_| "invalid private key".to_owned())?;
-            let signature = crate::pancake::sign_pkcs1_sha256(
-                &key,
-                body_text.as_bytes(),
-            )
-            .map_err(|_| "sign request".to_owned())?;
+            let signature = crate::pancake::sign_pkcs1_sha256(&key, body_text.as_bytes())
+                .map_err(|_| "sign request".to_owned())?;
             let base_url = if creds.sandbox {
                 WAFFO_SANDBOX_BASE_URL
             } else {
@@ -569,18 +548,14 @@ impl WaffoTransport for HttpWaffoTransport {
                 .get("X-SIGNATURE")
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
-            let raw = response
-                .bytes()
-                .await
-                .map_err(|error| error.to_string())?;
+            let raw = response.bytes().await.map_err(|error| error.to_string())?;
             // Go SDK：响应携带签名头时先验签再解析。
             if let Some(signature) = response_signature
                 && !waffo_verify(&raw, &signature, &creds.public_cert)
             {
                 return Err("response signature verification failed".to_owned());
             }
-            let parsed: Value =
-                serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+            let parsed: Value = serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
             let code = parsed
                 .get("code")
                 .and_then(Value::as_str)
@@ -714,8 +689,7 @@ fn external_client() -> Option<&'static reqwest::Client> {
 
 /// Waffo SDK `utils.Verify`：base64 SPKI 公钥 + base64 PKCS#1v15 签名。
 fn waffo_verify(data: &[u8], signature: &str, base64_public_key: &str) -> bool {
-    let Ok(der) = base64::engine::general_purpose::STANDARD.decode(base64_public_key.trim())
-    else {
+    let Ok(der) = base64::engine::general_purpose::STANDARD.decode(base64_public_key.trim()) else {
         return false;
     };
     let Ok(key) = rsa::RsaPublicKey::from_public_key_der(&der) else {
@@ -732,8 +706,7 @@ fn pancake_verify(signature_input: &str, signature: &str, key: &rsa::RsaPublicKe
 fn rsa_pkcs1_verify(key: &rsa::RsaPublicKey, data: &[u8], signature: &str) -> bool {
     use rsa::pkcs1v15::VerifyingKey;
     use rsa::signature::Verifier;
-    let Ok(signature) = base64::engine::general_purpose::STANDARD.decode(signature.trim())
-    else {
+    let Ok(signature) = base64::engine::general_purpose::STANDARD.decode(signature.trim()) else {
         return false;
     };
     let Ok(signature) = rsa::pkcs1v15::Signature::try_from(signature.as_slice()) else {
@@ -850,9 +823,9 @@ struct ParsedUrl {
 fn url_parse(raw: &str) -> Option<ParsedUrl> {
     let (scheme, rest) = raw.split_once("://")?;
     if scheme.is_empty()
-        || !scheme
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'))
+        || !scheme.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        })
     {
         return None;
     }
@@ -860,10 +833,7 @@ fn url_parse(raw: &str) -> Option<ParsedUrl> {
         return None;
     }
     // 去掉 path/query/fragment，再剥 userinfo。
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let host = match authority.rsplit_once('@') {
         Some((_, host)) => host,
         None => authority,
@@ -903,7 +873,11 @@ fn verify_stripe_signature(
         };
         match key {
             "t" => {
-                timestamp = Some(value.parse::<i64>().map_err(|_| StripeVerifyError::InvalidHeader)?);
+                timestamp = Some(
+                    value
+                        .parse::<i64>()
+                        .map_err(|_| StripeVerifyError::InvalidHeader)?,
+                );
             }
             "v1" => {
                 if let Ok(signature) = hex_decode(value) {
@@ -1007,9 +981,7 @@ pub async fn request_stripe_pay(
     if request.amount > 10_000 {
         return pay_error_message_field("充值数量不能大于 10000".to_owned());
     }
-    if !request.success_url.is_empty()
-        && validate_redirect_url(&request.success_url).is_err()
-    {
+    if !request.success_url.is_empty() && validate_redirect_url(&request.success_url).is_err() {
         // 注意状态码：Go 是 400 而非 200。
         return (
             StatusCode::BAD_REQUEST,
@@ -1248,7 +1220,11 @@ pub async fn request_creem_pay(
         None => &HttpCreemTransport,
     };
     match transport
-        .create_checkout(&settings.creem_api_key, settings.creem_test_mode, &checkout_request)
+        .create_checkout(
+            &settings.creem_api_key,
+            settings.creem_test_mode,
+            &checkout_request,
+        )
         .await
     {
         Ok((checkout_url, _id)) => {
@@ -1367,7 +1343,10 @@ fn waffo_redirect_url(order_action: &str) -> String {
     let Ok(action) = serde_json::from_str::<Value>(order_action) else {
         return String::new();
     };
-    let action_type = action.get("actionType").and_then(Value::as_str).unwrap_or("");
+    let action_type = action
+        .get("actionType")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let deeplink = action
         .get("deeplinkUrl")
         .and_then(Value::as_str)
@@ -1425,8 +1404,7 @@ pub async fn request_waffo_pay(
         _ => return pay_error_str(MSG_USER_MISSING),
     };
     // Go `rejectInvalidTopUpQuota`：额度换算 + 钱包容量预检。
-    let credited = match validate_top_up_quota(&settings, request.amount, tokens, quota_per_unit)
-    {
+    let credited = match validate_top_up_quota(&settings, request.amount, tokens, quota_per_unit) {
         Ok(credited) => credited,
         Err(TopUpQuotaRejection::ExceedsMax(max)) => {
             return pay_error(format!("单笔充值数量不能大于 {max}"));
@@ -1437,9 +1415,7 @@ pub async fn request_waffo_pay(
         return pay_error_str(rejection.message());
     }
     // 支付方式解析：优先索引，其次旧字段（须在服务端列表内）。
-    let methods = settings
-        .waffo_pay_methods
-        .parse_waffo_methods();
+    let methods = settings.waffo_pay_methods.parse_waffo_methods();
     let mut resolved_type = String::new();
     let mut resolved_name = String::new();
     if let Some(index) = request.pay_method_index {
@@ -1471,7 +1447,13 @@ pub async fn request_waffo_pay(
         resolved_type = request.pay_method_type.clone();
         resolved_name = request.pay_method_name.clone();
     }
-    let pay_money = waffo_pay_money(&settings, request.amount, &profile.group, tokens, quota_per_unit);
+    let pay_money = waffo_pay_money(
+        &settings,
+        request.amount,
+        &profile.group,
+        tokens,
+        quota_per_unit,
+    );
     if pay_money < 0.01 {
         return pay_error_str(MSG_AMOUNT_TOO_SMALL);
     }
@@ -1706,8 +1688,7 @@ pub async fn request_waffo_pancake_pay(
         Ok(Some(profile)) => profile,
         _ => return pay_error_str(MSG_USER_MISSING),
     };
-    let credited = match validate_top_up_quota(&settings, request.amount, tokens, quota_per_unit)
-    {
+    let credited = match validate_top_up_quota(&settings, request.amount, tokens, quota_per_unit) {
         Ok(credited) => credited,
         Err(TopUpQuotaRejection::ExceedsMax(max)) => {
             return pay_error(format!("单笔充值数量不能大于 {max}"));
@@ -1717,8 +1698,13 @@ pub async fn request_waffo_pancake_pay(
     if let Err(rejection) = check_capacity(credited, profile.quota) {
         return pay_error_str(rejection.message());
     }
-    let pay_money =
-        waffo_pancake_pay_money(&settings, request.amount, &profile.group, tokens, quota_per_unit);
+    let pay_money = waffo_pancake_pay_money(
+        &settings,
+        request.amount,
+        &profile.group,
+        tokens,
+        quota_per_unit,
+    );
     if pay_money < 0.01 {
         return pay_error_str(MSG_AMOUNT_TOO_SMALL);
     }
@@ -1843,14 +1829,26 @@ fn parse_stripe_event(payload: &[u8]) -> Option<StripeEvent> {
     let parsed: Value = serde_json::from_slice(payload).ok()?;
     let object = parsed.get("data")?.get("object")?;
     Some(StripeEvent {
-        event_type: parsed.get("type").and_then(Value::as_str).unwrap_or("").to_owned(),
-        customer: object.get("customer").and_then(Value::as_str).unwrap_or("").to_owned(),
+        event_type: parsed
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        customer: object
+            .get("customer")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
         client_reference_id: object
             .get("client_reference_id")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
-        status: object.get("status").and_then(Value::as_str).unwrap_or("").to_owned(),
+        status: object
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
         payment_status: object
             .get("payment_status")
             .and_then(Value::as_str)
@@ -1879,7 +1877,10 @@ async fn stripe_fulfill_order(
     quota_per_unit: f64,
 ) -> Result<(), newapi_billing::topup::RechargeError> {
     if event.client_reference_id.is_empty() {
-        tracing::warn!(event = "stripe_fulfill_missing_trade_no", "Stripe 完成订单时缺少订单号");
+        tracing::warn!(
+            event = "stripe_fulfill_missing_trade_no",
+            "Stripe 完成订单时缺少订单号"
+        );
         return Ok(());
     }
     // Go `Recharge`：额度来自订单行的 `Money × QuotaPerUnit`
@@ -1938,21 +1939,26 @@ pub async fn stripe_webhook(
         }
     };
     if !settings.is_stripe_topup_enabled() {
-        tracing::warn!(event = "stripe_webhook_disabled", "Stripe webhook 被拒绝 reason=webhook_disabled");
+        tracing::warn!(
+            event = "stripe_webhook_disabled",
+            "Stripe webhook 被拒绝 reason=webhook_disabled"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     let signature = headers
         .get("Stripe-Signature")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    if let Err(error) = verify_stripe_signature(&body, signature, &settings.stripe_webhook_secret)
-    {
+    if let Err(error) = verify_stripe_signature(&body, signature, &settings.stripe_webhook_secret) {
         tracing::warn!(event = "stripe_webhook_verify_failed", reason = ?error, "Stripe webhook 验签失败");
         return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(event) = parse_stripe_event(&body) else {
         // Go：验签成功但 JSON 解析失败 → 400。
-        tracing::warn!(event = "stripe_webhook_parse_failed", "Stripe webhook 解析失败");
+        tracing::warn!(
+            event = "stripe_webhook_parse_failed",
+            "Stripe webhook 解析失败"
+        );
         return StatusCode::BAD_REQUEST.into_response();
     };
     let display = state.quota_display();
@@ -2052,7 +2058,10 @@ pub async fn creem_webhook(
         }
     };
     if !settings.is_creem_topup_enabled() || settings.creem_webhook_secret.trim().is_empty() {
-        tracing::warn!(event = "creem_webhook_disabled", "Creem webhook 被拒绝 reason=webhook_disabled");
+        tracing::warn!(
+            event = "creem_webhook_disabled",
+            "Creem webhook 被拒绝 reason=webhook_disabled"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     let signature = headers
@@ -2060,17 +2069,26 @@ pub async fn creem_webhook(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     if signature.is_empty() {
-        tracing::warn!(event = "creem_webhook_missing_signature", "Creem webhook 缺少签名");
+        tracing::warn!(
+            event = "creem_webhook_missing_signature",
+            "Creem webhook 缺少签名"
+        );
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if !verify_creem_signature(&body, signature, &settings.creem_webhook_secret) {
-        tracing::warn!(event = "creem_webhook_verify_failed", "Creem webhook 验签失败");
+        tracing::warn!(
+            event = "creem_webhook_verify_failed",
+            "Creem webhook 验签失败"
+        );
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let event: Value = match serde_json::from_slice(&body) {
         Ok(event) => event,
         Err(_) => {
-            tracing::warn!(event = "creem_webhook_parse_failed", "Creem webhook 解析失败");
+            tracing::warn!(
+                event = "creem_webhook_parse_failed",
+                "Creem webhook 解析失败"
+            );
             return StatusCode::BAD_REQUEST.into_response();
         }
     };
@@ -2200,18 +2218,18 @@ async fn lookup_topup(
     trade_no: &str,
 ) -> Result<Option<TopupSnapshot>, sqlx::Error> {
     let row: Option<(Option<String>,)> = match db {
-        newapi_storage::Database::Sqlite(pool) => sqlx::query_as(
-            "SELECT status FROM top_ups WHERE trade_no = $1",
-        )
-        .bind(trade_no)
-        .fetch_optional(pool)
-        .await?,
-        newapi_storage::Database::Postgres(pool) => sqlx::query_as(
-            "SELECT status FROM top_ups WHERE trade_no = $1",
-        )
-        .bind(trade_no)
-        .fetch_optional(pool)
-        .await?,
+        newapi_storage::Database::Sqlite(pool) => {
+            sqlx::query_as("SELECT status FROM top_ups WHERE trade_no = $1")
+                .bind(trade_no)
+                .fetch_optional(pool)
+                .await?
+        }
+        newapi_storage::Database::Postgres(pool) => {
+            sqlx::query_as("SELECT status FROM top_ups WHERE trade_no = $1")
+                .bind(trade_no)
+                .fetch_optional(pool)
+                .await?
+        }
     };
     Ok(row.map(|(status,)| TopupSnapshot {
         status: status.unwrap_or_default(),
@@ -2239,13 +2257,19 @@ pub async fn waffo_webhook(
         }
     };
     if !settings.is_waffo_topup_enabled() {
-        tracing::warn!(event = "waffo_webhook_disabled", "Waffo webhook 被拒绝 reason=webhook_disabled");
+        tracing::warn!(
+            event = "waffo_webhook_disabled",
+            "Waffo webhook 被拒绝 reason=webhook_disabled"
+        );
         return StatusCode::FORBIDDEN.into_response();
     }
     let creds = match waffo_creds(&settings) {
         Ok(creds) => creds,
         Err(()) => {
-            tracing::error!(event = "waffo_webhook_sdk_init_failed", "Waffo webhook SDK 初始化失败");
+            tracing::error!(
+                event = "waffo_webhook_sdk_init_failed",
+                "Waffo webhook SDK 初始化失败"
+            );
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
@@ -2254,7 +2278,10 @@ pub async fn waffo_webhook(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     if !waffo_verify(&body, signature, &creds.public_cert) {
-        tracing::warn!(event = "waffo_webhook_verify_failed", "Waffo webhook 验签失败");
+        tracing::warn!(
+            event = "waffo_webhook_verify_failed",
+            "Waffo webhook 验签失败"
+        );
         return StatusCode::BAD_REQUEST.into_response();
     }
     let parsed: Value = match serde_json::from_slice(&body) {
@@ -2292,10 +2319,7 @@ pub async fn waffo_webhook(
                     .await
         {
             use newapi_billing::topup::RechargeError as Error;
-            if !matches!(
-                error,
-                Error::NotFound | Error::StatusInvalid
-            ) {
+            if !matches!(error, Error::NotFound | Error::StatusInvalid) {
                 tracing::error!(trade_no = %merchant_order_id, "Waffo 标记失败订单状态失败");
             }
         }
@@ -2340,13 +2364,22 @@ fn waffo_signed_response(creds: &WaffoCreds, success: bool, _message: &str) -> R
         json!({"message": "failed"}).to_string()
     };
     let signature = crate::pancake::parse_private_key(&creds.private_key)
-        .and_then(|key| crate::pancake::sign_pkcs1_sha256(&key, body.as_bytes()).map_err(|_| "sign".to_owned()))
+        .and_then(|key| {
+            crate::pancake::sign_pkcs1_sha256(&key, body.as_bytes()).map_err(|_| "sign".to_owned())
+        })
         .unwrap_or_default();
     (
         StatusCode::OK,
         [
-            (axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json")),
-            (axum::http::header::HeaderName::from_static("x-signature"), axum::http::HeaderValue::from_str(&signature).unwrap_or(axum::http::HeaderValue::from_static(""))),
+            (
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            ),
+            (
+                axum::http::header::HeaderName::from_static("x-signature"),
+                axum::http::HeaderValue::from_str(&signature)
+                    .unwrap_or(axum::http::HeaderValue::from_static("")),
+            ),
         ],
         body,
     )
@@ -2375,7 +2408,10 @@ pub async fn waffo_pancake_webhook(
         }
     };
     if !settings.is_waffo_pancake_topup_enabled() {
-        tracing::warn!(event = "pancake_webhook_disabled", "Waffo Pancake webhook 被拒绝 reason=webhook_disabled");
+        tracing::warn!(
+            event = "pancake_webhook_disabled",
+            "Waffo Pancake webhook 被拒绝 reason=webhook_disabled"
+        );
         return text_response(StatusCode::FORBIDDEN, "webhook disabled");
     }
     let expected_env = env.trim();
@@ -2502,8 +2538,8 @@ fn verify_pancake_webhook(
         );
     }
     let signature_input = format!("{timestamp}.{}", String::from_utf8_lossy(payload));
-    let prod_key = pancake_webhook_key("prod")
-        .map_err(|_| "resolve webhook public key (prod)".to_owned())?;
+    let prod_key =
+        pancake_webhook_key("prod").map_err(|_| "resolve webhook public key (prod)".to_owned())?;
     if !pancake_verify(&signature_input, &signature, &prod_key) {
         let test_key = pancake_webhook_key("test")
             .map_err(|_| "resolve webhook public key (test)".to_owned())?;
@@ -2584,11 +2620,15 @@ async fn resolve_pancake_trade_no(
         .await
         .map_err(|_| "waffo pancake order lookup failed".to_owned())?
     else {
-        return Err(format!("waffo pancake order not found for tradeNo={trade_no}"));
+        return Err(format!(
+            "waffo pancake order not found for tradeNo={trade_no}"
+        ));
     };
     let (user_id, money, provider) = row;
     if provider != PROVIDER_WAFFO_PANCAKE {
-        return Err(format!("waffo pancake order not found for tradeNo={trade_no}"));
+        return Err(format!(
+            "waffo pancake order not found for tradeNo={trade_no}"
+        ));
     }
     let expected_identity = pancake_buyer_identity(user_id);
     let actual_identity = event.merchant_provided_buyer_identity.trim().to_owned();
@@ -2600,7 +2640,9 @@ async fn resolve_pancake_trade_no(
     let expected_amount = format_pancake_amount(money);
     let actual_amount = event.amount.trim().to_owned();
     if actual_amount.is_empty() {
-        return Err(format!("waffo pancake event missing amount for tradeNo={trade_no}"));
+        return Err(format!(
+            "waffo pancake event missing amount for tradeNo={trade_no}"
+        ));
     }
     if !decimal_eq(&expected_amount, &actual_amount) {
         return Err(format!(
@@ -2623,18 +2665,22 @@ async fn lookup_pancake_topup(
     trade_no: &str,
 ) -> Result<Option<(i64, f64, String)>, sqlx::Error> {
     let row: Option<(Option<i64>, Option<f64>, Option<String>)> = match db {
-        newapi_storage::Database::Sqlite(pool) => sqlx::query_as(
-            "SELECT user_id, money, payment_provider FROM top_ups WHERE trade_no = $1",
-        )
-        .bind(trade_no)
-        .fetch_optional(pool)
-        .await?,
-        newapi_storage::Database::Postgres(pool) => sqlx::query_as(
-            "SELECT user_id, money, payment_provider FROM top_ups WHERE trade_no = $1",
-        )
-        .bind(trade_no)
-        .fetch_optional(pool)
-        .await?,
+        newapi_storage::Database::Sqlite(pool) => {
+            sqlx::query_as(
+                "SELECT user_id, money, payment_provider FROM top_ups WHERE trade_no = $1",
+            )
+            .bind(trade_no)
+            .fetch_optional(pool)
+            .await?
+        }
+        newapi_storage::Database::Postgres(pool) => {
+            sqlx::query_as(
+                "SELECT user_id, money, payment_provider FROM top_ups WHERE trade_no = $1",
+            )
+            .bind(trade_no)
+            .fetch_optional(pool)
+            .await?
+        }
     };
     Ok(row.map(|(user_id, money, provider)| {
         (
@@ -2656,11 +2702,7 @@ pub(crate) const GO_QUOTA_PER_UNIT: f64 = 500_000.0;
 /// 快照携带），0/非法回落 Go 常量。
 fn waffo_quota_per_unit(state: &AppState) -> f64 {
     let qpu = state.quota_display().quota_per_unit;
-    if qpu > 0.0 {
-        qpu
-    } else {
-        GO_QUOTA_PER_UNIT
-    }
+    if qpu > 0.0 { qpu } else { GO_QUOTA_PER_UNIT }
 }
 
 trait WaffoMethodsExt {
