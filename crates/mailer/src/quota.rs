@@ -22,6 +22,7 @@ pub fn quota_day() -> String {
 
 /// Go `common/email_quota.go` 的 `SMTPQuotaStore` 端口（DB 实现）。
 #[async_trait::async_trait]
+#[allow(clippy::double_must_use)] // async_trait 把 Future 装箱后 must_use 语义重复。
 pub trait QuotaStore: Send + Sync {
     /// 账号今日已发送次数。
     async fn used_today(&self, account: &str) -> Result<i64, String>;

@@ -103,15 +103,6 @@ fn effective_capacity(max_entries: i64) -> usize {
     }
 }
 
-fn effective_default_ttl(default_ttl_seconds: i64) -> Duration {
-    let seconds = if default_ttl_seconds <= 0 {
-        3600
-    } else {
-        default_ttl_seconds
-    };
-    Duration::from_secs(seconds as u64)
-}
-
 // ---------------------------------------------------------------------------
 // TTL + LRU 缓存（Go cachex.HybridCache 的内存面 + hot.LRU）
 // ---------------------------------------------------------------------------

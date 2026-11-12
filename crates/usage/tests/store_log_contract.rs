@@ -488,9 +488,11 @@ async fn other_write_shapes_follow_the_go_functions() {
         "alice",
         "logged in",
         "1.1.1.1",
-        "login",
-        &Map::new(),
-        &extra,
+        &store_log::LoginAuditParams {
+            action: "login",
+            op_params: &Map::new(),
+            extra: &extra,
+        },
     )
     .await
     .unwrap();
@@ -507,10 +509,12 @@ async fn other_write_shapes_follow_the_go_functions() {
         "alice",
         "audit",
         "1.1.1.1",
-        "channel.add",
-        &Map::new(),
-        &admin_info,
-        &Map::new(),
+        &store_log::OperationAuditParams {
+            action: "channel.add",
+            params: &Map::new(),
+            admin_info: &admin_info,
+            audit_info: &Map::new(),
+        },
     )
     .await
     .unwrap();
@@ -568,18 +572,21 @@ async fn other_write_shapes_follow_the_go_functions() {
         client_ip: "4.4.4.4".to_owned(),
         ..ConsumeLogContext::default()
     };
+    let empty_other = Map::new();
     store_log::record_error_log(
         &db,
         &context,
-        8,
-        "m",
-        "t",
-        "boom",
-        5,
-        3,
-        false,
-        "g",
-        &Map::new(),
+        &store_log::ErrorLogParams {
+            channel_id: 8,
+            model_name: "m",
+            token_name: "t",
+            content: "boom",
+            token_id: 5,
+            use_time_seconds: 3,
+            is_stream: false,
+            group: "g",
+            other: &empty_other,
+        },
     )
     .await
     .unwrap();
@@ -602,8 +609,12 @@ async fn other_write_shapes_follow_the_go_functions() {
         group: "g".to_owned(),
         other: Map::new(),
         node_name: String::new(),
+        token_name: String::new(),
+        consume_enabled: true,
+        data_export_enabled: true,
+        default_node_name: "node-default".to_owned(),
     };
-    store_log::record_task_billing_log(&db, 4, "carol", "", &params, true, true, "node-default")
+    store_log::record_task_billing_log(&db, 4, "carol", &params)
         .await
         .unwrap();
     let row = store_log::read_back(&db, 8).await.unwrap().unwrap();
@@ -619,13 +630,14 @@ async fn task_billing_log_consume_gate_and_node_fallback() {
     let params = store_log::TaskBillingLogParams {
         log_type: store_log::LOG_TYPE_CONSUME,
         content: "task".to_owned(),
+        default_node_name: "node-x".to_owned(),
         ..store_log::TaskBillingLogParams::default()
     };
-    store_log::record_task_billing_log(&db, 1, "u", "", &params, false, true, "n")
+    store_log::record_task_billing_log(&db, 1, "u", &params)
         .await
         .unwrap();
     assert!(store_log::read_back(&db, 1).await.unwrap().is_none());
-    store_log::record_task_billing_log(&db, 1, "u", "", &params, true, true, "node-x")
+    store_log::record_task_billing_log(&db, 1, "u", &params)
         .await
         .unwrap();
     assert_eq!(usedata::cache_len(), 1);

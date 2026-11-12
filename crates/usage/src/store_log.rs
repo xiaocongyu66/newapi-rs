@@ -314,36 +314,42 @@ fn user_id_of(context: &ConsumeLogContext) -> i64 {
     context.user_id
 }
 
+/// Go `RecordErrorLog` 的中继侧参数（store_log.go:313-315）。
+#[derive(Debug, Clone)]
+pub struct ErrorLogParams<'a> {
+    pub channel_id: i64,
+    pub model_name: &'a str,
+    pub token_name: &'a str,
+    pub content: &'a str,
+    pub token_id: i64,
+    pub use_time_seconds: i64,
+    pub is_stream: bool,
+    pub group: &'a str,
+    pub other: &'a Map<String, Value>,
+}
+
 /// Go `RecordErrorLog`（store_log.go:313-357）：type=5，token/quota 恒 0。
 pub async fn record_error_log(
     db: &Database,
     context: &ConsumeLogContext,
-    channel_id: i64,
-    model_name: &str,
-    token_name: &str,
-    content: &str,
-    token_id: i64,
-    use_time_seconds: i64,
-    is_stream: bool,
-    group: &str,
-    other: &Map<String, Value>,
+    params: &ErrorLogParams<'_>,
 ) -> Result<(), sqlx::Error> {
     let log = LogInsert {
         user_id: user_id_of(context),
         username: context.username.clone(),
         created_at: chrono::Utc::now().timestamp(),
         log_type: LOG_TYPE_ERROR,
-        content: content.to_owned(),
-        token_name: token_name.to_owned(),
-        model_name: model_name.to_owned(),
+        content: params.content.to_owned(),
+        token_name: params.token_name.to_owned(),
+        model_name: params.model_name.to_owned(),
         quota: 0,
         prompt_tokens: 0,
         completion_tokens: 0,
-        channel_id,
-        token_id,
-        use_time: use_time_seconds,
-        is_stream,
-        group: group.to_owned(),
+        channel_id: params.channel_id,
+        token_id: params.token_id,
+        use_time: params.use_time_seconds,
+        is_stream: params.is_stream,
+        group: params.group.to_owned(),
         ip: if context.record_ip {
             context.client_ip.clone()
         } else {
@@ -351,7 +357,7 @@ pub async fn record_error_log(
         },
         request_id: context.request_id.clone(),
         upstream_request_id: context.upstream_request_id.clone(),
-        other: map_to_json_str(other),
+        other: map_to_json_str(params.other),
     };
     insert_log(db, &log).await
 }
@@ -433,6 +439,15 @@ fn merge_extra(extra: &Map<String, Value>, op: Map<String, Value>) -> Map<String
     other
 }
 
+/// Go `RecordLoginLog` 的审计参数：`action`+`params` 写入 other.op，
+/// `extra` 为普通用户可见的附加键（login_method、user_agent 等）。
+#[derive(Debug, Clone)]
+pub struct LoginAuditParams<'a> {
+    pub action: &'a str,
+    pub op_params: &'a Map<String, Value>,
+    pub extra: &'a Map<String, Value>,
+}
+
 /// Go `RecordLoginLog`（store_log.go:205-223）：type=7，extra 中的键保留，
 /// `op` 键后写（Go 中 op 覆盖 extra 同名键）。
 pub async fn record_login_log(
@@ -441,11 +456,9 @@ pub async fn record_login_log(
     username: &str,
     content: &str,
     ip: &str,
-    action: &str,
-    params: &Map<String, Value>,
-    extra: &Map<String, Value>,
+    audit: &LoginAuditParams<'_>,
 ) -> Result<(), sqlx::Error> {
-    let other = merge_extra(extra, build_op_field(action, params));
+    let other = merge_extra(audit.extra, build_op_field(audit.action, audit.op_params));
     insert_log(
         db,
         &LogInsert {
@@ -462,6 +475,17 @@ pub async fn record_login_log(
     .await
 }
 
+/// Go `RecordOperationAuditLog` 的审计参数（store_log.go:231-238）：
+/// action+params 写入 other.op；adminInfo 写 other.admin_info；
+/// auditInfo 写 other.audit_info（后两者普通用户查询时剥离）。
+#[derive(Debug, Clone)]
+pub struct OperationAuditParams<'a> {
+    pub action: &'a str,
+    pub params: &'a Map<String, Value>,
+    pub admin_info: &'a Map<String, Value>,
+    pub audit_info: &'a Map<String, Value>,
+}
+
 /// Go `RecordOperationAuditLog`（store_log.go:231-254）：type=3，
 /// admin_info/audit_info 均为空对象时省键。
 pub async fn record_operation_audit_log(
@@ -470,21 +494,24 @@ pub async fn record_operation_audit_log(
     username: &str,
     content: &str,
     ip: &str,
-    action: &str,
-    params: &Map<String, Value>,
-    admin_info: &Map<String, Value>,
-    audit_info: &Map<String, Value>,
+    audit: &OperationAuditParams<'_>,
 ) -> Result<(), sqlx::Error> {
     let mut other = Map::new();
     other.insert(
         "op".to_owned(),
-        Value::Object(build_op_field(action, params)),
+        Value::Object(build_op_field(audit.action, audit.params)),
     );
-    if !admin_info.is_empty() {
-        other.insert("admin_info".to_owned(), Value::Object(admin_info.clone()));
+    if !audit.admin_info.is_empty() {
+        other.insert(
+            "admin_info".to_owned(),
+            Value::Object(audit.admin_info.clone()),
+        );
     }
-    if !audit_info.is_empty() {
-        other.insert("audit_info".to_owned(), Value::Object(audit_info.clone()));
+    if !audit.audit_info.is_empty() {
+        other.insert(
+            "audit_info".to_owned(),
+            Value::Object(audit.audit_info.clone()),
+        );
     }
     insert_log(
         db,
@@ -603,6 +630,14 @@ pub struct TaskBillingLogParams {
     pub group: String,
     pub other: Map<String, Value>,
     pub node_name: String,
+    /// 调用方回填的 token 名（Go `identity.GetTokenById`）。
+    pub token_name: String,
+    /// Go `common.LogConsumeEnabled`。
+    pub consume_enabled: bool,
+    /// Go `common.DataExportEnabled`。
+    pub data_export_enabled: bool,
+    /// Go `common.NodeName` 兜底。
+    pub default_node_name: String,
 }
 
 /// Go `RecordTaskBillingLog`（store_log.go:454-483）。
@@ -610,13 +645,9 @@ pub async fn record_task_billing_log(
     db: &Database,
     user_id: i64,
     username: &str,
-    token_name: &str,
     params: &TaskBillingLogParams,
-    consume_enabled: bool,
-    data_export_enabled: bool,
-    default_node_name: &str,
 ) -> Result<(), sqlx::Error> {
-    if params.log_type == LOG_TYPE_CONSUME && !consume_enabled {
+    if params.log_type == LOG_TYPE_CONSUME && !params.consume_enabled {
         return Ok(());
     }
     let created_at = chrono::Utc::now().timestamp();
@@ -628,7 +659,7 @@ pub async fn record_task_billing_log(
             created_at,
             log_type: params.log_type,
             content: params.content.clone(),
-            token_name: token_name.to_owned(),
+            token_name: params.token_name.to_owned(),
             model_name: params.model_name.clone(),
             quota: params.quota,
             channel_id: params.channel_id,
@@ -639,9 +670,9 @@ pub async fn record_task_billing_log(
         },
     )
     .await?;
-    if params.log_type == LOG_TYPE_CONSUME && data_export_enabled {
+    if params.log_type == LOG_TYPE_CONSUME && params.data_export_enabled {
         let node_name = if params.node_name.is_empty() {
-            default_node_name.to_owned()
+            params.default_node_name.clone()
         } else {
             params.node_name.clone()
         };

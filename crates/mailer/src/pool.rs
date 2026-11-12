@@ -122,15 +122,15 @@ impl SenderPool {
             let config = sender.config();
             match sender.send(message).await {
                 Ok(()) => {
-                    if config.daily_limit > 0 {
-                        if let Err(error) = self.quota.record_use(&config.account).await {
-                            // Go：失败只 SysError，不影响发送结果。
-                            tracing::warn!(
-                                event = "smtp_quota_record_failed",
-                                account = %config.account,
-                                "failed to record SMTP quota: {error}"
-                            );
-                        }
+                    // Go：dailyLimit > 0 才计配额；失败只 SysError，不影响发送结果。
+                    if config.daily_limit > 0
+                        && let Err(error) = self.quota.record_use(&config.account).await
+                    {
+                        tracing::warn!(
+                            event = "smtp_quota_record_failed",
+                            account = %config.account,
+                            "failed to record SMTP quota: {error}"
+                        );
                     }
                     return Ok(());
                 }
