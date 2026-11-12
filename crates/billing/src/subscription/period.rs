@@ -24,6 +24,11 @@ fn tz_name_offset(value: &str) -> Option<i64> {
 
 /// 进程本地时区偏移（分钟）。
 pub fn tz_offset_minutes() -> i64 {
+    tz_offset_minutes_env()
+}
+
+/// 与 [`tz_offset_minutes`] 相同的解析，但显式接收环境读取入口，测试可注入。
+fn tz_offset_minutes_env() -> i64 {
     if let Ok(raw) = std::env::var("SUBSCRIPTION_TZ_OFFSET_MINUTES")
         && let Ok(minutes) = raw.trim().parse::<i64>()
     {
@@ -85,13 +90,22 @@ pub fn normalize_reset_period(period: &str) -> String {
 
 /// Go `calcPlanEndTime`（`store_subscription.go:321-340`）的错误文案。
 pub fn calc_plan_end_time(start: i64, plan: &SubscriptionPlanRow) -> Result<i64, String> {
+    calc_plan_end_time_offset(start, plan, tz_offset_minutes())
+}
+
+/// [`calc_plan_end_time`] 的显式偏移变体（测试注入用）。
+pub fn calc_plan_end_time_offset(
+    start: i64,
+    plan: &SubscriptionPlanRow,
+    offset_minutes: i64,
+) -> Result<i64, String> {
     if plan.duration_value <= 0 && plan.duration_unit != "custom" {
         return Err("duration_value must be > 0".to_string());
     }
     match plan.duration_unit.as_str() {
         "year" | "month" => {
             // Go `AddDate`：本地时区的民用日历加法，月尾钳制。
-            let offset = tz_offset_minutes() * 60;
+            let offset = offset_minutes * 60;
             let local = start + offset;
             let day = local.div_euclid(86_400);
             let second_of_day = local - day * 86_400;
@@ -122,11 +136,21 @@ pub fn calc_plan_end_time(start: i64, plan: &SubscriptionPlanRow) -> Result<i64,
 /// Go `calcNextResetTime`（`store_subscription.go:354-402`）。`end_unix` 为
 /// 订阅结束时间（0 表示未知）；下一个重置点越过结束时间时回 0。
 pub fn calc_next_reset_time(base: i64, plan: &SubscriptionPlanRow, end_unix: i64) -> i64 {
+    calc_next_reset_time_offset(base, plan, end_unix, tz_offset_minutes())
+}
+
+/// [`calc_next_reset_time`] 的显式偏移变体（测试注入用）。
+pub fn calc_next_reset_time_offset(
+    base: i64,
+    plan: &SubscriptionPlanRow,
+    end_unix: i64,
+    offset_minutes: i64,
+) -> i64 {
     let period = normalize_reset_period(&plan.quota_reset_period);
     if period == "never" {
         return 0;
     }
-    let offset = tz_offset_minutes() * 60;
+    let offset = offset_minutes * 60;
     let next = match period.as_str() {
         "daily" | "weekly" | "monthly" => {
             let local = base + offset;
@@ -212,7 +236,6 @@ mod tests {
         // 2026-01-31 12:00 UTC + 1 month → 2026-02-28 12:00（UTC 偏移 0 下）。
         let start = days_from_civil(2026, 1, 31) * 86_400 + 43_200;
         let plan = mk_plan("month", 1, "never", 0, 0);
-        unsafe { std::env::set_var("SUBSCRIPTION_TZ_OFFSET_MINUTES", "0") };
         assert_eq!(
             calc_plan_end_time(start, &plan).unwrap(),
             days_from_civil(2026, 2, 28) * 86_400 + 43_200
@@ -221,71 +244,73 @@ mod tests {
         let start = days_from_civil(2024, 2, 29) * 86_400;
         let plan = mk_plan("year", 1, "never", 0, 0);
         assert_eq!(
-            calc_plan_end_time(start, &plan).unwrap(),
+            calc_plan_end_time_offset(start, &plan, 0).unwrap(),
             days_from_civil(2025, 2, 28) * 86_400
         );
         // day/hour/custom are absolute additions.
         let plan = mk_plan("day", 30, "never", 0, 0);
         assert_eq!(
-            calc_plan_end_time(1_000, &plan).unwrap(),
+            calc_plan_end_time_offset(1_000, &plan, 0).unwrap(),
             1_000 + 30 * 86_400
         );
         let plan = mk_plan("custom", 0, "never", 3_600, 0);
-        assert_eq!(calc_plan_end_time(1_000, &plan).unwrap(), 4_600);
+        assert_eq!(calc_plan_end_time_offset(1_000, &plan, 0).unwrap(), 4_600);
         // Invalid units mirror the Go messages.
         let plan = mk_plan("week", 1, "never", 0, 0);
         assert_eq!(
-            calc_plan_end_time(0, &plan).unwrap_err(),
+            calc_plan_end_time_offset(0, &plan, 0).unwrap_err(),
             "invalid duration_unit: week"
         );
         let plan = mk_plan("month", 0, "never", 0, 0);
         assert_eq!(
-            calc_plan_end_time(0, &plan).unwrap_err(),
+            calc_plan_end_time_offset(0, &plan, 0).unwrap_err(),
             "duration_value must be > 0"
         );
         let plan = mk_plan("custom", 0, "never", 0, 0);
         assert_eq!(
-            calc_plan_end_time(0, &plan).unwrap_err(),
+            calc_plan_end_time_offset(0, &plan, 0).unwrap_err(),
             "custom_seconds must be > 0"
         );
     }
 
     #[test]
     fn next_reset_aligns_like_go() {
-        unsafe { std::env::set_var("SUBSCRIPTION_TZ_OFFSET_MINUTES", "0") };
         // 2026-11-07 是周六。daily → 周日 00:00。
         let saturday = days_from_civil(2026, 11, 7) * 86_400 + 100;
-        let p = plan("month", 1, "daily", 0, 0);
+        let p = mk_plan("month", 1, "daily", 0, 0);
         assert_eq!(
-            calc_next_reset_time(saturday, &p, 0),
+            calc_next_reset_time_offset(saturday, &p, 0, 0),
             days_from_civil(2026, 11, 8) * 86_400
         );
         // weekly：周六(6) → 下一个周一。
-        let p = plan("month", 1, "weekly", 0, 0);
+        let p = mk_plan("month", 1, "weekly", 0, 0);
         assert_eq!(
-            calc_next_reset_time(saturday, &p, 0),
+            calc_next_reset_time_offset(saturday, &p, 0, 0),
             days_from_civil(2026, 11, 9) * 86_400
         );
         // weekly：周一 → 下一个周一（7 天后）。
         let monday = days_from_civil(2026, 11, 9) * 86_400;
         assert_eq!(
-            calc_next_reset_time(monday, &p, 0),
+            calc_next_reset_time_offset(monday, &p, 0, 0),
             days_from_civil(2026, 11, 16) * 86_400
         );
         // monthly：11 月任意时刻 → 12-01 00:00。
-        let p = plan("month", 1, "monthly", 0, 0);
+        let p = mk_plan("month", 1, "monthly", 0, 0);
         assert_eq!(
-            calc_next_reset_time(saturday, &p, 0),
+            calc_next_reset_time_offset(saturday, &p, 0, 0),
             days_from_civil(2026, 12, 1) * 86_400
         );
         // 越过结束时间 → 0。
-        assert_eq!(calc_next_reset_time(saturday, &p, saturday + 1), 0);
+        assert_eq!(
+            calc_next_reset_time_offset(saturday, &p, saturday + 1, 0),
+            0
+        );
         // custom / never。
-        let p = plan("month", 1, "custom", 0, 90);
-        assert_eq!(calc_next_reset_time(1_000, &p, 0), 1_090);
-        let p = plan("month", 1, "never", 0, 0);
-        assert_eq!(calc_next_reset_time(1_000, &p, 0), 0);
-        assert_eq!(calc_next_reset_time(1_000, &p, 2_000), 0);
+        let p = mk_plan("month", 1, "custom", 0, 90);
+        assert_eq!(calc_next_reset_time_offset(1_000, &p, 0, 0), 1_090);
+        let p = mk_plan("month", 1, "never", 0, 0);
+        assert_eq!(calc_next_reset_time_offset(1_000, &p, 0, 0), 0);
+        assert_eq!(calc_next_reset_time_offset(1_000, &p, 2_000, 0), 0);
     }
 
     #[test]
