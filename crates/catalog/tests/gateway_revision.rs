@@ -16,7 +16,7 @@
 
 use newapi_catalog::channels::{ChannelInfo, ChannelRepository, NewChannel};
 use newapi_catalog::gateway_revision::{
-    self, GatewayOutboxRow, GatewayRevisionError, current_gateway_revision,
+    GatewayOutboxRow, GatewayRevisionError, current_gateway_revision,
     initialize_gateway_config_revision, list_pending_gateway_config_outbox,
 };
 use newapi_catalog::models::{ModelRepository, NewModel};
@@ -441,10 +441,13 @@ async fn contract(db: &Database) -> Result<(), sqlx::Error> {
     reset_revision(db, 1).await;
     let db_a = db.clone();
     let db_b = db.clone();
-    tokio::join!(
-        async move { mutate_routing!(db_a, _tx, { Ok(()) }).unwrap() },
-        async move { mutate_routing!(db_b, _tx, { Ok(()) }).unwrap() },
+    let (left, right) = tokio::join!(
+        // async block 返回 Result：宏内部 begin/commit 的 `?` 在块内传播。
+        async move { mutate_routing!(db_a, _tx, { Ok(()) }) },
+        async move { mutate_routing!(db_b, _tx, { Ok(()) }) },
     );
+    left.unwrap();
+    right.unwrap();
     let outbox = outbox_revisions(db).await;
     assert_eq!(
         outbox.len(),
