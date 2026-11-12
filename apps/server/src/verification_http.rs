@@ -24,7 +24,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use newapi_catalog::email_settings::EmailSettings;
-use newapi_identity::email::{EmailSender, OutgoingMessage, UnconfiguredEmailSender};
+use newapi_identity::email::OutgoingMessage;
 use newapi_identity::password_reset::PasswordResetRepository;
 use newapi_identity::registration::{
     EMAIL_VERIFICATION_PURPOSE, PASSWORD_RESET_PURPOSE, RegistrationRepository,
@@ -139,9 +139,9 @@ pub async fn send_email_verification(
         receiver: &email,
         content: &content,
     };
-    // SMTP 传输留 P7（integrations.mail）；未配置实现恒失败，错误文案
-    // 逐字进 message（Go `CtxApiError`）。
-    match UnconfiguredEmailSender.send(&message).await {
+    // 发送经 state 的 EmailSender 端口（feat/log-write-email 接线）：未注入
+    // 时是未配置实现，恒失败、错误文案逐字进 message（Go `CtxApiError`）。
+    match state.email_sender().send(&message).await {
         Ok(()) => Json(json!({ "success": true, "message": "" })).into_response(),
         Err(error) => {
             Json(json!({ "success": false, "message": error.to_string() })).into_response()
@@ -193,9 +193,9 @@ pub async fn send_password_reset_email(
                 receiver: &email,
                 content: &content,
             };
-            // P7 的 SMTP 实现接入前，发送恒失败；Go 只记日志、不回滚
-            // 已存储的验证码。
-            if let Err(error) = UnconfiguredEmailSender.send(&message).await {
+            // 发送经 state 端口（feat/log-write-email 接线）；发送失败时
+            // Go 只记日志、不回滚已存储的验证码。
+            if let Err(error) = state.email_sender().send(&message).await {
                 tracing::error!(
                     event = "password_reset_email_failed",
                     message = %error,

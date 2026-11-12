@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod abilities;
+pub mod affinity;
 pub mod auth_settings;
 pub mod channels;
 pub mod email_settings;

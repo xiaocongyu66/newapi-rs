@@ -26,6 +26,10 @@ newapi-storage.workspace = true
 newapi-billing.workspace = true
 newapi-catalog.workspace = true
 newapi-identity.workspace = true
+# 日志写侧 + 邮件发送面（feat/log-write-email）：写函数放 usage/mailer 两个
+# 新 crate；server 只在 HTTP 层接线（affinity handler 与 email 端口注入）。
+newapi-usage.workspace = true
+newapi-mailer.workspace = true
 newapi-i18n.workspace = true
 newapi-security.workspace = true
 redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp", "script"] }

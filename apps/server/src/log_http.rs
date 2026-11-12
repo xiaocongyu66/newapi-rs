@@ -226,9 +226,11 @@ pub async fn logs_self_stat(
 /// `handler.GetChannelAffinityUsageCacheStats`。参数 trim 后 `rule_name` 与
 /// `key_fp` 必填，缺失是 400 + 固定英文文案（Go 字面量，未走 i18n）。
 ///
-/// 写入侧（Go `ObserveChannelAffinityUsageCache*`，内存缓存）尚未随中继链路
-/// 移植，本端口缓存恒为空：读未命中时 Go 返回仅回显三个入参、计数器全零的
-/// 空 stats（`track_affinity.go:798-806`），与此处输出逐字一致。
+/// 写入侧（Go `ObserveChannelAffinityUsageCache*`）已随 feat/log-write-email
+/// 移植为 `newapi_catalog::affinity` 的进程内缓存（`observe_channel_affinity_
+/// usage_cache`）；本端口改为读真实计数器。未命中时 Go 返回仅回显三个入参、
+/// 计数器全零的空 stats（`track_affinity.go:798-806`），与此处输出逐字一致。
+/// Go 缓存为单进程内存（无 Redis 时）；Redis 面未移植（多副本部署有差，登记遗留）。
 pub async fn channel_affinity_usage_cache(uri: Uri) -> Response {
     let query = log_query(&uri);
     let rule_name = query.rule_name.as_deref().unwrap_or_default().trim();
@@ -240,23 +242,28 @@ pub async fn channel_affinity_usage_cache(uri: Uri) -> Response {
     if key_fp.is_empty() {
         return missing_param("missing param: key_fp");
     }
+    let stats = newapi_catalog::affinity::get_channel_affinity_usage_cache_stats(
+        rule_name,
+        using_group,
+        key_fp,
+    );
     Json(json!({
         "success": true,
         "message": "",
         "data": {
-            "rule_name": rule_name,
-            "using_group": using_group,
-            "key_fp": key_fp,
-            "cached_token_rate_mode": "",
-            "hit": 0,
-            "total": 0,
-            "window_seconds": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "cached_tokens": 0,
-            "prompt_cache_hit_tokens": 0,
-            "last_seen_at": 0,
+            "rule_name": stats.rule_name,
+            "using_group": stats.using_group,
+            "key_fp": stats.key_fp,
+            "cached_token_rate_mode": stats.cached_token_rate_mode,
+            "hit": stats.hit,
+            "total": stats.total,
+            "window_seconds": stats.window_seconds,
+            "prompt_tokens": stats.prompt_tokens,
+            "completion_tokens": stats.completion_tokens,
+            "total_tokens": stats.total_tokens,
+            "cached_tokens": stats.cached_tokens,
+            "prompt_cache_hit_tokens": stats.prompt_cache_hit_tokens,
+            "last_seen_at": stats.last_seen_at,
         },
     }))
     .into_response()
