@@ -547,7 +547,10 @@ async fn run_contract(db: Database) {
         send_json(&pay, "/api/user/stripe/pay", auth, json!({
             "amount": 10, "payment_method": "stripe", "success_url": success_url
         })).await).await;
-    let pay_link = body["data"]["pay_link"].as_str().expect("pay_link").to_owned();
+    let pay_link = body["data"]["pay_link"]
+        .as_str()
+        .unwrap_or_else(|| panic!("stripe pay body: {body}"))
+        .to_owned();
     assert_eq!(body["message"], json!("success"));
     assert_eq!(pay_link, "https://pay.stripe.com/session");
     let calls = stripe.calls.lock().unwrap();
@@ -614,6 +617,14 @@ async fn run_contract(db: Database) {
             "payment_method": "creem"
         })).await).await;
     assert_eq!(body, json!({"message": "error", "data": "请选择产品"}), "{body}");
+    // Go 默认 CreemProducts = "[]"：解析成功但为空 → 产品不存在；仅非法
+    // JSON 才是 产品配置错误。
+    let body = body_json(
+        send_json(&pay, "/api/user/creem/pay", auth, json!({
+            "product_id": "p1", "payment_method": "creem"
+        })).await).await;
+    assert_eq!(body, json!({"message": "error", "data": "产品不存在"}), "{body}");
+    seed_option(&db, "CreemProducts", "not-json").await;
     let body = body_json(
         send_json(&pay, "/api/user/creem/pay", auth, json!({
             "product_id": "p1", "payment_method": "creem"
