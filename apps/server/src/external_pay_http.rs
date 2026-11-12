@@ -42,6 +42,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::Engine;
+use rsa::pkcs8::DecodePublicKey;
 use newapi_billing::topup::{
     ExternalQuotaSource, ExternalRechargeParams, ExternalUserUpdate, PROVIDER_CREEM,
     PROVIDER_STRIPE, PROVIDER_WAFFO, PROVIDER_WAFFO_PANCAKE, STATUS_EXPIRED, STATUS_FAILED,
@@ -919,7 +920,6 @@ fn verify_stripe_signature(
     signed.extend_from_slice(timestamp.to_string().as_bytes());
     signed.push(b'.');
     signed.extend_from_slice(payload);
-    let expected = hmac::sign(&key, &signed);
     for signature in &signatures {
         if hmac::verify(&key, &signed, signature).is_ok() {
             return Ok(());
@@ -1711,8 +1711,8 @@ pub async fn request_waffo_pancake_pay(
     if let Err(rejection) = check_capacity(credited, profile.quota) {
         return pay_error_str(rejection.message());
     }
-    let ratio = newapi_billing::topup::topup_group_ratio(&settings, &profile.group);
-    let pay_money = waffo_pancake_pay_money(&settings, request.amount, &profile.group, tokens, quota_per_unit);
+    let pay_money =
+        waffo_pancake_pay_money(&settings, request.amount, &profile.group, tokens, quota_per_unit);
     if pay_money < 0.01 {
         return pay_error_str(MSG_AMOUNT_TOO_SMALL);
     }
@@ -2030,7 +2030,7 @@ pub async fn stripe_webhook(
         tracing::error!(event_type = %event.event_type, "Stripe webhook 履约失败，返回 5xx 等待重试");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    StatusCode::OK
+    StatusCode::OK.into_response()
 }
 
 /// `POST /api/creem/webhook` → Go `billing.CreemWebhook`。
