@@ -430,6 +430,30 @@ fn reset_result_json(result: &SubscriptionResetResult) -> Value {
     })
 }
 
+/// `GET /api/subscription/admin/plans` → Go `AdminListSubscriptionPlans`。
+///
+/// 无合规门；全量（含禁用），`sort_order desc, id desc`。
+pub async fn admin_list_plans(
+    State(state): State<AppState>,
+    Extension(_auth): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(db) = state.db() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let repository = SubscriptionRepository::new(db);
+    let plans = match repository.list_all_plans().await {
+        Ok(plans) => plans,
+        Err(error) => return database_error(&headers, &error),
+    };
+    let display = state.quota_display();
+    let data: Vec<Value> = plans
+        .iter()
+        .map(|plan| plan_dto_json(plan, &display))
+        .collect();
+    success_json(json!(data))
+}
+
 /// `POST /api/subscription/admin/plans` → Go `AdminCreateSubscriptionPlan`。
 ///
 /// 响应 `data` 是回显的套餐（Go `CtxApiSuccess(c, req.Plan)`——Create 不触发
@@ -439,7 +463,7 @@ pub async fn admin_create_plan(
     State(state): State<AppState>,
     Extension(_auth): Extension<AuthenticatedUser>,
     headers: HeaderMap,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
@@ -506,7 +530,7 @@ pub async fn admin_update_plan(
     Extension(_auth): Extension<AuthenticatedUser>,
     headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     let id = parse_path_id(&id);
     if id <= 0 {
@@ -554,7 +578,7 @@ pub async fn admin_update_plan_status(
     Extension(_auth): Extension<AuthenticatedUser>,
     headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     let id = parse_path_id(&id);
     if id <= 0 {
@@ -610,7 +634,7 @@ pub async fn admin_bind(
     State(state): State<AppState>,
     Extension(_auth): Extension<AuthenticatedUser>,
     headers: HeaderMap,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
@@ -669,7 +693,7 @@ pub async fn admin_create_user_subscription(
     Extension(_auth): Extension<AuthenticatedUser>,
     headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
@@ -711,7 +735,7 @@ pub async fn admin_reset_user_subscriptions(
     Extension(_auth): Extension<AuthenticatedUser>,
     headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     let user_id = parse_path_id(&id);
     if user_id <= 0 {
@@ -746,7 +770,7 @@ pub async fn admin_reset_plan_subscriptions(
     Extension(_auth): Extension<AuthenticatedUser>,
     headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
-    mut request: Request,
+    request: Request,
 ) -> Response {
     let plan_id = parse_path_id(&id);
     if plan_id <= 0 {
