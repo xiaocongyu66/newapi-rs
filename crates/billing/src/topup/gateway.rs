@@ -39,6 +39,9 @@ pub const PROVIDER_EPAY: &str = "epay";
 pub const PROVIDER_VMQ: &str = "vmq";
 pub const PROVIDER_CODEPAY: &str = "codepay";
 pub const PROVIDER_STRIPE: &str = "stripe";
+pub const PROVIDER_CREEM: &str = "creem";
+pub const PROVIDER_WAFFO: &str = "waffo";
+pub const PROVIDER_WAFFO_PANCAKE: &str = "waffo_pancake";
 
 /// Go `usage.LogTypeTopup`。
 pub const LOG_TYPE_TOPUP: i64 = 1;
@@ -189,6 +192,29 @@ pub fn random_string(length: usize) -> String {
     (0..length)
         .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
         .collect()
+}
+
+/// Go `randstr.String(n)`：Base62 字符集（`0-9a-zA-Z`）。
+pub fn base62_string(length: usize) -> String {
+    const CHARSET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut rng = rand::thread_rng();
+    (0..length)
+        .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
+        .collect()
+}
+
+/// Go `common.Sha1`：小写十六进制 SHA-1。ring 仅在 `SHA1_FOR_INSECURE` 常量
+/// 下提供 SHA-1，与签名验证无关的引用串哈希正是其预期用途。
+pub fn sha1_hex(input: &str) -> String {
+    use ring::digest;
+    let digest = digest::digest(&digest::SHA1_FOR_INSECURE, input.as_bytes());
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(digest.as_ref().len() * 2);
+    for byte in digest.as_ref() {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Go `common.GetTimestamp()`。
@@ -818,6 +844,313 @@ pub async fn record_topup_log(
         );
         let _ = error;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stripe / Creem / Waffo / Waffo Pancake 的回调核销与状态翻转
+// ---------------------------------------------------------------------------
+
+/// 各网关应入账额度的来源（Go `store_topup.go` 的按 provider 分支）：
+/// - `MoneyTimesUnit`：Stripe 订单 `Money × QuotaPerUnit`（`Recharge`）
+/// - `AmountTimesUnit`：Waffo / Waffo Pancake 订单 `Amount × QuotaPerUnit`
+/// - `AmountRaw`：Creem 订单直接用 `Amount`（`RechargeCreem`）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExternalQuotaSource {
+    MoneyTimesUnit,
+    AmountTimesUnit,
+    AmountRaw,
+}
+
+/// 核销成功时附带写入 users 表的字段（Go `creditTopUpQuota` 的 `updates`）：
+/// - `StripeCustomer`：Stripe 回调把 customer id 写入 `stripe_customer`
+/// - `EmailIfEmpty`：Creem 回调仅在用户邮箱为空时回填支付邮箱
+#[derive(Clone, Copy, Debug)]
+pub enum ExternalUserUpdate<'a> {
+    None,
+    StripeCustomer(&'a str),
+    EmailIfEmpty(&'a str),
+}
+
+/// Go `Recharge` / `RechargeCreem` / `RechargeWaffo` / `RechargeWaffoPancake`
+/// 的共享事务体。`idempotent_success` 对齐各网关的幂等语义：Waffo 两族对已
+/// 成功订单直接返回成功（`RechargeOutcome::AlreadyDone`）；Stripe / Creem 的
+/// 非 pending 状态（含已成功）返回 `StatusInvalid`，由回调端折算成永久失败
+/// 或 200 忽略。
+pub struct ExternalRechargeParams<'a> {
+    pub trade_no: &'a str,
+    pub expected_provider: &'a str,
+    pub quota_source: ExternalQuotaSource,
+    pub quota_per_unit: f64,
+    pub idempotent_success: bool,
+    pub user_update: ExternalUserUpdate<'a>,
+}
+
+/// Go `RechargeWaffo` / `RechargeWaffoPancake`：幂等成功跳过。
+pub async fn recharge_external_top_up(
+    db: &Database,
+    params: ExternalRechargeParams<'_>,
+) -> Result<RechargeOutcome, RechargeError> {
+    if params.trade_no.is_empty() {
+        return Err(RechargeError::NotFound);
+    }
+    match db {
+        Database::Sqlite(pool) => {
+            let mut tx = pool.begin().await?;
+            let outcome =
+                recharge_external_in_tx_sqlite(&mut tx, &params).await;
+            if outcome.is_err() {
+                tx.rollback().await.ok();
+                return outcome;
+            }
+            tx.commit().await?;
+            outcome
+        }
+        Database::Postgres(pool) => {
+            let mut tx = pool.begin().await?;
+            let outcome = recharge_external_in_tx_pg(&mut tx, &params).await;
+            if outcome.is_err() {
+                tx.rollback().await.ok();
+                return outcome;
+            }
+            tx.commit().await?;
+            outcome
+        }
+    }
+}
+
+macro_rules! recharge_external_in_tx_impl {
+    ($tx:expr, $params:expr) => {{
+        let row = sqlx::query(RECHARGE_SELECT)
+            .bind($params.trade_no)
+            .fetch_optional(&mut **$tx)
+            .await?;
+        let Some(row) = row else {
+            return Err(RechargeError::NotFound);
+        };
+        let order_id: i64 = row.try_get("id")?;
+        let user_id: i64 = row
+            .try_get::<Option<i64>, _>("user_id")?
+            .unwrap_or_default();
+        let amount: i64 = row.try_get::<Option<i64>, _>("amount")?.unwrap_or_default();
+        let money: f64 = row.try_get::<Option<f64>, _>("money")?.unwrap_or_default();
+        let payment_method: String = row
+            .try_get::<Option<String>, _>("payment_method")?
+            .unwrap_or_default();
+        let provider: String = row
+            .try_get::<Option<String>, _>("payment_provider")?
+            .unwrap_or_default();
+        let status: String = row
+            .try_get::<Option<String>, _>("status")?
+            .unwrap_or_default();
+
+        if provider != $params.expected_provider {
+            return Err(RechargeError::ProviderMismatch);
+        }
+        if status == STATUS_SUCCESS {
+            if $params.idempotent_success {
+                return Ok(RechargeOutcome::AlreadyDone);
+            }
+            return Err(RechargeError::StatusInvalid);
+        }
+        if status != STATUS_PENDING {
+            return Err(RechargeError::StatusInvalid);
+        }
+        let quota_added = match $params.quota_source {
+            ExternalQuotaSource::MoneyTimesUnit => {
+                quota_from_product_f64(money, $params.quota_per_unit)
+            }
+            ExternalQuotaSource::AmountTimesUnit => {
+                let settings = super::TopUpSettings::default();
+                top_up_quota(&settings, amount, false, $params.quota_per_unit)
+            }
+            ExternalQuotaSource::AmountRaw => quota_from_int_strict(amount),
+        };
+        let Some(quota_added) = quota_added else {
+            return Err(RechargeError::InvalidQuota);
+        };
+        if quota_added <= 0 {
+            return Err(RechargeError::InvalidQuota);
+        }
+        let updated = sqlx::query(
+            "UPDATE top_ups SET status = $1, complete_time = $2 WHERE id = $3 AND status = $4",
+        )
+        .bind(STATUS_SUCCESS)
+        .bind(now_seconds())
+        .bind(order_id)
+        .bind(STATUS_PENDING)
+        .execute(&mut **$tx)
+        .await?
+        .rows_affected();
+        if updated == 0 {
+            return Err(RechargeError::StatusInvalid);
+        }
+        let max_current = MAX_QUOTA - 1 - quota_added;
+        let credited = match $params.user_update {
+            ExternalUserUpdate::None => {
+                sqlx::query("UPDATE users SET quota = quota + $1 WHERE id = $2 AND quota <= $3")
+                    .bind(quota_added)
+                    .bind(user_id)
+                    .bind(max_current)
+                    .execute(&mut **$tx)
+                    .await?
+                    .rows_affected()
+            }
+            ExternalUserUpdate::StripeCustomer(customer) => {
+                sqlx::query(
+                    "UPDATE users SET quota = quota + $1, stripe_customer = $2 \
+                     WHERE id = $3 AND quota <= $4",
+                )
+                .bind(quota_added)
+                .bind(customer)
+                .bind(user_id)
+                .bind(max_current)
+                .execute(&mut **$tx)
+                .await?
+                .rows_affected()
+            }
+            ExternalUserUpdate::EmailIfEmpty(email) => {
+                sqlx::query(
+                    "UPDATE users SET quota = quota + $1, \
+                     email = CASE WHEN email IS NULL OR email = '' THEN $2 ELSE email END \
+                     WHERE id = $3 AND quota <= $4",
+                )
+                .bind(quota_added)
+                .bind(email)
+                .bind(user_id)
+                .bind(max_current)
+                .execute(&mut **$tx)
+                .await?
+                .rows_affected()
+            }
+        };
+        if credited == 0 {
+            let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(&mut **$tx)
+                .await?;
+            return match exists {
+                Some(_) => Err(RechargeError::QuotaLimitExceeded),
+                None => Err(RechargeError::UserMissing),
+            };
+        }
+        Ok(RechargeOutcome::Completed(RechargeRecord {
+            user_id,
+            quota_added,
+            money,
+            payment_method,
+        }))
+    }};
+}
+
+async fn recharge_external_in_tx_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    params: &ExternalRechargeParams<'_>,
+) -> Result<RechargeOutcome, RechargeError> {
+    recharge_external_in_tx_impl!(tx, params)
+}
+
+async fn recharge_external_in_tx_pg(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    params: &ExternalRechargeParams<'_>,
+) -> Result<RechargeOutcome, RechargeError> {
+    recharge_external_in_tx_impl!(tx, params)
+}
+
+/// Go `common.QuotaFromDecimalStrict(decimal.NewFromInt(amount))`：整数额度
+/// 的严格换算（正数且低于 int32 上限）。
+fn quota_from_int_strict(amount: i64) -> Option<i64> {
+    if amount <= 0 || amount >= i64::from(MAX_QUOTA as i32) {
+        return None;
+    }
+    Some(amount)
+}
+
+/// Go `UpdatePendingTopUpStatus`：按订单号与网关把 pending 订单翻转到目标
+/// 状态（过期 / 失败标记）。找不到订单、网关不符或状态非 pending 都上抛。
+pub async fn update_pending_top_up_status(
+    db: &Database,
+    trade_no: &str,
+    expected_provider: &str,
+    target_status: &str,
+) -> Result<(), RechargeError> {
+    if trade_no.is_empty() {
+        return Err(RechargeError::NotFound);
+    }
+    let updated = match db {
+        Database::Sqlite(pool) => {
+            sqlx::query(
+                "UPDATE top_ups SET status = $1 WHERE trade_no = $2 \
+                 AND payment_provider = $3 AND status = $4",
+            )
+            .bind(target_status)
+            .bind(trade_no)
+            .bind(expected_provider)
+            .bind(STATUS_PENDING)
+            .execute(pool)
+            .await?
+            .rows_affected()
+        }
+        Database::Postgres(pool) => {
+            sqlx::query(
+                "UPDATE top_ups SET status = $1 WHERE trade_no = $2 \
+                 AND payment_provider = $3 AND status = $4",
+            )
+            .bind(target_status)
+            .bind(trade_no)
+            .bind(expected_provider)
+            .bind(STATUS_PENDING)
+            .execute(pool)
+            .await?
+            .rows_affected()
+        }
+    };
+    if updated > 0 {
+        return Ok(());
+    }
+    // 条件翻转失败时重读订单行区分三种哨兵错误（与 Go 的先读后写等序）。
+    let row: Option<(Option<String>, Option<String>)> = match db {
+        Database::Sqlite(pool) => sqlx::query_as(
+            "SELECT payment_provider, status FROM top_ups WHERE trade_no = $1",
+        )
+        .bind(trade_no)
+        .fetch_optional(pool)
+        .await?,
+        Database::Postgres(pool) => sqlx::query_as(
+            "SELECT payment_provider, status FROM top_ups WHERE trade_no = $1",
+        )
+        .bind(trade_no)
+        .fetch_optional(pool)
+        .await?,
+    };
+    let Some((provider, status)) = row else {
+        return Err(RechargeError::NotFound);
+    };
+    if provider.as_deref() != Some(expected_provider) {
+        return Err(RechargeError::ProviderMismatch);
+    }
+    Err(RechargeError::StatusInvalid)
+}
+
+/// Go 网关上游失败后把订单行标记为 failed（`topUp.Status = failed;
+/// topUp.Update()`，按 trade_no 直接覆盖，无状态谓词）。
+pub async fn set_topup_status(db: &Database, trade_no: &str, status: &str) -> Result<(), sqlx::Error> {
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::query("UPDATE top_ups SET status = $1 WHERE trade_no = $2")
+                .bind(status)
+                .bind(trade_no)
+                .execute(pool)
+                .await?;
+        }
+        Database::Postgres(pool) => {
+            sqlx::query("UPDATE top_ups SET status = $1 WHERE trade_no = $2")
+                .bind(status)
+                .bind(trade_no)
+                .execute(pool)
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
