@@ -376,12 +376,13 @@ struct TestRsa {
 }
 
 fn test_rsa() -> TestRsa {
-    // 每个进程只生成一次（RSA 密钥生成较慢）；位宽取 1024 以缩短 CI 时间。
+    // 每个进程只生成一次（RSA 密钥生成较慢）。2048 位是 ring
+    // RsaKeyPair::from_pkcs8 的下限：Waffo 凭证校验走 ring，更短直接被拒。
     static KEY: std::sync::OnceLock<TestRsa> = std::sync::OnceLock::new();
     KEY.get_or_init(|| {
         let mut rng = rand::rng();
         let private_key =
-            RsaPrivateKey::new(&mut rng, 1024).expect("generate test RSA key");
+            RsaPrivateKey::new(&mut rng, 2048).expect("generate test RSA key");
         TestRsa { private_key }
     })
     .clone()
@@ -579,7 +580,8 @@ async fn run_contract(db: Database) {
         .to_owned();
     assert_eq!(body["message"], json!("success"));
     assert_eq!(pay_link, "https://pay.stripe.com/session");
-    let calls = stripe.calls.lock().unwrap();
+    // clone 出快照：MutexGuard 不得跨 await（clippy::await_holding_lock）。
+    let calls = stripe.calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 1, "stripe transport called once");
     let call = &calls[0];
     assert_eq!(call.api_secret, "sk_test_1");
