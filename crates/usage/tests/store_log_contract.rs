@@ -6,8 +6,8 @@
 //! 缺席时跳过（仓库双后端契约的统一形态）。
 
 use chrono::Utc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::Mutex;
 
 use newapi_storage::Database;
 use newapi_usage::store_log::{self, ConsumeLogContext, RecordConsumeLogParams, TopupAdminInfo};
@@ -23,7 +23,7 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// usedata 的进程级缓存与 save/flush 语义在并发测试下会互相吞并条目，
 /// 这些用例必须串行化。
-static USEDATA_LOCK: Mutex<()> = Mutex::new(());
+static USEDATA_LOCK: Mutex<()> = Mutex::const_new(());
 
 const SQLITE_LOGS: &str = r#"CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -345,7 +345,7 @@ async fn empty_request_id_gets_generated() {
 
 #[tokio::test]
 async fn data_export_populates_quota_data_cache_not_the_table() {
-    let _guard = USEDATA_LOCK.lock().expect("usedata lock");
+    let _guard = USEDATA_LOCK.lock().await;
     let db = sqlite_fixture().await;
     reset(&db).await;
     usedata::clear_cache();
@@ -426,7 +426,7 @@ async fn count_rows(db: &Database, table: &str) -> i64 {
 
 #[tokio::test]
 async fn hour_floor_aggregation_merges_same_hour() {
-    let _guard = USEDATA_LOCK.lock().expect("usedata lock");
+    let _guard = USEDATA_LOCK.lock().await;
     let db = sqlite_fixture().await;
     reset(&db).await;
     usedata::clear_cache();
@@ -635,7 +635,7 @@ async fn other_write_shapes_follow_the_go_functions() {
 
 #[tokio::test]
 async fn task_billing_log_consume_gate_and_node_fallback() {
-    let _guard = USEDATA_LOCK.lock().expect("usedata lock");
+    let _guard = USEDATA_LOCK.lock().await;
     let db = sqlite_fixture().await;
     reset(&db).await;
     usedata::clear_cache();
