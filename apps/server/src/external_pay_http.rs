@@ -1837,6 +1837,8 @@ struct StripeEvent {
     client_reference_id: String,
     status: String,
     payment_status: String,
+    /// Go `event.GetObjectValue("amount_total")` 的浮点读数（日志与入账）。
+    money: f64,
 }
 
 fn parse_stripe_event(payload: &[u8]) -> Option<StripeEvent> {
@@ -1856,6 +1858,11 @@ fn parse_stripe_event(payload: &[u8]) -> Option<StripeEvent> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
+        money: match object.get("amount_total") {
+            Some(Value::Number(number)) => number.as_f64().unwrap_or(0.0),
+            Some(Value::String(text)) => text.parse::<f64>().unwrap_or(0.0),
+            _ => 0.0,
+        },
     })
 }
 
@@ -1882,13 +1889,18 @@ async fn stripe_fulfill_order(
         tracing::warn!(event = "stripe_fulfill_missing_trade_no", "Stripe 完成订单时缺少订单号");
         return Ok(());
     }
+    // Go `Recharge`：`QuotaFromDecimalStrict(decimal(Money) × QuotaPerUnit)`，
+    // decimal 路径在 `QuotaFromDecimalChecked` 里 `Round(0)`（half away from
+    // zero）后 `int()`；越界由 strict 拒绝。
+    let computed_quota = quota_from_float_strict((event.money * quota_per_unit).round());
     let outcome = recharge_external_top_up(
         db,
         ExternalRechargeParams {
             trade_no: &event.client_reference_id,
             expected_provider: PROVIDER_STRIPE,
-            quota_source: ExternalQuotaSource::MoneyTimesUnit,
+            quota_source: ExternalQuotaSource::Callable,
             quota_per_unit,
+            computed_quota: computed_quota.unwrap_or(0),
             idempotent_success: false,
             user_update: ExternalUserUpdate::StripeCustomer(&event.customer),
         },
@@ -2145,6 +2157,7 @@ pub async fn creem_webhook(
             expected_provider: PROVIDER_CREEM,
             quota_source: ExternalQuotaSource::AmountRaw,
             quota_per_unit: display.quota_per_unit,
+            computed_quota: 0,
             idempotent_success: false,
             user_update: update,
         },
@@ -2302,7 +2315,8 @@ pub async fn waffo_webhook(
             trade_no: &merchant_order_id,
             expected_provider: PROVIDER_WAFFO,
             quota_source: ExternalQuotaSource::AmountTimesUnit,
-            quota_per_unit: state.quota_display().quota_per_unit,
+            quota_per_unit: waffo_quota_per_unit(&state),
+            computed_quota: 0,
             idempotent_success: true,
             user_update: ExternalUserUpdate::None,
         },
@@ -2430,7 +2444,8 @@ pub async fn waffo_pancake_webhook(
             trade_no: &trade_no,
             expected_provider: PROVIDER_WAFFO_PANCAKE,
             quota_source: ExternalQuotaSource::AmountTimesUnit,
-            quota_per_unit: state.quota_display().quota_per_unit,
+            quota_per_unit: waffo_quota_per_unit(&state),
+            computed_quota: 0,
             idempotent_success: true,
             user_update: ExternalUserUpdate::None,
         },
@@ -2641,6 +2656,33 @@ async fn lookup_pancake_topup(
 // ---------------------------------------------------------------------------
 // Waffo 支付方式解析（Go `GetWaffoPayMethods`）
 // ---------------------------------------------------------------------------
+
+/// Go `QuotaPerUnit` 默认值（`common/constants.go:23`，$0.002 / 1K tokens）。
+pub(crate) const GO_QUOTA_PER_UNIT: f64 = 500_000.0;
+
+/// 回调核销用的 QuotaPerUnit：QuotaPerUnit option 的运行时值（quota_display
+/// 快照携带），0/非法回落 Go 常量。
+fn waffo_quota_per_unit(state: &AppState) -> f64 {
+    let qpu = state.quota_display().quota_per_unit;
+    if qpu > 0.0 {
+        qpu
+    } else {
+        GO_QUOTA_PER_UNIT
+    }
+}
+
+/// Go `common.QuotaFromDecimalStrict(decimal.NewFromFloat(v))`：
+/// `saturateQuota(v)` 不做取整——`int(value)` 直接截断，越界即拒绝。
+pub(crate) fn quota_from_float_strict(value: f64) -> Option<i64> {
+    if !value.is_finite() {
+        return None;
+    }
+    // Go `MaxQuota` / `MinQuota` 闭区间（int32 边界）。
+    if value >= f64::from(i32::MAX) || value <= f64::from(i32::MIN) {
+        return None;
+    }
+    Some(value as i64)
+}
 
 trait WaffoMethodsExt {
     fn parse_waffo_methods(&self) -> Vec<newapi_billing::topup::WaffoPayMethod>;

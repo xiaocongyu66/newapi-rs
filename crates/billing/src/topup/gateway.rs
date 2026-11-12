@@ -852,14 +852,18 @@ pub async fn record_topup_log(
 // ---------------------------------------------------------------------------
 
 /// 各网关应入账额度的来源（Go `store_topup.go` 的按 provider 分支）：
-/// - `MoneyTimesUnit`：Stripe 订单 `Money × QuotaPerUnit`（`Recharge`）
+/// - `MoneyTimesUnit`：Stripe 订单 `Money × QuotaPerUnit`（`Recharge`），
+///   `QuotaFromDecimalStrict` 经 `QuotaFromDecimalChecked` 的 `Round(0)` 取整
 /// - `AmountTimesUnit`：Waffo / Waffo Pancake 订单 `Amount × QuotaPerUnit`
 /// - `AmountRaw`：Creem 订单直接用 `Amount`（`RechargeCreem`）
+/// - `Callable`：调用方已按 Go 精确算式算好（截断 + int32 闭区间校验），
+///   直接采用；`None` 即 `ErrInvalidTopUpQuota`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExternalQuotaSource {
     MoneyTimesUnit,
     AmountTimesUnit,
     AmountRaw,
+    Callable,
 }
 
 /// 核销成功时附带写入 users 表的字段（Go `creditTopUpQuota` 的 `updates`）：
@@ -882,6 +886,8 @@ pub struct ExternalRechargeParams<'a> {
     pub expected_provider: &'a str,
     pub quota_source: ExternalQuotaSource,
     pub quota_per_unit: f64,
+    /// `ExternalQuotaSource::Callable` 时直接采用；其余来源忽略。
+    pub computed_quota: i64,
     pub idempotent_success: bool,
     pub user_update: ExternalUserUpdate<'a>,
 }
@@ -965,6 +971,7 @@ macro_rules! recharge_external_in_tx_impl {
                 top_up_quota(&settings, amount, false, $params.quota_per_unit)
             }
             ExternalQuotaSource::AmountRaw => quota_from_int_strict(amount),
+            ExternalQuotaSource::Callable => Some($params.computed_quota),
         };
         let Some(quota_added) = quota_added else {
             return Err(RechargeError::InvalidQuota);

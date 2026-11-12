@@ -1113,7 +1113,8 @@ async fn run_contract(db: Database) {
             .await
             .expect("waffo user quota")
     });
-    assert_eq!(quota, 20, "stripe 10 + waffo 10");
+    // Go `RechargeWaffo`：Amount × QuotaPerUnit（默认 500000），订单 amount=10。
+    assert_eq!(quota, 10 + 10 * 500_000, "stripe 10 + waffo 10 x 500000");
     let status: String = backend!(&db, pool, {
         sqlx::query_scalar(r#"SELECT status FROM top_ups WHERE trade_no = $1"#)
             .bind(&waffo_order_id)
@@ -1218,7 +1219,7 @@ async fn run_contract(db: Database) {
             .await
             .expect("pancake user quota")
     });
-    assert_eq!(quota, 30, "stripe 10 + waffo 10 + pancake 10");
+    assert_eq!(quota, 10 + 10 * 500_000 + 10 * 500_000, "stripe + waffo + pancake");
 
     // 买家身份不匹配 → 200 OK（错误日志），不入账。
     let payload = json!({
