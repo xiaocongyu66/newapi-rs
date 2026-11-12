@@ -256,7 +256,7 @@ pub struct ConsumeLogContext {
 /// Go `RecordConsumeLog`（store_log.go:374-439）。
 ///
 /// 返回写入错误供调用方记日志（Go 记 `failed to record log` 后继续）；
-/// `LogQuotaData` 只进内存缓存，落库由 [`usedata::save_quota_data_cache`]
+/// `LogQuotaData` 只进内存缓存，落库由 [`crate::usedata::save_quota_data_cache`]
 /// 完成（Go `SaveQuotaDataCache` 定时器）。
 pub async fn record_consume_log(
     db: &Database,
@@ -294,7 +294,7 @@ pub async fn record_consume_log(
     };
     insert_log(db, &log).await?;
     if context.data_export_enabled {
-        usedata::log_quota_data(usedata::QuotaDataLogParams {
+        crate::usedata::log_quota_data(crate::usedata::QuotaDataLogParams {
             user_id: user_id_of(context),
             username: context.username.clone(),
             model_name: params.model_name.clone(),
@@ -336,6 +336,9 @@ pub async fn record_error_log(
         content: content.to_owned(),
         token_name: token_name.to_owned(),
         model_name: model_name.to_owned(),
+        quota: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
         channel_id,
         token_id,
         use_time: use_time_seconds,
@@ -642,7 +645,7 @@ pub async fn record_task_billing_log(
         } else {
             params.node_name.clone()
         };
-        usedata::log_quota_data(usedata::QuotaDataLogParams {
+        crate::usedata::log_quota_data(crate::usedata::QuotaDataLogParams {
             user_id,
             username: username.to_owned(),
             model_name: params.model_name.clone(),
@@ -668,44 +671,63 @@ pub async fn read_back(db: &Database, id: i64) -> Result<Option<LogInsert>, sqlx
         CAST(use_time AS BIGINT) AS use_time, is_stream, \
         CAST(channel_id AS BIGINT) AS channel_id, CAST(token_id AS BIGINT) AS token_id, \
         \"group\", ip, request_id, upstream_request_id, other FROM logs WHERE id = ";
-    let row = match db {
+    fn decode_row<DB: sqlx::Database>(row: &DB::Row) -> Result<LogInsert, sqlx::Error>
+    where
+        for<'c> &'c str: sqlx::ColumnIndex<DB::Row>,
+        i64: sqlx::Type<DB> + for<'t> sqlx::Decode<'t, DB>,
+        String: sqlx::Type<DB> + for<'t> sqlx::Decode<'t, DB>,
+        bool: sqlx::Type<DB> + for<'t> sqlx::Decode<'t, DB>,
+    {
+        let get = |name: &str| -> Result<String, sqlx::Error> {
+            Ok(row.try_get::<Option<String>, _>(name)?.unwrap_or_default())
+        };
+        let get_i64 = |name: &str| -> Result<i64, sqlx::Error> {
+            Ok(row.try_get::<Option<i64>, _>(name)?.unwrap_or_default())
+        };
+        Ok(LogInsert {
+            user_id: get_i64("user_id")?,
+            created_at: get_i64("created_at")?,
+            log_type: get_i64("type")?,
+            content: get("content")?,
+            username: get("username")?,
+            token_name: get("token_name")?,
+            model_name: get("model_name")?,
+            quota: get_i64("quota")?,
+            prompt_tokens: get_i64("prompt_tokens")?,
+            completion_tokens: get_i64("completion_tokens")?,
+            use_time: get_i64("use_time")?,
+            is_stream: row
+                .try_get::<Option<bool>, _>("is_stream")?
+                .unwrap_or_default(),
+            channel_id: get_i64("channel_id")?,
+            token_id: get_i64("token_id")?,
+            group: get("group")?,
+            ip: get("ip")?,
+            request_id: get("request_id")?,
+            upstream_request_id: get("upstream_request_id")?,
+            other: get("other")?,
+        })
+    }
+    match db {
         Database::Sqlite(pool) => {
             let sql = format!("{select}?1");
-            sqlx::query(&sql).bind(id).fetch_optional(pool).await?
+            let row: Option<sqlx::sqlite::SqliteRow> = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+            Ok(row
+                .map(|row| decode_row::<sqlx::Sqlite>(&row))
+                .transpose()?)
         }
         Database::Postgres(pool) => {
             let sql = format!("{select}$1");
-            sqlx::query(&sql).bind(id).fetch_optional(pool).await?
+            let row: Option<sqlx::postgres::PgRow> = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+            Ok(row
+                .map(|row| decode_row::<sqlx::Postgres>(&row))
+                .transpose()?)
         }
-    };
-    let Some(row) = row else { return Ok(None) };
-    let get = |name: &str| -> Result<String, sqlx::Error> {
-        Ok(row.try_get::<Option<String>, _>(name)?.unwrap_or_default())
-    };
-    let get_i64 = |name: &str| -> Result<i64, sqlx::Error> {
-        Ok(row.try_get::<Option<i64>, _>(name)?.unwrap_or_default())
-    };
-    Ok(Some(LogInsert {
-        user_id: get_i64("user_id")?,
-        created_at: get_i64("created_at")?,
-        log_type: get_i64("type")?,
-        content: get("content")?,
-        username: get("username")?,
-        token_name: get("token_name")?,
-        model_name: get("model_name")?,
-        quota: get_i64("quota")?,
-        prompt_tokens: get_i64("prompt_tokens")?,
-        completion_tokens: get_i64("completion_tokens")?,
-        use_time: get_i64("use_time")?,
-        is_stream: row
-            .try_get::<Option<bool>, _>("is_stream")?
-            .unwrap_or_default(),
-        channel_id: get_i64("channel_id")?,
-        token_id: get_i64("token_id")?,
-        group: get("group")?,
-        ip: get("ip")?,
-        request_id: get("request_id")?,
-        upstream_request_id: get("upstream_request_id")?,
-        other: get("other")?,
-    }))
+    }
 }

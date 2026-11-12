@@ -13,7 +13,6 @@
 
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::Local;
 use lettre::{
     AsyncTransport, Tokio1Executor,
@@ -161,7 +160,17 @@ impl LettreSmtpSender {
 
 impl EmailSender for LettreSmtpSender {
     fn send<'a>(&'a self, message: &OutgoingMessage<'a>) -> SendFuture<'a> {
-        Box::pin(async move { self.deliver(message).await })
+        let subject = message.subject.to_owned();
+        let receiver = message.receiver.to_owned();
+        let content = message.content.to_owned();
+        Box::pin(async move {
+            self.deliver(&OutgoingMessage {
+                subject: &subject,
+                receiver: &receiver,
+                content: &content,
+            })
+            .await
+        })
     }
 }
 
@@ -223,9 +232,17 @@ impl Mailer {
 
 impl EmailSender for Mailer {
     fn send<'a>(&'a self, message: &OutgoingMessage<'a>) -> SendFuture<'a> {
+        let subject = message.subject.to_owned();
+        let receiver = message.receiver.to_owned();
+        let content = message.content.to_owned();
         Box::pin(async move {
+            let owned = OutgoingMessage {
+                subject: &subject,
+                receiver: &receiver,
+                content: &content,
+            };
             if let Some(pool) = &self.pool {
-                return pool.send(message).await;
+                return pool.send(&owned).await;
             }
             let Some(legacy) = &self.legacy else {
                 return Err(EmailError(SMTP_NOT_CONFIGURED.to_owned()));
@@ -234,7 +251,7 @@ impl EmailSender for Mailer {
                 return Err(EmailError(SMTP_NOT_CONFIGURED.to_owned()));
             }
             LettreSmtpSender::new(legacy.clone(), self.system_name.clone())
-                .deliver(message)
+                .deliver(&owned)
                 .await
         })
     }

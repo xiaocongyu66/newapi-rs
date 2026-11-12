@@ -12,7 +12,7 @@ use newapi_usage::store_log::{self, ConsumeLogContext, RecordConsumeLogParams, T
 use newapi_usage::usedata::{self, QuotaDataLogParams};
 use serde_json::{Map, Value, json};
 use sqlx::{
-    ConnectOptions, Row,
+    ConnectOptions,
     postgres::{PgConnectOptions, PgPoolOptions},
     sqlite::SqlitePoolOptions,
 };
@@ -177,7 +177,7 @@ async fn reset(db: &Database) {
     match db {
         Database::Sqlite(pool) => {
             for table in ["logs", "quota_data"] {
-                sqlx::query(&format!("DELETE FROM {table}"))
+                sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
                     .execute(pool)
                     .await
                     .expect("reset");
@@ -399,14 +399,18 @@ async fn data_export_populates_quota_data_cache_not_the_table() {
 
 async fn count_rows(db: &Database, table: &str) -> i64 {
     match db {
-        Database::Sqlite(pool) => sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-            .fetch_one(pool)
-            .await
-            .unwrap(),
-        Database::Postgres(pool) => sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-            .fetch_one(pool)
-            .await
-            .unwrap(),
+        Database::Sqlite(pool) => {
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+        Database::Postgres(pool) => {
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
     }
 }
 
@@ -591,6 +595,7 @@ async fn other_write_shapes_follow_the_go_functions() {
     let params = store_log::TaskBillingLogParams {
         log_type: store_log::LOG_TYPE_CONSUME,
         content: "task".to_owned(),
+        channel_id: 0,
         model_name: "m".to_owned(),
         quota: 42,
         token_id: 0,

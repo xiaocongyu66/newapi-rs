@@ -180,7 +180,7 @@ mod tests {
     impl EmailSender for StubSender {
         fn send<'a>(
             &'a self,
-            _message: &'a OutgoingMessage<'a>,
+            _message: &OutgoingMessage<'a>,
         ) -> newapi_identity::email::SendFuture<'a> {
             Box::pin(async move {
                 *self.calls.lock().unwrap() += 1;
@@ -221,6 +221,14 @@ mod tests {
         }
     }
 
+    /// EmailError purposely lacks Debug（identity 端口文档），unwrap/expect
+    /// 不可用；测试用 match 提取。
+    fn ok(result: Result<(), EmailError>) {
+        if let Err(error) = result {
+            panic!("send failed: {error}");
+        }
+    }
+
     fn message() -> OutgoingMessage<'static> {
         OutgoingMessage {
             subject: "s",
@@ -251,7 +259,7 @@ mod tests {
             vec![high.clone(), low.clone()],
             Arc::new(MemoryQuota::default()),
         );
-        pool.send(&message()).await.unwrap();
+        ok(pool.send(&message()).await);
         assert_eq!(*low.calls.lock().unwrap(), 1);
         assert_eq!(*high.calls.lock().unwrap(), 0);
     }
@@ -264,7 +272,7 @@ mod tests {
             vec![failing.clone(), fallback.clone()],
             Arc::new(MemoryQuota::default()),
         );
-        pool.send(&message()).await.unwrap();
+        ok(pool.send(&message()).await);
         assert_eq!(*failing.calls.lock().unwrap(), 1);
         assert_eq!(*fallback.calls.lock().unwrap(), 1);
     }
@@ -276,7 +284,7 @@ mod tests {
         let full = StubSender::new(1, 10, "full", false);
         let spare = StubSender::new(2, 0, "spare", false);
         let pool = pool_with(vec![full.clone(), spare.clone()], quota);
-        pool.send(&message()).await.unwrap();
+        ok(pool.send(&message()).await);
         assert_eq!(*full.calls.lock().unwrap(), 0);
         assert_eq!(*spare.calls.lock().unwrap(), 1);
     }
@@ -287,7 +295,10 @@ mod tests {
         quota.used.lock().unwrap().insert("full".to_owned(), 10);
         let full = StubSender::new(1, 10, "full", false);
         let pool = pool_with(vec![full], quota);
-        let error = pool.send(&message()).await.unwrap_err();
+        let error = match pool.send(&message()).await {
+            Ok(()) => panic!("expected exhaustion error"),
+            Err(error) => error,
+        };
         assert_eq!(error.to_string(), ALL_ACCOUNTS_EXHAUSTED);
     }
 
@@ -298,7 +309,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::default());
         let free = StubSender::new(1, 0, "free", false);
         let pool = pool_with(vec![free.clone()], quota.clone());
-        pool.send(&message()).await.unwrap();
+        ok(pool.send(&message()).await);
         assert!(quota.used.lock().unwrap().is_empty());
         assert_eq!(*free.calls.lock().unwrap(), 1);
     }
@@ -306,7 +317,10 @@ mod tests {
     #[tokio::test]
     async fn empty_pool_reports_unconfigured() {
         let pool = SenderPool::new(Vec::new(), Arc::new(MemoryQuota::default()), &factory);
-        let error = pool.send(&message()).await.unwrap_err();
+        let error = match pool.send(&message()).await {
+            Ok(()) => panic!("expected unconfigured error"),
+            Err(error) => error,
+        };
         assert_eq!(error.to_string(), SMTP_NOT_CONFIGURED);
     }
 
@@ -327,6 +341,5 @@ mod tests {
         let a_calls = *a.calls.lock().unwrap();
         let b_calls = *b.calls.lock().unwrap();
         assert_eq!(a_calls + b_calls, 2, "top tier served both sends");
-        assert!(c.calls.lock().unwrap() >= &0);
     }
 }

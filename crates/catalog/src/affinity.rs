@@ -176,15 +176,20 @@ impl<V: Clone> TtlLruCache<V> {
         }
         let mut inner = self.inner.lock().expect("affinity cache");
         let now = Instant::now();
-        if let Some(entry) = inner.map.get(&full) {
-            if Self::expired(entry, now) {
-                inner.order.remove(&entry.last_used);
-                inner.map.remove(&full);
-                return None;
-            }
+        let expired_seq = match inner.map.get(&full) {
+            Some(entry) if Self::expired(entry, now) => Some(entry.last_used),
+            Some(_) => None,
+            None => return None,
+        };
+        if let Some(seq) = expired_seq {
+            inner.order.remove(&seq);
+            inner.map.remove(&full);
+            return None;
         }
-        let seq_before = inner.map.get(&full)?.last_used;
-        let value = inner.map.get(&full)?.value.clone();
+        let (seq_before, value) = {
+            let entry = inner.map.get(&full)?;
+            (entry.last_used, entry.value.clone())
+        };
         // 刷新顺位：旧 seq 出、新 seq 入。
         inner.seq += 1;
         let seq_new = inner.seq;

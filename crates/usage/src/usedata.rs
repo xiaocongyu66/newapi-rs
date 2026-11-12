@@ -9,8 +9,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use newapi_storage::Database;
-use serde_json::Value;
-use sqlx::Row;
 
 /// Go `QuotaDataLogParams`（store_usedata.go:45-56）。
 #[derive(Debug, Clone, Default)]
@@ -185,23 +183,24 @@ async fn upsert_quota_data(db: &Database, entry: &QuotaDataAgg) -> Result<(), sq
             }
         }
         Database::Postgres(pool) => {
-            let existing: Option<i64> =
-                sqlx::query_scalar(&format!("SELECT id FROM quota_data WHERE {WHERE}"))
-                    .bind(entry.user_id)
-                    .bind(&entry.username)
-                    .bind(&entry.model_name)
-                    .bind(entry.created_at)
-                    .bind(&entry.use_group)
-                    .bind(entry.token_id)
-                    .bind(entry.channel_id)
-                    .bind(&entry.node_name)
-                    .fetch_optional(pool)
-                    .await?;
+            let existing: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT id FROM quota_data WHERE {WHERE}"
+            )))
+            .bind(entry.user_id)
+            .bind(&entry.username)
+            .bind(&entry.model_name)
+            .bind(entry.created_at)
+            .bind(&entry.use_group)
+            .bind(entry.token_id)
+            .bind(entry.channel_id)
+            .bind(&entry.node_name)
+            .fetch_optional(pool)
+            .await?;
             if existing.is_some() {
-                sqlx::query(&format!(
+                sqlx::query(sqlx::AssertSqlSafe(format!(
                     "UPDATE quota_data SET count = count + $9, quota = quota + $10, \
                      token_used = token_used + $11 WHERE {WHERE}"
-                ))
+                )))
                 .bind(entry.user_id)
                 .bind(&entry.username)
                 .bind(&entry.model_name)
@@ -245,12 +244,13 @@ pub async fn read_back(
     db: &Database,
     entry: &QuotaDataAgg,
 ) -> Result<Option<(i64, i64, i64)>, sqlx::Error> {
-    let row = match db {
+    let decode = |row: (i64, i64, i64)| Ok(Some(row));
+    match db {
         Database::Sqlite(pool) => {
-            sqlx::query(
-                "SELECT CAST(COALESCE(SUM(count), 0) AS BIGINT) AS count, \
-                 CAST(COALESCE(SUM(quota), 0) AS BIGINT) AS quota, \
-                 CAST(COALESCE(SUM(token_used), 0) AS BIGINT) AS token_used \
+            let row: Option<(i64, i64, i64)> = sqlx::query_as(
+                "SELECT CAST(COALESCE(SUM(count), 0) AS BIGINT), \
+                 CAST(COALESCE(SUM(quota), 0) AS BIGINT), \
+                 CAST(COALESCE(SUM(token_used), 0) AS BIGINT) \
                  FROM quota_data WHERE user_id = ?1 AND username = ?2 AND model_name = ?3 \
                  AND created_at = ?4 AND use_group = ?5 AND token_id = ?6 \
                  AND channel_id = ?7 AND node_name = ?8",
@@ -264,13 +264,14 @@ pub async fn read_back(
             .bind(entry.channel_id)
             .bind(&entry.node_name)
             .fetch_optional(pool)
-            .await?
+            .await?;
+            decode(row.expect("aggregate always yields one row"))
         }
         Database::Postgres(pool) => {
-            sqlx::query(
-                "SELECT CAST(COALESCE(SUM(count), 0) AS BIGINT) AS count, \
-                 CAST(COALESCE(SUM(quota), 0) AS BIGINT) AS quota, \
-                 CAST(COALESCE(SUM(token_used), 0) AS BIGINT) AS token_used \
+            let row: Option<(i64, i64, i64)> = sqlx::query_as(
+                "SELECT CAST(COALESCE(SUM(count), 0) AS BIGINT), \
+                 CAST(COALESCE(SUM(quota), 0) AS BIGINT), \
+                 CAST(COALESCE(SUM(token_used), 0) AS BIGINT) \
                  FROM quota_data WHERE user_id = $1 AND username = $2 AND model_name = $3 \
                  AND created_at = $4 AND use_group = $5 AND token_id = $6 \
                  AND channel_id = $7 AND node_name = $8",
@@ -284,19 +285,8 @@ pub async fn read_back(
             .bind(entry.channel_id)
             .bind(&entry.node_name)
             .fetch_optional(pool)
-            .await?
+            .await?;
+            decode(row.expect("aggregate always yields one row"))
         }
-    };
-    let Some(row) = row else { return Ok(None) };
-    let value = |name: &str| -> Result<i64, sqlx::Error> {
-        match row.try_get::<Option<i64>, _>(name) {
-            Ok(v) => Ok(v.unwrap_or_default()),
-            Err(_) => Ok(row.try_get::<Value, _>(name)?.as_i64().unwrap_or_default()),
-        }
-    };
-    Ok(Some((
-        value("count")?,
-        value("quota")?,
-        value("token_used")?,
-    )))
+    }
 }

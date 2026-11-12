@@ -444,14 +444,16 @@ struct CapturingSender {
 impl newapi_identity::email::EmailSender for CapturingSender {
     fn send<'a>(
         &'a self,
-        message: &'a newapi_identity::email::OutgoingMessage<'a>,
+        message: &newapi_identity::email::OutgoingMessage<'a>,
     ) -> newapi_identity::email::SendFuture<'a> {
+        let subject = message.subject.to_owned();
+        let receiver = message.receiver.to_owned();
+        let content = message.content.to_owned();
         Box::pin(async move {
-            self.messages.lock().unwrap().push((
-                message.subject.to_owned(),
-                message.receiver.to_owned(),
-                message.content.to_owned(),
-            ));
+            self.messages
+                .lock()
+                .unwrap()
+                .push((subject, receiver, content));
             Ok(())
         })
     }

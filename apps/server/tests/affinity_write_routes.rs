@@ -92,7 +92,7 @@ async fn postgres_fixture() -> Option<Database> {
         return None;
     };
     let options: PgConnectOptions = dsn
-        .parse()
+        .parse::<PgConnectOptions>()
         .expect("invalid PostgreSQL fixture config")
         .disable_statement_logging();
     let admin = PgPoolOptions::new()

@@ -45,27 +45,30 @@ impl QuotaStore for DbQuotaStore {
     /// Go `UsedToday`（quota_store.go:31-53）：无行视为 0。
     async fn used_today(&self, account: &str) -> Result<i64, String> {
         let day = quota_day();
-        let used = match &self.db {
-            Database::Sqlite(pool) => sqlx::query_scalar::<_, i64>(
-                "SELECT CAST(COALESCE(used, 0) AS BIGINT) AS used FROM smtp_quota_usage \
-                 WHERE account = ?1 AND day = ?2",
-            )
-            .bind(account)
-            .bind(&day)
-            .fetch_optional(pool)
-            .await
-            .map_err(|error| format!("failed to read SMTP quota for {account}: {error}"))?,
-            Database::Postgres(pool) => sqlx::query_scalar::<_, i64>(
-                "SELECT CAST(COALESCE(used, 0) AS BIGINT) AS used FROM smtp_quota_usage \
-                 WHERE account = $1 AND day = $2",
-            )
-            .bind(account)
-            .bind(&day)
-            .fetch_optional(pool)
-            .await
-            .map_err(|error| format!("failed to read SMTP quota for {account}: {error}"))?,
-        };
-        Ok(used.unwrap_or(Some(0)).unwrap_or(0))
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let used: Option<i64> = sqlx::query_scalar(
+                    "SELECT used FROM smtp_quota_usage WHERE account = ?1 AND day = ?2",
+                )
+                .bind(account)
+                .bind(&day)
+                .fetch_optional(pool)
+                .await
+                .map_err(|error| format!("failed to read SMTP quota for {account}: {error}"))?;
+                Ok(used.unwrap_or(0))
+            }
+            Database::Postgres(pool) => {
+                let used: Option<i64> = sqlx::query_scalar(
+                    "SELECT used FROM smtp_quota_usage WHERE account = $1 AND day = $2",
+                )
+                .bind(account)
+                .bind(&day)
+                .fetch_optional(pool)
+                .await
+                .map_err(|error| format!("failed to read SMTP quota for {account}: {error}"))?;
+                Ok(used.unwrap_or(0))
+            }
+        }
     }
 
     /// Go `RecordUse`（quota_store.go:56-88）：单条原子 UPDATE；无行时
@@ -73,6 +76,8 @@ impl QuotaStore for DbQuotaStore {
     async fn record_use(&self, account: &str) -> Result<(), String> {
         let day = quota_day();
         let now = Utc::now().timestamp();
+        let bump_err =
+            |error: sqlx::Error| format!("failed to record SMTP quota for {account}: {error}");
         let updated = match &self.db {
             Database::Sqlite(pool) => sqlx::query(
                 "UPDATE smtp_quota_usage SET used = used + 1, updated_at = ?1 \
@@ -83,7 +88,7 @@ impl QuotaStore for DbQuotaStore {
             .bind(&day)
             .execute(pool)
             .await
-            .map_err(|error| format!("failed to record SMTP quota for {account}: {error}"))?
+            .map_err(bump_err)?
             .rows_affected(),
             Database::Postgres(pool) => sqlx::query(
                 "UPDATE smtp_quota_usage SET used = used + 1, updated_at = $1 \
@@ -94,69 +99,64 @@ impl QuotaStore for DbQuotaStore {
             .bind(&day)
             .execute(pool)
             .await
-            .map_err(|error| format!("failed to record SMTP quota for {account}: {error}"))?
+            .map_err(bump_err)?
             .rows_affected(),
         };
         if updated > 0 {
             return Ok(());
         }
-        let inserted = match &self.db {
+        // 并发首发明兜底：先 INSERT，撞唯一键再补一次 UPDATE（Go 同形）。
+        match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(
+                if sqlx::query(
                     "INSERT INTO smtp_quota_usage (account, day, used, updated_at) \
-                 VALUES (?1, ?2, 1, ?3)",
+                     VALUES (?1, ?2, 1, ?3)",
                 )
                 .bind(account)
                 .bind(&day)
                 .bind(now)
                 .execute(pool)
                 .await
+                .is_err()
+                {
+                    sqlx::query(
+                        "UPDATE smtp_quota_usage SET used = used + 1, updated_at = ?1 \
+                         WHERE account = ?2 AND day = ?3",
+                    )
+                    .bind(now)
+                    .bind(account)
+                    .bind(&day)
+                    .execute(pool)
+                    .await
+                    .map_err(bump_err)?;
+                }
             }
             Database::Postgres(pool) => {
-                sqlx::query(
+                if sqlx::query(
                     "INSERT INTO smtp_quota_usage (account, day, used, updated_at) \
-                 VALUES ($1, $2, 1, $3)",
+                     VALUES ($1, $2, 1, $3)",
                 )
                 .bind(account)
                 .bind(&day)
                 .bind(now)
                 .execute(pool)
                 .await
-            }
-        };
-        match inserted {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                // 并发首发明：UPDATE 与 INSERT 之间另一连接已插行。
-                let retried = match &self.db {
-                    Database::Sqlite(pool) => {
-                        sqlx::query(
-                            "UPDATE smtp_quota_usage SET used = used + 1, updated_at = ?1 \
-                         WHERE account = ?2 AND day = ?3",
-                        )
-                        .bind(now)
-                        .bind(account)
-                        .bind(&day)
-                        .execute(pool)
-                        .await
-                    }
-                    Database::Postgres(pool) => {
-                        sqlx::query(
-                            "UPDATE smtp_quota_usage SET used = used + 1, updated_at = $1 \
+                .is_err()
+                {
+                    sqlx::query(
+                        "UPDATE smtp_quota_usage SET used = used + 1, updated_at = $1 \
                          WHERE account = $2 AND day = $3",
-                        )
-                        .bind(now)
-                        .bind(account)
-                        .bind(&day)
-                        .execute(pool)
-                        .await
-                    }
-                };
-                retried
-                    .map(|_| ())
-                    .map_err(|error| format!("failed to record SMTP quota for {account}: {error}"))
+                    )
+                    .bind(now)
+                    .bind(account)
+                    .bind(&day)
+                    .execute(pool)
+                    .await
+                    .map_err(bump_err)?;
+                }
             }
         }
+        Ok(())
     }
 }
 

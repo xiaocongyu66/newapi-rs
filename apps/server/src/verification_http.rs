@@ -24,7 +24,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use newapi_catalog::email_settings::EmailSettings;
-use newapi_identity::email::{EmailSender, OutgoingMessage};
+use newapi_identity::email::OutgoingMessage;
 use newapi_identity::password_reset::PasswordResetRepository;
 use newapi_identity::registration::{
     EMAIL_VERIFICATION_PURPOSE, PASSWORD_RESET_PURPOSE, RegistrationRepository,
