@@ -246,6 +246,36 @@ async fn exec(db: &Database, statement: &'static str) {
     });
 }
 
+// 网关路由修订表（Go `GatewayConfigRevision`/`GatewayConfigOutbox`）：
+// 渠道/模型写路径与网关路由 option 写入经 `mutate_routing!` 提交时推进水位。
+const GATEWAY_REVISION_SQLITE: &str = r#"CREATE TABLE gateway_config_revisions (
+    id BIGINT PRIMARY KEY,
+    routing_revision BIGINT NOT NULL
+)"#;
+
+const GATEWAY_REVISION_POSTGRES: &str = r#"CREATE TABLE gateway_config_revisions (
+    id BIGINT PRIMARY KEY,
+    routing_revision BIGINT NOT NULL
+)"#;
+
+const GATEWAY_OUTBOX_SQLITE: &str = r#"CREATE TABLE gateway_config_outboxes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    routing_revision BIGINT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    published_at TIMESTAMP,
+    publish_attempts INTEGER NOT NULL DEFAULT 0,
+    last_publish_error_class VARCHAR(64)
+)"#;
+
+const GATEWAY_OUTBOX_POSTGRES: &str = r#"CREATE TABLE gateway_config_outboxes (
+    id BIGSERIAL PRIMARY KEY,
+    routing_revision BIGINT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    published_at TIMESTAMP,
+    publish_attempts INTEGER NOT NULL DEFAULT 0,
+    last_publish_error_class VARCHAR(64)
+)"#;
+
 async fn create_schema(db: &Database) {
     match db {
         Database::Sqlite(_) => {
@@ -256,6 +286,8 @@ async fn create_schema(db: &Database) {
                 VENDORS_SQLITE,
                 CHANNELS_SQLITE,
                 ABILITIES_SQLITE,
+                GATEWAY_REVISION_SQLITE,
+                GATEWAY_OUTBOX_SQLITE,
             ] {
                 exec(db, statement).await;
             }
@@ -268,11 +300,17 @@ async fn create_schema(db: &Database) {
                 VENDORS_POSTGRES,
                 CHANNELS_POSTGRES,
                 ABILITIES_POSTGRES,
+                GATEWAY_REVISION_POSTGRES,
+                GATEWAY_OUTBOX_POSTGRES,
             ] {
                 exec(db, statement).await;
             }
         }
     }
+    // 水位单例行必须存在：写路径提交时推进网关路由修订号。
+    newapi_catalog::gateway_revision::initialize_gateway_config_revision(db)
+        .await
+        .unwrap();
 }
 
 async fn reset(db: &Database) {

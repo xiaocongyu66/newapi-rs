@@ -15,14 +15,20 @@
 //! 已软删行。
 //!
 //! 已知范围裁剪（后续切片接入）：
-//! - Go 的 `Insert`/`Update`/`Delete`/`UpdateModelStatus` 都包在
-//!   `MutateGatewayRouting` 事务里（行写入 + 路由修订号 bump + outbox 同事务
-//!   提交）。与 channels 切片的决定一致：catalog 尚无网关修订机制，事务边界
-//!   保持 Go 的“单条变更原子提交”语义，修订号不在本切片。
-//! - `RefreshPricing`（定价缓存刷新）与 `enrichModels` 的
+//! - Go 的 `RefreshPricing`（定价缓存刷新）与 `enrichModels` 的
 //!   `enable_groups`/`quota_types`/`matched_models`/规则模型的
 //!   `bound_channels` 并集均来自定价缓存（`store_pricing.go`），缓存未移植，
 //!   由 HTTP 适配层按“空缓存”语义出空值。
+//! - sync 上游的 models 全行覆写（`save_all`）在 Go 属 sync 域事务，未包在
+//!   `MutateGatewayRouting` 里（Go `internal/task` 的 sync 路径），本切片
+//!   保持原样并登记遗留。
+//!
+//! 网关路由修订（`crate::gateway_revision`）：Go 的 `Model.Insert`/`Update`/
+//! `UpdateModelStatus`/`Delete` 与 `Vendor.Insert` 都包在 `MutateGatewayRouting`
+//! 单事务里（`store_model_meta.go:74-131`、`store_vendor_meta.go:40`），
+//! `insert`/`update`/`update_status`/`soft_delete`/`insert_vendor` 经
+//! [`crate::mutate_routing!`] 走同一原语：域写入成功后、commit 前推进一次
+//! 修订号，失败整体回滚。
 //!
 //! 两个后端共用 `$N` 占位符（sqlx-sqlite 与 sqlx-postgres 均接受），与
 //! `channels/store.rs` 的约定一致。
@@ -391,7 +397,8 @@ impl ModelRepository {
     /// 列默认改回的 1 强制覆盖为 0）；`created_time`/`updated_time` 由本层
     /// 生成（Go `common.GetTimestamp()`）。返回新 id。
     pub async fn insert(&self, model: &NewModel, now: i64) -> Result<i64, sqlx::Error> {
-        backend!(&self.db, pool, {
+        let db = &self.db;
+        crate::mutate_routing!(db, pool, {
             match model.id {
                 Some(id) if id != 0 => {
                     sqlx::query_scalar(
@@ -445,7 +452,8 @@ impl ModelRepository {
     /// 不存在时 Go 的 `Updates` 也是 0 行无错，这里同样静默。
     pub async fn update(&self, model: &ModelInput, updated_time: i64) -> Result<(), sqlx::Error> {
         let id = model.id.unwrap_or(0);
-        backend!(&self.db, pool, {
+        let db = &self.db;
+        crate::mutate_routing!(db, pool, {
             sqlx::query(
                 "UPDATE models SET model_name = $1, description = $2, icon = $3, tags = $4, \
                  vendor_id = $5, endpoints = $6, status = $7, sync_official = $8, \
@@ -469,9 +477,11 @@ impl ModelRepository {
         })
     }
 
-    /// Go `UpdateModelStatus`：只改 status，**不**触碰 updated_time。
+    /// Go `UpdateModelStatus`（`store_model_meta.go:126-131`）：只改 status，
+    /// **不**触碰 updated_time；`MutateGatewayRouting` 单事务，提交时推进修订号。
     pub async fn update_status(&self, id: i64, status: i64) -> Result<(), sqlx::Error> {
-        backend!(&self.db, pool, {
+        let db = &self.db;
+        crate::mutate_routing!(db, pool, {
             sqlx::query("UPDATE models SET status = $1 WHERE id = $2 AND deleted_at IS NULL")
                 .bind(status)
                 .bind(id)
@@ -485,31 +495,28 @@ impl ModelRepository {
     /// 校验存在，这一步在 HTTP 层完成）。时间戳列写法沿用
     /// `identity/src/two_fa/repository.rs` 的双后端先例：unix 秒经
     /// `datetime(...,'unixepoch')` / `to_timestamp(...::BIGINT)` 写入
-    /// TIMESTAMP/TIMESTAMPTZ 列。
+    /// TIMESTAMP/TIMESTAMPTZ 列。`MutateGatewayRouting` 单事务，提交时推进
+    /// 修订号（Go `mi.Delete()`，`store_model_meta.go:119-124`）。
     pub async fn soft_delete(&self, id: i64, deleted_at: i64) -> Result<bool, sqlx::Error> {
-        backend!(&self.db, pool, {
-            let result = match self.db {
+        let db = &self.db;
+        crate::mutate_routing!(db, pool, {
+            // 时间戳写法按后端选 SQL 串后单次执行（两个驱动共用 `$N` 占位符）；
+            // match 直接返回行结果会因两臂类型不同而无法统一。
+            let sql = match self.db {
                 Database::Sqlite(_) => {
-                    sqlx::query(
-                        "UPDATE models SET deleted_at = datetime($1, 'unixepoch') \
-                         WHERE id = $2 AND deleted_at IS NULL",
-                    )
-                    .bind(deleted_at)
-                    .bind(id)
-                    .execute(pool)
-                    .await?
+                    "UPDATE models SET deleted_at = datetime($1, 'unixepoch') \
+                     WHERE id = $2 AND deleted_at IS NULL"
                 }
                 Database::Postgres(_) => {
-                    sqlx::query(
-                        "UPDATE models SET deleted_at = to_timestamp($1::BIGINT) \
-                         WHERE id = $2 AND deleted_at IS NULL",
-                    )
-                    .bind(deleted_at)
-                    .bind(id)
-                    .execute(pool)
-                    .await?
+                    "UPDATE models SET deleted_at = to_timestamp($1::BIGINT) \
+                     WHERE id = $2 AND deleted_at IS NULL"
                 }
             };
+            let result = sqlx::query(sql)
+                .bind(deleted_at)
+                .bind(id)
+                .execute(pool)
+                .await?;
             Ok(result.rows_affected() > 0)
         })
     }
@@ -671,7 +678,9 @@ impl ModelRepository {
         })
     }
 
-    /// Go `v.Insert()`（vendors 最小路径）：仅 sync 需要的字段；返回新 id。
+    /// Go `v.Insert()`（vendors 最小路径，`store_vendor_meta.go:40` 包在
+    /// `MutateGatewayRouting` 单事务里）：仅 sync 需要的字段；返回新 id，
+    /// 提交时推进修订号。
     pub async fn insert_vendor(
         &self,
         name: &str,
@@ -680,7 +689,8 @@ impl ModelRepository {
         status: i64,
         now: i64,
     ) -> Result<i64, sqlx::Error> {
-        backend!(&self.db, pool, {
+        let db = &self.db;
+        crate::mutate_routing!(db, pool, {
             sqlx::query_scalar(
                 "INSERT INTO vendors (name, description, icon, status, created_time, updated_time) \
                  VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",

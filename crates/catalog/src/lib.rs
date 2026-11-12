@@ -8,6 +8,7 @@ pub mod abilities;
 pub mod auth_settings;
 pub mod channels;
 pub mod email_settings;
+pub mod gateway_revision;
 pub mod group_settings;
 pub mod models;
 pub mod public_config;
