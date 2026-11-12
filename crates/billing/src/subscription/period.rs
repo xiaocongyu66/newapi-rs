@@ -225,8 +225,8 @@ mod tests {
     #[test]
     fn days_from_civil_round_trips() {
         assert_eq!(days_from_civil(1970, 1, 1), 0);
-        assert_eq!(days_from_civil(2026, 11, 7), 20_765);
-        assert_eq!(civil_from_days(20_765), (2026, 11, 7));
+        assert_eq!(days_from_civil(2026, 11, 7), 20_764);
+        assert_eq!(civil_from_days(20_764), (2026, 11, 7));
         // 月越界归一化：2026-13-01 = 2027-01-01。
         assert_eq!(days_from_civil(2026, 13, 1), days_from_civil(2027, 1, 1));
     }
