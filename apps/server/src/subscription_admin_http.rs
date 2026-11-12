@@ -464,7 +464,7 @@ pub async fn admin_create_plan(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let Ok(envelope) = bind_body_value(request).await else {
+    let Ok(envelope): Result<PlanEnvelope, ()> = bind_body_value(request).await else {
         return invalid_params();
     };
     let input = envelope.plan.unwrap_or_default();
@@ -534,7 +534,7 @@ pub async fn admin_update_plan(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let Ok(envelope) = bind_body_value(request).await else {
+    let Ok(envelope): Result<PlanEnvelope, ()> = bind_body_value(request).await else {
         return invalid_params();
     };
     let input = envelope.plan.unwrap_or_default();
@@ -581,7 +581,7 @@ pub async fn admin_update_plan_status(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let Ok(envelope) = bind_body_value(request).await else {
+    let Ok(envelope): Result<PlanEnvelope, ()> = bind_body_value(request).await else {
         return invalid_params();
     };
     let Some(enabled) = envelope.enabled else {
@@ -632,7 +632,7 @@ pub async fn admin_bind(
     if let Some(response) = require_payment_compliance(&state, &headers).await {
         return response;
     }
-    let Ok(envelope) = bind_body_value(request).await else {
+    let Ok(envelope): Result<PlanEnvelope, ()> = bind_body_value(request).await else {
         return invalid_params();
     };
     let user_id = envelope.user_id.unwrap_or_default();
@@ -694,7 +694,7 @@ pub async fn admin_create_user_subscription(
     if user_id <= 0 {
         return literal_error(MSG_INVALID_USER_ID);
     }
-    let Ok(envelope) = bind_body_value(request).await else {
+    let Ok(envelope): Result<PlanEnvelope, ()> = bind_body_value(request).await else {
         return invalid_params();
     };
     let plan_id = envelope.plan_id.unwrap_or_default();
@@ -732,7 +732,7 @@ pub async fn admin_reset_user_subscriptions(
     if user_id <= 0 {
         return literal_error(MSG_INVALID_USER_ID);
     }
-    let Ok(envelope) = bind_body_value(request).await else {
+    let Ok(envelope): Result<PlanEnvelope, ()> = bind_body_value(request).await else {
         return invalid_params();
     };
     let plan_id = envelope.plan_id.unwrap_or_default();
@@ -766,7 +766,7 @@ pub async fn admin_reset_plan_subscriptions(
     if plan_id <= 0 {
         return literal_error(MSG_INVALID_ID);
     }
-    let Ok(envelope) = bind_body_value(request).await else {
+    let Ok(envelope): Result<PlanEnvelope, ()> = bind_body_value(request).await else {
         return invalid_params();
     };
     let Some(db) = state.db() else {
