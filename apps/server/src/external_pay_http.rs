@@ -64,6 +64,11 @@ use crate::gateway_http::{
 type PancakePayFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, crate::pancake::PancakeError>> + Send + 'a>>;
 
+type CreemFuture<'a> = Pin<Box<dyn Future<Output = Result<(String, String), String>> + Send + 'a>>;
+
+type WaffoFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(String, String, Value), String>> + Send + 'a>>;
+
 // ---- 错误文案（Go 硬编码中文/英文字面量） --------------------------------
 
 const MSG_BAD_REQUEST: &str = "参数错误";
@@ -288,7 +293,7 @@ pub trait CreemTransport: Send + Sync {
         api_key: &'a str,
         test_mode: bool,
         request: &'a CreemCheckoutRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(String, String), String>> + Send + 'a>>;
+    ) -> CreemFuture<'a>;
 }
 
 /// Go `CreemCheckoutRequest`。
@@ -322,7 +327,7 @@ pub trait WaffoTransport: Send + Sync {
         &'a self,
         creds: &'a WaffoCreds,
         body: &'a Value,
-    ) -> Pin<Box<dyn Future<Output = Result<(String, String, Value), String>> + Send + 'a>>;
+    ) -> WaffoFuture<'a>;
 }
 
 #[derive(Clone)]
@@ -460,7 +465,7 @@ impl CreemTransport for HttpCreemTransport {
         api_key: &'a str,
         test_mode: bool,
         request: &'a CreemCheckoutRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(String, String), String>> + Send + 'a>> {
+    ) -> CreemFuture<'a> {
         Box::pin(async move {
             let client = external_client()
                 .ok_or_else(|| "transport unavailable".to_owned())?;
@@ -531,7 +536,7 @@ impl WaffoTransport for HttpWaffoTransport {
         &'a self,
         creds: &'a WaffoCreds,
         body: &'a Value,
-    ) -> Pin<Box<dyn Future<Output = Result<(String, String, Value), String>> + Send + 'a>> {
+    ) -> WaffoFuture<'a> {
         Box::pin(async move {
             let client = external_client()
                 .ok_or_else(|| "transport unavailable".to_owned())?;
@@ -938,7 +943,7 @@ enum StripeVerifyError {
 }
 
 fn hex_decode(input: &str) -> Result<Vec<u8>, ()> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(());
     }
     let bytes = input.as_bytes();
@@ -2166,7 +2171,7 @@ fn verify_creem_signature(payload: &[u8], signature: &str, secret: &str) -> bool
     }
     use ring::hmac;
     let key = hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
-    let expected = hex_encode(&hmac::sign(&key, payload).as_ref());
+    let expected = hex_encode(hmac::sign(&key, payload).as_ref());
     newapi_billing::topup::constant_time_eq(signature, &expected)
 }
 
@@ -2328,12 +2333,9 @@ fn waffo_signed_response(creds: &WaffoCreds, success: bool, _message: &str) -> R
     } else {
         json!({"message": "failed"}).to_string()
     };
-    let signature = match crate::pancake::parse_private_key(&creds.private_key)
+    let signature = crate::pancake::parse_private_key(&creds.private_key)
         .and_then(|key| crate::pancake::sign_pkcs1_sha256(&key, body.as_bytes()).map_err(|_| "sign".to_owned()))
-    {
-        Ok(signature) => signature,
-        Err(_) => String::new(),
-    };
+        .unwrap_or_default();
     (
         StatusCode::OK,
         [

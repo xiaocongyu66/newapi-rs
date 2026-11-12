@@ -533,6 +533,8 @@ async fn run_contract(db: Database) {
         "{body}"
     );
 
+    // Go genStripeLink：sk_/rk_ 前缀门（首个成功外呼之前注入）。
+    seed_option(&db, "StripeApiSecret", "sk_test_1").await;
     // 可信域名（环境变量）→ 放行并外呼。环境变量是进程级状态：sqlite 与
     // pg 两个合约测试可能并发跑在各自 tokio worker 上，set_var（Rust 2024
     // unsafe）有竞态，因此改为在测试进程入口一次性初始化。
@@ -823,8 +825,8 @@ async fn run_contract(db: Database) {
     assert_eq!(status, "failed");
 
     // ---- Stripe webhook -----------------------------------------------------
-    // 启用门：合规 + API secret + webhook secret + price id。
-    seed_option(&db, "StripeApiSecret", "sk_test_1").await;
+    // 启用门：合规 + API secret + webhook secret + price id（API secret 已在
+    // pay 段注入）。
     seed_option(&db, "StripePriceId", "price_1").await;
     seed_option(&db, "StripeWebhookSecret", "whsec_1").await;
     // 待履约的 Stripe 订单（Money × QuotaPerUnit = 10）。
