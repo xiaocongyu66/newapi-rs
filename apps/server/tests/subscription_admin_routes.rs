@@ -144,7 +144,7 @@ fn state(db: &Database) -> AppState {
     AppState::default().bind_runtime(db.clone(), SECRET)
 }
 
-async fn exec(db: &Database, statement: &str) {
+async fn exec(db: &Database, statement: &'static str) {
     backend!(db, pool, {
         sqlx::query(statement)
             .execute(pool)
@@ -162,13 +162,15 @@ async fn setup_pg_sequences(db: &Database) {
             ("subscription_plans", "subscription_plans_seq"),
             ("user_subscriptions", "user_subscriptions_seq"),
         ] {
-            sqlx::query(&format!("CREATE SEQUENCE IF NOT EXISTS {seq}"))
-                .execute(pool)
-                .await
-                .expect("create sequence");
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "CREATE SEQUENCE IF NOT EXISTS {seq}"
+            )))
+            .execute(pool)
+            .await
+            .expect("create sequence");
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "ALTER TABLE {table} ALTER COLUMN id SET DEFAULT nextval('{seq}')"
-            ))
+            )))
             .execute(pool)
             .await
             .expect("wire sequence default");
@@ -177,9 +179,9 @@ async fn setup_pg_sequences(db: &Database) {
             ("subscription_plans", "subscription_plans_seq"),
             ("user_subscriptions", "user_subscriptions_seq"),
         ] {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "SELECT setval('{seq}', GREATEST((SELECT COALESCE(MAX(id), 0) FROM {table}), 1))"
-            ))
+            )))
             .execute(pool)
             .await
             .expect("sync sequence");
