@@ -5,6 +5,8 @@
 //! 写入后用同样的投影取回，逐列比对。PostgreSQL 测试在 `TEST_POSTGRES_DSN`
 //! 缺席时跳过（仓库双后端契约的统一形态）。
 
+use chrono::Utc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use newapi_storage::Database;
@@ -18,6 +20,10 @@ use sqlx::{
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// usedata 的进程级缓存与 save/flush 语义在并发测试下会互相吞并条目，
+/// 这些用例必须串行化。
+static USEDATA_LOCK: Mutex<()> = Mutex::new(());
 
 const SQLITE_LOGS: &str = r#"CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -331,13 +337,15 @@ async fn empty_request_id_gets_generated() {
         .await
         .unwrap();
     let row = store_log::read_back(&db, 1).await.unwrap().expect("row");
-    // Go NewRequestId：19 位时间串 + 8 位前缀 + 8 位随机。
-    assert_eq!(row.request_id.len(), 19 + 8 + 8);
+    // Go NewRequestId：GetTimeString（14 位 UTC 时间戳 + 9 位纳秒）+ 8 位
+    // 前缀 + 8 位随机 = 39。
+    assert_eq!(row.request_id.len(), 14 + 9 + 8 + 8);
     assert!(row.request_id.chars().all(|c| c.is_ascii_alphanumeric()));
 }
 
 #[tokio::test]
 async fn data_export_populates_quota_data_cache_not_the_table() {
+    let _guard = USEDATA_LOCK.lock().expect("usedata lock");
     let db = sqlite_fixture().await;
     reset(&db).await;
     usedata::clear_cache();
@@ -368,11 +376,13 @@ async fn data_export_populates_quota_data_cache_not_the_table() {
     assert_eq!(rows, 0, "Go 只在 SaveQuotaDataCache 落库");
     let saved = usedata::save_quota_data_cache(&db).await.unwrap();
     assert_eq!(saved, 1);
+    let now = Utc::now().timestamp();
+    let hour_floor = now - now % 3600;
     let entry = usedata::QuotaDataAgg {
         user_id: 5,
         username: "bob".to_owned(),
         model_name: "m".to_owned(),
-        created_at: 0,
+        created_at: hour_floor,
         use_group: "g".to_owned(),
         token_id: 3,
         channel_id: 4,
@@ -416,6 +426,7 @@ async fn count_rows(db: &Database, table: &str) -> i64 {
 
 #[tokio::test]
 async fn hour_floor_aggregation_merges_same_hour() {
+    let _guard = USEDATA_LOCK.lock().expect("usedata lock");
     let db = sqlite_fixture().await;
     reset(&db).await;
     usedata::clear_cache();
@@ -624,6 +635,7 @@ async fn other_write_shapes_follow_the_go_functions() {
 
 #[tokio::test]
 async fn task_billing_log_consume_gate_and_node_fallback() {
+    let _guard = USEDATA_LOCK.lock().expect("usedata lock");
     let db = sqlite_fixture().await;
     reset(&db).await;
     usedata::clear_cache();
@@ -637,8 +649,17 @@ async fn task_billing_log_consume_gate_and_node_fallback() {
         .await
         .unwrap();
     assert!(store_log::read_back(&db, 1).await.unwrap().is_none());
-    store_log::record_task_billing_log(&db, 1, "u", &params)
-        .await
-        .unwrap();
+    store_log::record_task_billing_log(
+        &db,
+        1,
+        "u",
+        &store_log::TaskBillingLogParams {
+            consume_enabled: true,
+            data_export_enabled: true,
+            ..params.clone()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(usedata::cache_len(), 1);
 }

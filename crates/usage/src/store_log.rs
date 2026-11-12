@@ -539,7 +539,9 @@ pub async fn record_sensitive_audit_log(
     ip: &str,
     params: &Map<String, Value>,
 ) -> Result<(), sqlx::Error> {
-    let other = build_op_field("sensitive_block", params);
+    let op = build_op_field("sensitive_block", params);
+    let mut other = Map::new();
+    other.insert("op".to_owned(), Value::Object(op));
     insert_log(
         db,
         &LogInsert {
