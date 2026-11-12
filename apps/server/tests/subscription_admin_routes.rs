@@ -53,10 +53,10 @@ const SUBSCRIPTION_PLANS: &str = r#"CREATE TABLE subscription_plans (
     duration_unit VARCHAR(16) NOT NULL DEFAULT 'month',
     duration_value BIGINT NOT NULL DEFAULT 1,
     custom_seconds BIGINT NOT NULL DEFAULT 0,
-    enabled BOOLEAN DEFAULT TRUE,
+    enabled BIGINT DEFAULT 1,
     sort_order BIGINT DEFAULT 0,
-    allow_balance_pay BOOLEAN DEFAULT TRUE,
-    allow_wallet_overflow BOOLEAN DEFAULT TRUE,
+    allow_balance_pay BIGINT DEFAULT 1,
+    allow_wallet_overflow BIGINT DEFAULT 1,
     stripe_price_id VARCHAR(128) DEFAULT '',
     creem_product_id VARCHAR(128) DEFAULT '',
     waffo_pancake_product_id VARCHAR(128) DEFAULT '',
@@ -85,7 +85,7 @@ const USER_SUBSCRIPTIONS: &str = r#"CREATE TABLE user_subscriptions (
     upgrade_group VARCHAR(64) DEFAULT '',
     prev_user_group VARCHAR(64) DEFAULT '',
     downgrade_group VARCHAR(64) DEFAULT '',
-    allow_wallet_overflow BOOLEAN DEFAULT TRUE,
+    allow_wallet_overflow BIGINT DEFAULT 1,
     created_at BIGINT,
     updated_at BIGINT
 )"#;
@@ -226,7 +226,7 @@ async fn seed_plan(db: &Database, id: i64, title: &str, sort_order: i64, enabled
         )
         .bind(id)
         .bind(title)
-        .bind(enabled)
+        .bind(enabled as i64)
         .bind(sort_order)
         .execute(pool)
         .await
@@ -390,10 +390,11 @@ async fn run_contract(db: Database) {
     .await;
     let plans = body["data"].as_array().expect("plans array");
     assert_eq!(plans.len(), 3, "{body}");
-    assert_eq!(plans[0]["plan"]["id"], json!(3));
-    assert_eq!(plans[1]["plan"]["id"], json!(2));
-    assert_eq!(plans[2]["plan"]["id"], json!(1));
-    assert_eq!(plans[2]["plan"]["enabled"], json!(false));
+    // sort_order desc first: Disabled (99), then the sort-10 tie broken by id desc.
+    assert_eq!(plans[0]["plan"]["id"], json!(1));
+    assert_eq!(plans[1]["plan"]["id"], json!(3));
+    assert_eq!(plans[2]["plan"]["id"], json!(2));
+    assert_eq!(plans[0]["plan"]["enabled"], json!(false));
 
     // --- create: compliance gate first ---
     let response = send(
