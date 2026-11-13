@@ -210,7 +210,7 @@ pub async fn run_gateway_config_outbox_publisher(
     } else {
         Duration::from_secs(interval_seconds as u64)
     };
-    let shutdown = std::pin::pin!(shutdown);
+    let mut shutdown = std::pin::pin!(shutdown);
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {

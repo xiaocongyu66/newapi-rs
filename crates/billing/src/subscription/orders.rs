@@ -180,6 +180,7 @@ macro_rules! map_order {
 
 /// Go `SubscriptionOrder.Insert`（`:237-242`）：`create_time` 零值时由
 /// BeforeCreate 补当前秒（调用方直接传）。
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_subscription_order(
     db: &Database,
     user_id: i64,
@@ -296,7 +297,7 @@ VALUES ($1, $2, $3, 0, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12, $13, $13
 "#;
 
 const TOPUP_BY_TRADE_NO: &str =
-    concat!("SELECT id, payment_method, create_time FROM top_ups WHERE trade_no = $1");
+    "SELECT id, payment_method, create_time FROM top_ups WHERE trade_no = $1";
 
 const INSERT_TOPUP: &str = concat!(
     "INSERT INTO top_ups (user_id, amount, money, trade_no, payment_method, ",
