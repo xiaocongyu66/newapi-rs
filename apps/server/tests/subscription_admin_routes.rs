@@ -878,12 +878,19 @@ async fn run_contract(db: Database) {
     });
 
     // advance_reset_time defaults to true and moves the monthly reset point.
+    // The seeded rows end one hour out, so extend end_time beyond the next
+    // month boundary (Go: next > endUnix → 0) before advancing.
     backend!(&db, pool, {
         sqlx::query("UPDATE subscription_plans SET quota_reset_period = 'monthly' WHERE id = $1")
             .bind(vip_plan_id)
             .execute(pool)
             .await
             .expect("plan reset period");
+        sqlx::query("UPDATE user_subscriptions SET end_time = $1 WHERE id IN (11, 12)")
+            .bind(now() + 90 * 86_400)
+            .execute(pool)
+            .await
+            .expect("extend end_time");
     });
     let response = send(
         &app,
