@@ -702,8 +702,10 @@ fn base_summary() -> super::text_quota::TextQuotaSummary {
 #[test]
 fn text_quota_ratio_formula_matches_go() {
     let settings = StaticRatioSettings::default();
-    let mut info = RelayBillingInfo::default();
-    info.origin_model_name = "m".into();
+    let mut info = RelayBillingInfo {
+        origin_model_name: "m".into(),
+        ..Default::default()
+    };
     let price = PriceData {
         model_ratio: 1.0,
         completion_ratio: 2.0,
