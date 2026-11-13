@@ -129,17 +129,36 @@ async fn create_schema(db: &Database) {
              id BIGINT PRIMARY KEY, routing_revision BIGINT NOT NULL)",
     )
     .await;
-    execute(
-        db,
-        "CREATE TEMP TABLE gateway_config_outboxes (\
-             id BIGINT PRIMARY KEY, \
-             routing_revision BIGINT NOT NULL UNIQUE, \
-             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, \
-             published_at TIMESTAMP, \
-             publish_attempts INTEGER NOT NULL DEFAULT 0, \
-             last_publish_error_class VARCHAR(64))",
-    )
-    .await;
+    // outbox id 是自增主键：SQLite 用 rowid 别名，PG 用 BIGSERIAL
+    // （BIGINT PRIMARY KEY 不会自动生成 id，bump 写 outbox 时违反 not-null）。
+    match db {
+        Database::Sqlite(_) => {
+            execute(
+                db,
+                "CREATE TEMP TABLE gateway_config_outboxes (\
+                     id INTEGER PRIMARY KEY AUTOINCREMENT, \
+                     routing_revision BIGINT NOT NULL UNIQUE, \
+                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, \
+                     published_at TIMESTAMP, \
+                     publish_attempts INTEGER NOT NULL DEFAULT 0, \
+                     last_publish_error_class VARCHAR(64))",
+            )
+            .await;
+        }
+        Database::Postgres(_) => {
+            execute(
+                db,
+                "CREATE TEMP TABLE gateway_config_outboxes (\
+                     id BIGSERIAL PRIMARY KEY, \
+                     routing_revision BIGINT NOT NULL UNIQUE, \
+                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, \
+                     published_at TIMESTAMP, \
+                     publish_attempts INTEGER NOT NULL DEFAULT 0, \
+                     last_publish_error_class VARCHAR(64))",
+            )
+            .await;
+        }
+    }
     pricing::invalidate_pricing_cache();
     // 供应商补建（get_or_create_vendor）经 mutate_routing! 推进修订号，
     // 水位单例行必须存在。
