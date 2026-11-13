@@ -63,19 +63,40 @@ async fn create_schema(db: &Database) {
              name_rule BIGINT DEFAULT 0)",
     )
     .await;
-    execute(
-        db,
-        "CREATE TEMP TABLE vendors (\
-             id INTEGER PRIMARY KEY AUTOINCREMENT, \
-             name TEXT NOT NULL, \
-             description TEXT, \
-             icon TEXT, \
-             status BIGINT DEFAULT 1, \
-             created_time BIGINT, \
-             updated_time BIGINT, \
-             deleted_at TIMESTAMP)",
-    )
-    .await;
+    // SQLite 要 rowid 别名（INTEGER PRIMARY KEY AUTOINCREMENT）才能在
+    // RETURNING id 上拿到自增值；PG 用 BIGSERIAL。
+    match db {
+        Database::Sqlite(_) => {
+            execute(
+                db,
+                "CREATE TEMP TABLE vendors (\
+                     id INTEGER PRIMARY KEY AUTOINCREMENT, \
+                     name TEXT NOT NULL, \
+                     description TEXT, \
+                     icon TEXT, \
+                     status BIGINT DEFAULT 1, \
+                     created_time BIGINT, \
+                     updated_time BIGINT, \
+                     deleted_at TIMESTAMP)",
+            )
+            .await;
+        }
+        Database::Postgres(_) => {
+            execute(
+                db,
+                "CREATE TEMP TABLE vendors (\
+                     id BIGSERIAL PRIMARY KEY, \
+                     name TEXT NOT NULL, \
+                     description TEXT, \
+                     icon TEXT, \
+                     status BIGINT DEFAULT 1, \
+                     created_time BIGINT, \
+                     updated_time BIGINT, \
+                     deleted_at TIMESTAMP)",
+            )
+            .await;
+        }
+    }
     execute(
         db,
         "CREATE TEMP TABLE channels (\
