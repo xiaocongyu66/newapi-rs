@@ -164,18 +164,19 @@ const SQL_SUB_CANDIDATES_LOCK: &str = "SELECT id, plan_id, amount_total, amount_
 /// 零尺寸事务辅助类型，`$h` 是同一调用点标识符，事务体内用它调用共享
 /// 逻辑（`fetch_sub` / 锁读 / 惰性重置等）。
 macro_rules! with_tx {
-    ($db:expr, $hs_ty:ty, $hp_ty:ty, $hs_val:expr, $hp_val:expr, $h:ident, |$tx:ident| $body:block) => {
+    ($db:expr, $hs_ty:ty, $hp_ty:ty, $hs_val:expr, $hp_val:expr, $tx:ident, $h:ident, $body:block) => {
         match $db {
             Database::Sqlite(pool) => {
-                let mut tx = pool.begin().await?;
-                let out = (|tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, $h: &$hs_ty| async move {
-                    let out = $body;
-                    out
-                })(&mut tx, $hs_val)
-                .await;
+                let mut $tx = pool.begin().await?;
+                let out =
+                    (|$tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, $h: &$hs_ty| async move {
+                        let out = $body;
+                        out
+                    })(&mut $tx, $hs_val)
+                    .await;
                 match out {
                     Ok(value) => {
-                        tx.commit().await?;
+                        $tx.commit().await?;
                         Ok(value)
                     }
                     Err(err) => Err(err),
@@ -592,7 +593,7 @@ impl BillingStore {
         }
         let mut result = SubscriptionPreConsumeResult::default();
         let outcome: Result<(), SubscriptionError> =
-            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, tx, txh, {
                 // 1) request_id 幂等重放
                 let existing: Option<(i64, i64, String)> = sqlx::query_as(SQL_PRECONSUME_REPLAY)
                     .bind(request_id)
@@ -688,7 +689,7 @@ impl BillingStore {
             return Err(SubscriptionError::InvalidArgument("requestId is empty"));
         }
         let outcome: Result<(), SubscriptionError> =
-            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, tx, txh, {
                 let record: Option<(i64, i64, String)> = sqlx::query_as(SQL_PRECONSUME_RECORD)
                     .bind(request_id)
                     .fetch_optional(&mut **tx)
@@ -730,7 +731,7 @@ impl BillingStore {
             return Ok(());
         }
         let outcome: Result<(), SubscriptionError> =
-            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, tx, txh, {
                 txh.post_consume_delta(tx, sub_id, delta, now).await
             });
         outcome
@@ -754,7 +755,7 @@ impl BillingStore {
         }
         let mut overflow = 0i64;
         let outcome: Result<(), SubscriptionError> =
-            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, tx, txh, {
                 let row = txh.fetch_sub_locked(tx, sub_id).await?;
                 let mut new_used = row.amount_used + delta;
                 if row.amount_total > 0 && new_used > row.amount_total {
