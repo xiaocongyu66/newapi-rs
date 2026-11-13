@@ -796,6 +796,18 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_failure!(response, json!("无效的用户ID")).await;
+    // Expire the just-created subscription so the reset/invalidate sections
+    // below see exactly the rows they seed (the create route itself was
+    // already verified above).
+    backend!(&db, pool, {
+        sqlx::query(
+            "UPDATE user_subscriptions SET status = 'expired' WHERE user_id = 3 AND plan_id = $1",
+        )
+        .bind(vip_plan_id)
+        .execute(pool)
+        .await
+        .expect("expire created sub");
+    });
 
     // --- reset (user scope) ---
     let future = now() + 3600;
