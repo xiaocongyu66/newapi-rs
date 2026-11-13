@@ -466,6 +466,10 @@ async fn hour_floor_aggregation_merges_same_hour() {
 
 #[tokio::test]
 async fn other_write_shapes_follow_the_go_functions() {
+    // carol 段的 TaskBillingLog 开启 data_export，会写全局 quota-data 缓存；
+    // 与其余 usedata 断言测试共用该全局态，必须同持锁串行（否则并发下
+    // cache_len 断言偶发多算）。
+    let _guard = USEDATA_LOCK.lock().await;
     let db = sqlite_fixture().await;
     reset(&db).await;
     // RecordLog / RecordLogWithAdminInfo。
