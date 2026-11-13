@@ -609,6 +609,7 @@ WHERE id = $1
                         .bind(&prev_group)
                         .bind(plan.downgrade_group.trim())
                         .bind(plan.allow_wallet_overflow.unwrap_or(true) as i64)
+                        .bind(now)
                         .execute(&mut *tx)
                         .await?;
                     if prev_group.is_empty() {

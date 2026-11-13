@@ -665,7 +665,7 @@ async fn run_contract(db: Database) {
     assert_failure!(response, json!("参数错误")).await;
 
     // --- bind: creates a subscription, applies upgrade group ---
-    let payload = json!({"plan":{"title":"VipPlan","price_amount":1.0,"max_purchase_per_user":2,"upgrade_group":"vip"}}).to_string();
+    let payload = json!({"plan":{"title":"VipPlan","price_amount":1.0,"max_purchase_per_user":1,"upgrade_group":"vip"}}).to_string();
     let body = assert_success!(
         send(
             &app,
