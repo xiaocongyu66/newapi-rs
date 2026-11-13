@@ -170,7 +170,7 @@ macro_rules! with_tx {
                 let mut __tx = pool.begin().await?;
                 let $h: &$hs_ty = $hs_val;
                 let out = async {
-                    let $tx = &mut *__tx;
+                    let $tx = &mut __tx;
                     let out = $body;
                     out
                 }
@@ -187,7 +187,7 @@ macro_rules! with_tx {
                 let mut __tx = pool.begin().await?;
                 let $h: &$hp_ty = $hp_val;
                 let out = async {
-                    let $tx = &mut *__tx;
+                    let $tx = &mut __tx;
                     let out = $body;
                     out
                 }
