@@ -442,8 +442,10 @@ async fn postgres_db() -> Option<Database> {
         .after_connect(move |connection, _| {
             let path = search_path.clone();
             Box::pin(async move {
-                let sql = format!("SET search_path = \"{path}\"");
-                connection.execute(sql.as_str()).await?;
+                sqlx::query("SELECT set_config('search_path', $1, false)")
+                    .bind(path)
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
