@@ -65,7 +65,7 @@ pub struct UserSubscriptionRow {
 
 /// 订阅自助域的只读存储；偏好写路径走 `identity::users` 的既有仓库。
 pub struct SubscriptionRepository {
-    db: Database,
+    pub(crate) db: Database,
 }
 
 /// Go `GetSubscriptionPlans` 的查询：`enabled = true`，按

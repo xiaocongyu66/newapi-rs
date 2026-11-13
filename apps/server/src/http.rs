@@ -194,7 +194,53 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
-    // QQ 绑定路由（`register_api.go:193-197`，紧跟 checkin 之后注册）：
+    // `/api/subscription/admin` 管理侧 11 路由（`register_api.go:272-287`）：
+    // 组内仅 `security.AdminAuth()`（role >= 10），无限流、无 DisableCache。
+    // `PUT` 与 `PATCH /plans/:id` 是两个不同 handler（更新 vs 状态开关）；
+    // 合规门内联在 handler 顶部（见 `subscription_admin_http` 模块注释）。
+    let subscription_admin_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/subscription/admin/plans",
+                get(crate::subscription_admin_http::admin_list_plans)
+                    .post(crate::subscription_admin_http::admin_create_plan),
+            )
+            .route(
+                "/api/subscription/admin/plans/{id}",
+                put(crate::subscription_admin_http::admin_update_plan)
+                    .patch(crate::subscription_admin_http::admin_update_plan_status),
+            )
+            .route(
+                "/api/subscription/admin/plans/{id}/subscriptions/reset",
+                post(crate::subscription_admin_http::admin_reset_plan_subscriptions),
+            )
+            .route(
+                "/api/subscription/admin/bind",
+                post(crate::subscription_admin_http::admin_bind),
+            )
+            .route(
+                "/api/subscription/admin/users/{id}/subscriptions",
+                get(crate::subscription_admin_http::admin_list_user_subscriptions)
+                    .post(crate::subscription_admin_http::admin_create_user_subscription),
+            )
+            .route(
+                "/api/subscription/admin/users/{id}/subscriptions/reset",
+                post(crate::subscription_admin_http::admin_reset_user_subscriptions),
+            )
+            .route(
+                "/api/subscription/admin/user_subscriptions/{id}/invalidate",
+                post(crate::subscription_admin_http::admin_invalidate_subscription),
+            )
+            .route(
+                "/api/subscription/admin/user_subscriptions/{id}",
+                delete(crate::subscription_admin_http::admin_delete_subscription),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                subscription_admin_state,
+                crate::auth::admin_auth,
+            )),
+    );
     // - `GET /qq/bind`：`selfRoute` 组内纯 `UserAuth`，无限流、无 DisableCache。
     // - `POST /qq/bind/code`：`UserAuth → CriticalRateLimit → DisableCache`。
     //   429 与 Redis 故障（500）都在 DisableCache 之前产生，不带缓存头。

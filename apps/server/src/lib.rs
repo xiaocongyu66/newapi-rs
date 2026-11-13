@@ -43,6 +43,7 @@ pub mod setting_http;
 pub mod setup_http;
 mod state;
 pub mod status;
+pub mod subscription_admin_http;
 pub mod subscription_http;
 pub mod token_http;
 pub mod topup_http;
