@@ -221,12 +221,12 @@ pub async fn token_auth(State(state): State<AppState>, request: Request, next: N
         }
     }
 
-    let mut auth_value = auth_value;
+    let mut key_value = auth_value;
     let mut specific_channel_candidate: Option<String> = None;
-    if auth_value.starts_with("Bearer ") || auth_value.starts_with("bearer ") {
-        auth_value = auth_value[7..].trim().to_owned();
+    if key_value.starts_with("Bearer ") || key_value.starts_with("bearer ") {
+        key_value = key_value[7..].trim().to_owned();
     }
-    if auth_value.is_empty() || auth_value == "midjourney-proxy" {
+    if key_value.is_empty() || key_value == "midjourney-proxy" {
         let mut mj_key = headers
             .get("mj-api-secret")
             .and_then(|v| v.to_str().ok())
@@ -237,18 +237,18 @@ pub async fn token_auth(State(state): State<AppState>, request: Request, next: N
         }
         mj_key = mj_key.strip_prefix("sk-").unwrap_or(&mj_key).to_owned();
         let mut parts = mj_key.split('-');
-        auth_value = parts.next().unwrap_or("").to_owned();
+        key_value = parts.next().unwrap_or("").to_owned();
     } else {
-        let stripped = auth_value
+        let stripped = key_value
             .strip_prefix("sk-")
-            .unwrap_or(&auth_value)
+            .unwrap_or(&key_value)
             .to_owned();
         let mut parts = stripped.split('-');
-        auth_value = parts.next().unwrap_or("").to_owned();
+        key_value = parts.next().unwrap_or("").to_owned();
         // 管理员的 specific channel 语法 `key-<id>`。
         specific_channel_candidate = parts.next().map(str::to_owned);
     }
-    let key = auth_value.as_str();
+    let key = key_value.as_str();
     if key.is_empty() {
         return abort_with_openai_message(
             StatusCode::UNAUTHORIZED,
@@ -491,7 +491,10 @@ fn client_ip_of(
 
 /// Go `GetUserClientBanSet` 的 TTL 缓存（30 秒；触顶 4096 整体重建）。
 /// 查询失败时沿用旧缓存，没有旧缓存则放行（宁漏封不可全站 403）。
-static USER_BAN_CACHE: Mutex<Option<HashMap<i64, (HashSet<String>, i64)>>> = Mutex::new(None);
+/// 缓存条目：(封禁客户端集合, 过期时间戳)。
+type UserBanCacheEntry = (HashSet<String>, i64);
+
+static USER_BAN_CACHE: Mutex<Option<HashMap<i64, UserBanCacheEntry>>> = Mutex::new(None);
 
 async fn load_user_client_ban_set(db: &newapi_storage::Database, user_id: i64) -> HashSet<String> {
     if user_id <= 0 {

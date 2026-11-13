@@ -782,15 +782,15 @@ fn discover_ua_token(ua: &str) -> Option<String> {
         return None;
     }
     let mut product = ua.as_str();
-    if let Some(idx) = product.find([' ', '\t']) {
-        if idx > 0 {
-            product = &product[..idx];
-        }
+    if let Some(idx) = product.find([' ', '\t'])
+        && idx > 0
+    {
+        product = &product[..idx];
     }
-    if let Some(idx) = product.find('/') {
-        if idx > 0 {
-            product = &product[..idx];
-        }
+    if let Some(idx) = product.find('/')
+        && idx > 0
+    {
+        product = &product[..idx];
     }
     // Go uaProductRe：^([a-z0-9][a-z0-9._+-]{1,31})
     let re = ua_product_regex();

@@ -202,11 +202,10 @@ pub fn gen_base_relay_info(input: &RelayInfoInput) -> RelayInfo {
     };
 
     let start_time_ms = if input.request_start_time_ms == 0 {
-        let now = std::time::SystemTime::now()
+        std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
-            .unwrap_or_default();
-        now
+            .unwrap_or_default()
     } else {
         input.request_start_time_ms
     };
@@ -538,30 +537,19 @@ impl RelayInfo {
 
     /// Go `InitChannelMeta`：从渠道上下文快照构建 ChannelMeta。API 版本对
     /// Azure / Vertex 有专门来源（服务层传入 api_version）。
-    pub fn init_channel_meta(
-        &mut self,
-        channel_type: i32,
-        api_type: i32,
-        api_version: &str,
-        upstream_model_name: &str,
-        param_override: serde_json::Value,
-        headers_override: serde_json::Value,
-        channel_setting: serde_json::Value,
-        channel_other_settings: serde_json::Value,
-        pass_through_request_enabled: bool,
-    ) {
+    pub fn init_channel_meta(&mut self, snapshot: ChannelMetaSnapshot) {
         let mut meta = ChannelMeta {
-            channel_type,
-            api_type,
-            api_version: api_version.to_owned(),
-            param_override,
-            headers_override,
-            channel_setting,
-            channel_other_settings,
-            upstream_model_name: upstream_model_name.to_owned(),
+            channel_type: snapshot.channel_type,
+            api_type: snapshot.api_type,
+            api_version: snapshot.api_version,
+            param_override: snapshot.param_override,
+            headers_override: snapshot.headers_override,
+            channel_setting: snapshot.channel_setting,
+            channel_other_settings: snapshot.channel_other_settings,
+            upstream_model_name: snapshot.upstream_model_name,
             ..ChannelMeta::default()
         };
-        if pass_through_request_enabled
+        if snapshot.pass_through_request_enabled
             || meta
                 .channel_setting
                 .get("pass_through_body_enabled")
@@ -573,6 +561,19 @@ impl RelayInfo {
         meta.support_stream_options = stream_supported_channels(meta.channel_type);
         self.channel_meta = Some(meta);
     }
+}
+
+/// `init_channel_meta` 的输入快照（避免 10 参数函数，见 clippy::too_many_arguments）。
+pub struct ChannelMetaSnapshot {
+    pub channel_type: i32,
+    pub api_type: i32,
+    pub api_version: String,
+    pub upstream_model_name: String,
+    pub param_override: serde_json::Value,
+    pub headers_override: serde_json::Value,
+    pub channel_setting: serde_json::Value,
+    pub channel_other_settings: serde_json::Value,
+    pub pass_through_request_enabled: bool,
 }
 
 /// Go `streamSupportedChannels`（build_relay_info.go:347-370）。
@@ -640,15 +641,14 @@ pub fn remove_disabled_fields(
     if !allow("allow_safety_identifier") {
         obj.remove("safety_identifier");
     }
-    if !allow("allow_include_obfuscation") {
-        if let Some(stream_options) = obj
+    if !allow("allow_include_obfuscation")
+        && let Some(stream_options) = obj
             .get_mut("stream_options")
             .and_then(|v| v.as_object_mut())
-        {
-            stream_options.remove("include_obfuscation");
-            if stream_options.is_empty() {
-                obj.remove("stream_options");
-            }
+    {
+        stream_options.remove("include_obfuscation");
+        if stream_options.is_empty() {
+            obj.remove("stream_options");
         }
     }
 }

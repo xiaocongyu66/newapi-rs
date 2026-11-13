@@ -44,6 +44,9 @@ pub const RELAY_MODE_RESPONSES_COMPACT: i32 = 36;
 pub const RELAY_MODE_ALPHA_SEARCH: i32 = 37;
 
 /// Go `Path2RelayMode`（relay_mode.go:59-94）：判定顺序逐条对齐。
+/// 重复分支体（embeddings 前缀/后缀、mj change/simple-change）与 Go 逐字
+/// 对齐，是契约的一部分——clippy::if_same_then_else 允许豁免。
+#[allow(clippy::if_same_then_else)]
 pub fn path_to_relay_mode(path: &str) -> i32 {
     if path.starts_with("/v1/chat/completions") || path.starts_with("/pg/chat/completions") {
         RELAY_MODE_CHAT_COMPLETIONS
@@ -87,6 +90,9 @@ pub fn path_to_relay_mode(path: &str) -> i32 {
 }
 
 /// Go `Path2RelayModeMidjourney`（relay_mode.go:97-127）。
+/// `/mj/submit/change` 与 `/mj/submit/simple-change` 同映射一个 RelayMode，
+/// 与 Go 逐字对齐（clippy::if_same_then_else 契约豁免）。
+#[allow(clippy::if_same_then_else)]
 pub fn path_to_relay_mode_midjourney(path: &str) -> i32 {
     if path.ends_with("/mj/submit/action") {
         RELAY_MODE_MIDJOURNEY_ACTION

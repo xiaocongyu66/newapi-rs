@@ -236,8 +236,7 @@ fn apply_operations_legacy(
     let mut result = json_data;
     for (key, value) in param_override {
         let escaped = escape_literal_key(key);
-        result = set_path(result, &escaped, value.clone())
-            .map_err(|e| ParamOverrideError::Message(e))?;
+        result = set_path(result, &escaped, value.clone()).map_err(ParamOverrideError::Message)?;
         context.record_operation("set", key, "", "", value);
     }
     Ok(result)
@@ -413,9 +412,9 @@ fn apply_operations(
             "move" => {
                 let op_from = process_negative_index(&result, &op.from);
                 let op_to = process_negative_index(&result, &op.to);
-                move_value(result, &op_from, &op_to).map(|v| {
+                move_value(result, &op_from, &op_to).inspect(|v| {
                     context.record_operation("move", "", &op_from, &op_to, &Value::Null);
-                    v
+                    let _ = v;
                 })
             }
             "copy" => {
@@ -424,9 +423,9 @@ fn apply_operations(
                 } else {
                     let op_from = process_negative_index(&result, &op.from);
                     let op_to = process_negative_index(&result, &op.to);
-                    copy_value(result, &op_from, &op_to).map(|v| {
+                    copy_value(result, &op_from, &op_to).inspect(|v| {
                         context.record_operation("copy", "", &op_from, &op_to, &Value::Null);
-                        v
+                        let _ = v;
                     })
                 }
             }
@@ -582,12 +581,11 @@ fn apply_operations(
                 Ok(result)
             }
             "sync_fields" => {
-                sync_fields_between_targets(&mut result, &mut context.map, &op.from, &op.to).map(
-                    |v| {
+                sync_fields_between_targets(&mut result, &mut context.map, &op.from, &op.to)
+                    .inspect(|v| {
                         context.record_operation("sync_fields", "", &op.from, &op.to, &Value::Null);
-                        v
-                    },
-                )
+                        let _ = v;
+                    })
             }
             other => Err(format!("unknown operation: {other}")),
         };
@@ -742,10 +740,11 @@ fn check_single_condition(
 ) -> Result<bool, String> {
     let path = process_negative_index(data, &condition.path);
     let mut value_owned: Option<Value> = get_path(data, &path).cloned();
-    if value_owned.is_none() && !context_json.is_empty() {
-        if let Ok(parsed) = serde_json::from_str::<Value>(context_json) {
-            value_owned = get_path(&parsed, &condition.path).cloned();
-        }
+    if value_owned.is_none()
+        && !context_json.is_empty()
+        && let Ok(parsed) = serde_json::from_str::<Value>(context_json)
+    {
+        value_owned = get_path(&parsed, &condition.path).cloned();
     }
     let Some(value) = value_owned else {
         if condition.pass_missing_key {
@@ -800,13 +799,18 @@ fn compare_equal(json_value: &Value, target_value: &Value) -> Result<bool, Strin
             let (fa, fb) = (a.as_f64(), b.as_f64());
             Ok(match (fa, fb) {
                 (Some(x), Some(y)) => x == y,
-                _ => a.to_string() == b.to_string(),
+                // NaN/整型越界等 as_f64 不可精确表达的情形：Number 实现了
+                // 部分相等，gjson 的 Num 是 f64，这里与 Go 语义对齐取浮点。
+                _ => false,
             })
         }
         (String(a), String(b)) => Ok(a == b),
         (a, b) => {
             if std::mem::discriminant(a) == std::mem::discriminant(b) {
-                Ok(a.to_string() == b.to_string())
+                // 相同变体的 JSON 文本比较；String 变体已提前返回。
+                #[allow(clippy::cmp_owned)]
+                let equal = a.to_string() == b.to_string();
+                Ok(equal)
             } else {
                 Err(format!(
                     "compare for different types, got {} and {}",
@@ -1349,10 +1353,10 @@ fn parse_prune_objects_options(value: &Value) -> Result<PruneObjectsOptions, Str
             });
         }
         Value::Object(map) => {
-            if let Some(logic) = map.get("logic").and_then(|v| v.as_str()) {
-                if !logic.trim().is_empty() {
-                    opts.logic = logic.to_owned();
-                }
+            if let Some(logic) = map.get("logic").and_then(|v| v.as_str())
+                && !logic.trim().is_empty()
+            {
+                opts.logic = logic.to_owned();
             }
             if let Some(recursive) = map.get("recursive").and_then(|v| v.as_bool()) {
                 opts.recursive = recursive;
@@ -1500,12 +1504,10 @@ fn set_header_override_in_context(
     }
     {
         let raw_headers = ensure_map_key_in_context(context, CONTEXT_HEADER_OVERRIDE);
-        if keep_origin {
-            if let Some(existing) = raw_headers.get(&header_name) {
-                let existing_value = format_value(existing).trim().to_owned();
-                if !existing_value.is_empty() {
-                    return Ok(());
-                }
+        if keep_origin && let Some(existing) = raw_headers.get(&header_name) {
+            let existing_value = format_value(existing).trim().to_owned();
+            if !existing_value.is_empty() {
+                return Ok(());
             }
         }
     }
@@ -1567,12 +1569,11 @@ fn resolve_header_override_value_by_mapping(
         Vec::with_capacity(source_tokens.len() + append_tokens.len());
     for token in &source_tokens {
         let mut replacement = mapping.get(token).cloned();
-        if replacement.is_none() {
-            if let Some(w) = &wildcard {
-                if !keep_only_declared {
-                    replacement = Some(w.clone());
-                }
-            }
+        if replacement.is_none()
+            && let Some(w) = &wildcard
+            && !keep_only_declared
+        {
+            replacement = Some(w.clone());
         }
         let Some(replacement) = replacement else {
             if keep_only_declared {
@@ -1706,10 +1707,10 @@ fn parse_header_pass_through_names(value: &Value) -> Result<Vec<String>, String>
             if trimmed.is_empty() {
                 return Err("pass_headers value is required".to_owned());
             }
-            if trimmed.starts_with('[') || trimmed.starts_with('{') {
-                if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
-                    return parse_header_pass_through_names(&parsed);
-                }
+            if (trimmed.starts_with('[') || trimmed.starts_with('{'))
+                && let Ok(parsed) = serde_json::from_str::<Value>(trimmed)
+            {
+                return parse_header_pass_through_names(&parsed);
             }
             let names = normalize(raw.split(',').map(str::to_owned).collect());
             if names.is_empty() {
@@ -1718,7 +1719,7 @@ fn parse_header_pass_through_names(value: &Value) -> Result<Vec<String>, String>
             Ok(names)
         }
         Value::Array(items) => {
-            let names = normalize(items.iter().map(|item| format_value(item)).collect());
+            let names = normalize(items.iter().map(format_value).collect());
             if names.is_empty() {
                 return Err("pass_headers value is invalid".to_owned());
             }
@@ -1726,20 +1727,20 @@ fn parse_header_pass_through_names(value: &Value) -> Result<Vec<String>, String>
         }
         Value::Object(map) => {
             let mut candidates: Vec<String> = Vec::new();
-            if let Some(headers) = map.get("headers") {
-                if let Ok(names) = parse_header_pass_through_names(headers) {
-                    candidates.extend(names);
-                }
+            if let Some(headers) = map.get("headers")
+                && let Ok(names) = parse_header_pass_through_names(headers)
+            {
+                candidates.extend(names);
             }
-            if let Some(names_raw) = map.get("names") {
-                if let Ok(names) = parse_header_pass_through_names(names_raw) {
-                    candidates.extend(names);
-                }
+            if let Some(names_raw) = map.get("names")
+                && let Ok(names) = parse_header_pass_through_names(names_raw)
+            {
+                candidates.extend(names);
             }
-            if let Some(header) = map.get("header") {
-                if let Ok(names) = parse_header_pass_through_names(header) {
-                    candidates.extend(names);
-                }
+            if let Some(header) = map.get("header")
+                && let Ok(names) = parse_header_pass_through_names(header)
+            {
+                candidates.extend(names);
             }
             let names = normalize(candidates);
             if names.is_empty() {
@@ -1793,10 +1794,10 @@ fn read_sync_target_value(
             if value.is_null() {
                 return None;
             }
-            if let Value::String(s) = value {
-                if s.trim().is_empty() {
-                    return None;
-                }
+            if let Value::String(s) = value
+                && s.trim().is_empty()
+            {
+                return None;
             }
             Some(value.clone())
         }
@@ -1839,11 +1840,14 @@ fn sync_fields_between_targets(
     let to_target = parse_sync_target(to_spec)?;
     let from_value = read_sync_target_value(data, context, &from_target);
     let to_value = read_sync_target_value(data, context, &to_target);
-    if from_value.is_some() && to_value.is_none() {
-        return write_sync_target_value(data.clone(), context, &to_target, from_value.unwrap());
-    }
-    if to_value.is_some() && from_value.is_none() {
-        return write_sync_target_value(data.clone(), context, &from_target, to_value.unwrap());
+    match (from_value, to_value) {
+        (Some(from), None) => {
+            return write_sync_target_value(data.clone(), context, &to_target, from);
+        }
+        (None, Some(to)) => {
+            return write_sync_target_value(data.clone(), context, &from_target, to);
+        }
+        _ => {}
     }
     Ok(data.clone())
 }
@@ -1870,10 +1874,10 @@ fn parse_param_override_return_error(value: &Value) -> Result<ParamOverrideRetur
             if let Some(message) = map.get("message").and_then(|v| v.as_str()) {
                 result.message = message.trim().to_owned();
             }
-            if result.message.is_empty() {
-                if let Some(msg) = map.get("msg").and_then(|v| v.as_str()) {
-                    result.message = msg.trim().to_owned();
-                }
+            if result.message.is_empty()
+                && let Some(msg) = map.get("msg").and_then(|v| v.as_str())
+            {
+                result.message = msg.trim().to_owned();
             }
             if let Some(code) = map.get("code") {
                 let code_str = format_value(code).trim().to_owned();
@@ -2074,17 +2078,17 @@ pub fn build_param_override_context(info: &crate::relay_info::RelayInfo) -> Map<
         "using_group".to_owned(),
         Value::String(info.using_group.clone()),
     );
-    if let Some(meta) = &info.channel_meta {
-        if !meta.upstream_model_name.is_empty() {
-            ctx.insert(
-                "model".to_owned(),
-                Value::String(meta.upstream_model_name.clone()),
-            );
-            ctx.insert(
-                "upstream_model".to_owned(),
-                Value::String(meta.upstream_model_name.clone()),
-            );
-        }
+    if let Some(meta) = &info.channel_meta
+        && !meta.upstream_model_name.is_empty()
+    {
+        ctx.insert(
+            "model".to_owned(),
+            Value::String(meta.upstream_model_name.clone()),
+        );
+        ctx.insert(
+            "upstream_model".to_owned(),
+            Value::String(meta.upstream_model_name.clone()),
+        );
     }
     if !info.origin_model_name.is_empty() {
         ctx.insert(
