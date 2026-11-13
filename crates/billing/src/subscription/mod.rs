@@ -9,9 +9,9 @@
 //!   `GetAllUserSubscriptions`）
 //! - `apps/api/internal/common/str.go:91`（`NormalizeBillingPreference`）
 //!
-//! 管理侧（`/api/subscription/admin/*`）在 `admin_store` / `period`；支付下单
-//! （`/balance/pay` 等七条）、
-//! 支付回调（`/epay/notify` 等）留待后续切片。
+//! 管理侧（`/api/subscription/admin/*`）在 `admin_store` / `period`；订阅订单
+//! 状态机（`subscription_orders` 表、epay/vmq/codepay 回调核销）在
+//! `orders`；HTTP 适配层在 `apps/server/src/subscription_pay_http.rs`。
 //!
 //! 表名沿用 Go GORM 约定：`subscription_plans`（自建 bootstrap DDL，
 //! `bootstrap_subscription_plan.go`）、`user_subscriptions` /
@@ -22,10 +22,16 @@
 //! `newapi_identity::self_user::QuotaDisplaySettings`，本 crate 不引入该边。
 
 mod admin_store;
-mod period;
-mod store;
+mod orders;
+pub(crate) mod period;
+pub(crate) mod store;
 
 pub use admin_store::{AdminError, MSG_RECORD_NOT_FOUND, PlanWrite, SubscriptionResetResult};
+pub use orders::{
+    SubscriptionCompleteOutcome, SubscriptionCompleteRecord, SubscriptionOrderError,
+    SubscriptionOrderRow, complete_subscription_order, count_user_subscriptions_by_plan,
+    expire_subscription_order, get_subscription_order_by_trade_no, insert_subscription_order,
+};
 pub use store::{SubscriptionPlanRow, SubscriptionRepository, UserSubscriptionRow};
 
 pub use period::{calc_next_reset_time, calc_plan_end_time, normalize_reset_period};

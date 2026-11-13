@@ -7,6 +7,8 @@ publish = false
 
 [dependencies]
 newapi-storage.workspace = true
+# 计费日志写侧（Go usagedomain.RecordConsumeLog）。
+newapi-usage.workspace = true
 rand = "=0.8.8"
 md5 = "=0.8.1"
 # Go common.Sha1（trade_no 引用串）：sha1 0.10.6 已在锁内（identity 同版本）。
