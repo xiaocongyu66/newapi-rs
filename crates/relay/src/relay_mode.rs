@@ -210,9 +210,11 @@ mod tests {
             path_to_relay_mode("/mj/submit/imagine"),
             RELAY_MODE_MIDJOURNEY_IMAGINE
         );
+        // Go strings.HasPrefix(path, "/mj")：非 /mj 前缀（如 /:mode/mj 挂载的
+        // /fast/mj/...）落 UNKNOWN——与 Go 逐字对齐。
         assert_eq!(
             path_to_relay_mode("/fast/mj/submit/imagine"),
-            RELAY_MODE_MIDJOURNEY_IMAGINE
+            RELAY_MODE_UNKNOWN
         );
         assert_eq!(
             path_to_relay_mode("/mj/submit/simple-change"),

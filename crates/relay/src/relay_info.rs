@@ -765,11 +765,21 @@ mod tests {
 
     #[test]
     fn first_response_time_only_once() {
-        let mut info = gen_base_relay_info(&input("/v1/chat/completions", "/v1/chat/completions"));
-        info.set_first_response_time(1000);
+        let start = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or_default();
+        let input = RelayInfoInput {
+            path: "/v1/chat/completions".to_owned(),
+            request_uri: "/v1/chat/completions".to_owned(),
+            request_start_time_ms: start,
+            ..RelayInfoInput::default()
+        };
+        let mut info = gen_base_relay_info(&input);
+        info.set_first_response_time(start + 1);
         assert!(info.has_send_response());
-        info.set_first_response_time(2000);
-        assert_eq!(info.first_response_time_ms, 1000);
+        info.set_first_response_time(start + 2);
+        assert_eq!(info.first_response_time_ms, start + 1);
     }
 
     #[test]

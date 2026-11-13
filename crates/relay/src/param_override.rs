@@ -552,7 +552,7 @@ fn apply_operations(
                         );
                         Ok(result)
                     }
-                    Err(e) if e == ERR_SOURCE_HEADER_NOT_FOUND => Ok(result),
+                    Err(e) if e.starts_with(ERR_SOURCE_HEADER_NOT_FOUND) => Ok(result),
                     Err(e) => Err(e),
                 }
             }
@@ -562,7 +562,7 @@ fn apply_operations(
                 for name in &header_names {
                     match copy_header_in_context(&mut context.map, name, name, op.keep_origin) {
                         Ok(()) => {}
-                        Err(e) if e == ERR_SOURCE_HEADER_NOT_FOUND => continue,
+                        Err(e) if e.starts_with(ERR_SOURCE_HEADER_NOT_FOUND) => continue,
                         Err(e) => return Err(ParamOverrideError::Message(e)),
                     }
                 }
@@ -765,13 +765,9 @@ fn check_single_condition(
 fn compare_values(json_value: &Value, target_value: &Value, mode: &str) -> Result<bool, String> {
     match mode {
         "full" => compare_equal(json_value, target_value),
-        "prefix" => Ok(json_value
-            .to_string()
-            .starts_with(&value_string(target_value))),
-        "suffix" => Ok(json_value
-            .to_string()
-            .ends_with(&value_string(target_value))),
-        "contains" => Ok(json_value.to_string().contains(&value_string(target_value))),
+        "prefix" => Ok(value_string(json_value).starts_with(&value_string(target_value))),
+        "suffix" => Ok(value_string(json_value).ends_with(&value_string(target_value))),
+        "contains" => Ok(value_string(json_value).contains(&value_string(target_value))),
         "gt" => compare_numeric(json_value, target_value, "gt"),
         "gte" => compare_numeric(json_value, target_value, "gte"),
         "lt" => compare_numeric(json_value, target_value, "lt"),
@@ -883,8 +879,9 @@ fn process_negative_index(data: &Value, path: &str) -> String {
         return result_path;
     }
     for (token, index) in matches {
-        // arrayPath = 首次出现 token 之前的部分（Go strings.Split(path, negIndex)[0]）。
-        let array_path_raw = result_path.split(&token[1..]).next().unwrap_or("");
+        // arrayPath = 首次出现 token 之前的部分（Go strings.Split(path, negIndex)[0]，
+        // negIndex 含负号，如 "-1"）。
+        let array_path_raw = result_path.split(&token).next().unwrap_or("");
         let mut array_path = array_path_raw.to_owned();
         if array_path.ends_with('.') {
             array_path.pop();
@@ -968,13 +965,21 @@ fn set_at(node: Value, segments: &[String], value: Value) -> Result<Value, Strin
     }
     let next: &str = &segments[1];
     if next.parse::<usize>().is_ok() {
-        // 目标是数组下标：段必须是数组（或空 → 新建数组）。
-        let arr = match node {
+        // 目标是数组下标：下钻到子节点再定位（根是对象时取该 key 的数组值）。
+        let child = match &node {
+            Value::Object(map) => map.get(segment).cloned().unwrap_or(Value::Array(vec![])),
+            Value::Array(_) | Value::Null => node.clone(),
+            _other => return Err(format!("cannot index into non-array at {segment}")),
+        };
+        let arr = match child {
             Value::Array(arr) => arr,
             Value::Null => Vec::new(),
             _other => return Err(format!("cannot index into non-array at {segment}")),
         };
-        return Ok(Value::Array(set_array_at(arr, segments, value)?));
+        let updated = set_array_at(arr, &segments[1..], value)?;
+        let mut obj = node.as_object().cloned().unwrap_or_default();
+        obj.insert(segment.clone(), Value::Array(updated));
+        return Ok(Value::Object(obj));
     }
     let mut obj = node.as_object().cloned().unwrap_or_else(Map::new);
     let child = obj.remove(segment).unwrap_or(Value::Object(Map::new()));
