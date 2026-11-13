@@ -183,16 +183,16 @@ macro_rules! with_tx {
                 }
             }
             Database::Postgres(pool) => {
-                let mut tx = pool.begin().await?;
+                let mut $tx = pool.begin().await?;
                 let out =
-                    (|tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, $h: &$hp_ty| async move {
+                    (|$tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, $h: &$hp_ty| async move {
                         let out = $body;
                         out
-                    })(&mut tx, $hp_val)
+                    })(&mut $tx, $hp_val)
                     .await;
                 match out {
                     Ok(value) => {
-                        tx.commit().await?;
+                        $tx.commit().await?;
                         Ok(value)
                     }
                     Err(err) => Err(err),
