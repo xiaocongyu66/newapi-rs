@@ -283,14 +283,18 @@ async fn seed_subscription(
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
              start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
-                .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
+                .bind(1_000_000i64)
+                    .bind(4_000_000_000i64)
+                    .bind(if allow_overflow { 1i64 } else { 0i64 })
                 .execute(pool).await.unwrap();
         }
         Database::Postgres(pool) => {
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
              start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
-                .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
+                .bind(1_000_000i64)
+                    .bind(4_000_000_000i64)
+                    .bind(if allow_overflow { 1i64 } else { 0i64 })
                 .execute(pool).await.unwrap();
         }
     }
