@@ -9,7 +9,7 @@ publish = false
 newapi-storage = { path = "../storage" }
 # 网关 outbox 发布器（Go publish_gateway_config.go 的 PUBLISH 面）；版本与
 # identity crate 的 Redis 缓存切片统一锁定。
-redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp"] }
+redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp", "script"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json.workspace = true
 # 亲和键指纹（feat/log-write-email）：affinityFingerprint 的 SHA1 前 8 位 hex。
