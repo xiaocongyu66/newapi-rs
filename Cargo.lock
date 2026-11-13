@@ -1786,6 +1786,7 @@ name = "newapi-catalog"
 version = "0.1.0"
 dependencies = [
  "newapi-storage",
+ "redis",
  "regex",
  "serde",
  "serde_json",

@@ -12,6 +12,7 @@ pub mod email_settings;
 pub mod gateway_revision;
 pub mod group_settings;
 pub mod models;
+pub mod outbox_publisher;
 pub mod pricing;
 pub mod public_config;
 pub mod ratio_settings;

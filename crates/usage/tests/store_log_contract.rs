@@ -466,8 +466,8 @@ async fn hour_floor_aggregation_merges_same_hour() {
 
 #[tokio::test]
 async fn other_write_shapes_follow_the_go_functions() {
-    // RecordTaskBillingLog 的 data_export 分支会写 usedata 进程级缓存；
-    // 与缓存断言类测试共享全局缓存 → 必须串行（见 USEDATA_LOCK 注释）。
+    // carol 段的 TaskBillingLog 开启 data_export，会写 usedata 进程级缓存；
+    // 与其余 usedata 断言测试共用该全局态，必须同持锁串行（见 USEDATA_LOCK 注释）。
     let _guard = USEDATA_LOCK.lock().await;
     let db = sqlite_fixture().await;
     reset(&db).await;

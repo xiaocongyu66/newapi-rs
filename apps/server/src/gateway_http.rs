@@ -112,7 +112,7 @@ pub(crate) fn query_escape(value: &str) -> String {
 
 /// 表单/查询串解析（`+` 为空格、`%XX` 转义），重复键取首现值（Go
 /// `PostForm(t)` / `Query(t)` 的取值语义）。
-fn parse_urlencoded(input: &str) -> BTreeMap<String, String> {
+pub(crate) fn parse_urlencoded(input: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for pair in input.split('&').filter(|pair| !pair.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -697,7 +697,11 @@ pub async fn request_codepay_pay(
 
 /// 回调参数：POST 只取 form 体（Go `PostFormValues`，form 解析失败视为空 →
 /// "fail"），GET 只取 query（Go `QueryValues`）。
-fn notify_params(is_post: bool, uri: &Uri, body: &Bytes) -> Result<BTreeMap<String, String>, ()> {
+pub(crate) fn notify_params(
+    is_post: bool,
+    uri: &Uri,
+    body: &Bytes,
+) -> Result<BTreeMap<String, String>, ()> {
     if is_post {
         let raw = std::str::from_utf8(body.as_ref()).map_err(|_| ())?;
         Ok(parse_urlencoded(raw))

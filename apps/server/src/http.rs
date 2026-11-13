@@ -434,6 +434,61 @@ fn build_router(state: AppState) -> Router {
                 crate::auth::user_auth,
             )),
     );
+    // 订阅支付发起：Go `subscriptionRoute` 组内 `UserAuth → CriticalRateLimit`
+    // （`register_api.go:264,269,270`）。
+    let subscription_pay_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/subscription/epay/pay",
+                post(crate::subscription_pay_http::subscription_request_epay),
+            )
+            .route(
+                "/api/subscription/vmq/pay",
+                post(crate::subscription_pay_http::subscription_request_vmq_pay),
+            )
+            .route(
+                "/api/subscription/codepay/pay",
+                post(crate::subscription_pay_http::subscription_request_codepay_pay),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                subscription_pay_state.clone(),
+                critical_guard,
+            ))
+            .route_layer(middleware::from_fn_with_state(
+                subscription_pay_state,
+                crate::auth::user_auth,
+            )),
+    );
+    // 订阅支付回调：Go apiRouter 直下、**匿名可打**（`register_api.go:291-296`），
+    // POST 带匿名体上限，GET 无体。响应体 "success"/"fail"，return 为 302。
+    let subscription_notify_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route(
+                "/api/subscription/epay/notify",
+                get(crate::subscription_pay_http::subscription_epay_notify)
+                    .post(crate::subscription_pay_http::subscription_epay_notify),
+            )
+            .route(
+                "/api/subscription/epay/return",
+                get(crate::subscription_pay_http::subscription_epay_return),
+            )
+            .route(
+                "/api/subscription/vmq/notify",
+                get(crate::subscription_pay_http::subscription_vmq_notify)
+                    .post(crate::subscription_pay_http::subscription_vmq_notify),
+            )
+            .route(
+                "/api/subscription/codepay/notify",
+                get(crate::subscription_pay_http::subscription_codepay_notify)
+                    .post(crate::subscription_pay_http::subscription_codepay_notify),
+            )
+            .route_layer(middleware::from_fn_with_state(
+                subscription_notify_state,
+                crate::gateway_http::notify_body_limit,
+            )),
+    );
     // 管理员补单：Go `adminRoute` 组内仅 `AdminAuth`（`register_api.go:209`）。
     let complete_state = state.clone();
     let app = app.merge(

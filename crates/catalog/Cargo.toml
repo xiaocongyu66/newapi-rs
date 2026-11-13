@@ -7,6 +7,9 @@ publish = false
 
 [dependencies]
 newapi-storage = { path = "../storage" }
+# 网关 outbox 发布器（Go publish_gateway_config.go 的 PUBLISH 面）；版本与
+# identity crate 的 Redis 缓存切片统一锁定。
+redis = { version = "=0.32.7", default-features = false, features = ["tokio-comp", "script"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json.workspace = true
 # 亲和键指纹（feat/log-write-email）：affinityFingerprint 的 SHA1 前 8 位 hex。
@@ -16,6 +19,8 @@ regex = "=1.13.1"
 # 分组覆盖率审计与缓存重建失败的结构化日志。
 tracing = "=0.1.44"
 sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json"] }
+# outbox 发布器轮询循环（Go RunGatewayConfigOutboxPublisher 的 ticker）。
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
 tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
