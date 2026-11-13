@@ -257,8 +257,8 @@ async fn seed_subscription(
     backend!(db, pool, {
         sqlx::query(
             r#"INSERT INTO user_subscriptions
-                (id,user_id,plan_id,amount_total,amount_used,start_time,end_time,status,source,upgrade_group,prev_user_group,created_at,updated_at)
-                VALUES ($1,$2,$3,1000,$4,1,$5,$6,'admin',$7,$8,100,200)"#,
+                (id,user_id,plan_id,amount_total,amount_used,start_time,end_time,status,source,upgrade_group,prev_user_group,last_reset_time,created_at,updated_at)
+                VALUES ($1,$2,$3,1000,$4,1,$5,$6,'admin',$7,$8,100,200,200)"#,
         )
         .bind(id)
         .bind(user_id)
