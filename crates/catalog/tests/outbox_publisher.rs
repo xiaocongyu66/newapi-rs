@@ -21,7 +21,7 @@ use newapi_catalog::outbox_publisher::{
 };
 use newapi_storage::Database;
 use sqlx::{
-    ConnectOptions, Executor,
+    ConnectOptions,
     postgres::PgPoolOptions,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
