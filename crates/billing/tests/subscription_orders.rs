@@ -240,8 +240,9 @@ async fn create_schema(db: &Database) {
 async fn seed_user(db: &Database, id: i64, group: &str) {
     match db {
         Database::Sqlite(pool) => {
-            sqlx::query("INSERT INTO users (id, username, \"group\") VALUES (?, ?)")
+            sqlx::query("INSERT INTO users (id, username, \"group\") VALUES (?, ?, ?)")
                 .bind(id)
+                .bind(format!("user{id}"))
                 .bind(group)
                 .execute(pool)
                 .await
@@ -423,7 +424,15 @@ async fn postgres_db() -> Option<Database> {
         .connect_with(options.clone().disable_statement_logging())
         .await
         .unwrap();
-    let schema = format!("sub_orders_{}", std::process::id());
+    static PG_SCHEMA_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = PG_SCHEMA_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let schema = format!(
+        "sub_orders_{}_{seq}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"
     )))

@@ -195,7 +195,15 @@ async fn postgres_db() -> Option<Database> {
         .connect_with(options.clone().disable_statement_logging())
         .await
         .unwrap();
-    let schema = format!("outbox_pub_{}", std::process::id());
+    static PG_SCHEMA_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = PG_SCHEMA_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let schema = format!(
+        "outbox_pub_{}_{seq}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"
     )))
