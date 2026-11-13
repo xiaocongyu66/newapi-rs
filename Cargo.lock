@@ -1786,11 +1786,13 @@ name = "newapi-catalog"
 version = "0.1.0"
 dependencies = [
  "newapi-storage",
+ "regex",
  "serde",
  "serde_json",
  "sha1 0.10.6",
  "sqlx",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1885,8 +1887,8 @@ dependencies = [
  "newapi-mailer",
  "newapi-security",
  "newapi-storage",
- "rand 0.10.3",
  "newapi-usage",
+ "rand 0.10.3",
  "redis",
  "regex",
  "reqwest",

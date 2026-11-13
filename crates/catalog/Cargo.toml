@@ -11,6 +11,10 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json.workspace = true
 # 亲和键指纹（feat/log-write-email）：affinityFingerprint 的 SHA1 前 8 位 hex。
 sha1 = "=0.10.6"
+# 定价缓存 advanced_custom 路由的 `re:` 模型规则（Go regexp.MatchString 语义）。
+regex = "=1.13.1"
+# 分组覆盖率审计与缓存重建失败的结构化日志。
+tracing = "=0.1.44"
 sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json"] }
 
 [dev-dependencies]

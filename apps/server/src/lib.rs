@@ -31,6 +31,7 @@ pub mod option_http;
 pub mod option_store;
 pub mod pancake;
 pub mod passkey_http;
+pub mod pricing_http;
 pub mod qq_bind_http;
 pub mod qqbot;
 pub mod readonly_http;

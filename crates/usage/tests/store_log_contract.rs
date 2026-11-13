@@ -466,8 +466,12 @@ async fn hour_floor_aggregation_merges_same_hour() {
 
 #[tokio::test]
 async fn other_write_shapes_follow_the_go_functions() {
+    // RecordTaskBillingLog 的 data_export 分支会写 usedata 进程级缓存；
+    // 与缓存断言类测试共享全局缓存 → 必须串行（见 USEDATA_LOCK 注释）。
+    let _guard = USEDATA_LOCK.lock().await;
     let db = sqlite_fixture().await;
     reset(&db).await;
+    usedata::clear_cache();
     // RecordLog / RecordLogWithAdminInfo。
     store_log::record_log(&db, "admin", 1, store_log::LOG_TYPE_SYSTEM, "sys", false)
         .await
