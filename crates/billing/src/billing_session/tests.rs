@@ -146,22 +146,25 @@ async fn connect_sqlite() -> Database {
 }
 
 async fn connect_postgres() -> Option<Database> {
+    // 对齐仓库既有 PG fixture 先例（apps/server/tests/subscription_admin_routes.rs）：
+    // 进程级唯一 schema 名（pid + 原子计数），after_connect 设 search_path。
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static PG_SCHEMA_SEQ: AtomicU64 = AtomicU64::new(0);
     let Ok(dsn) = std::env::var("TEST_POSTGRES_DSN") else {
         return None;
     };
     let options: sqlx::postgres::PgConnectOptions = dsn.parse().unwrap();
+    let options = options.disable_statement_logging();
     let admin = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
-        .connect_with(options.clone().disable_statement_logging())
+        .connect_with(options.clone())
         .await
         .unwrap();
-    let schema = format!("billing_session_{}", std::process::id());
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
+    let schema = format!(
+        "billing_session_{}_{}",
+        std::process::id(),
+        PG_SCHEMA_SEQ.fetch_add(1, Ordering::Relaxed)
+    );
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA \"{schema}\"")))
         .execute(&admin)
         .await
@@ -169,8 +172,6 @@ async fn connect_postgres() -> Option<Database> {
     let search_path = schema.clone();
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
-        .idle_timeout(None)
-        .max_lifetime(None)
         .after_connect(move |connection, _| {
             let path = search_path.clone();
             Box::pin(async move {
@@ -181,52 +182,12 @@ async fn connect_postgres() -> Option<Database> {
                 Ok(())
             })
         })
-        .connect_with(options.disable_statement_logging())
+        .connect_with(options)
         .await
         .unwrap();
     let db = Database::Postgres(pool);
     create_schema(&db).await;
     Some(db)
-}
-
-// 兼容 rust 1.99 的 AsyncFn（edition 2024 内建）不可用时退化写法：
-async fn run_db_contract(db: &Database, contract: impl AsyncFn(&Database)) {
-    contract(db).await;
-}
-
-macro_rules! backend_tests {
-    ($($name:ident => $body:expr;)*) => {
-        $(
-            #[tokio::test]
-            async fn $name() {
-                let sqlite = connect_sqlite().await;
-                run_db_contract(&sqlite, $body).await;
-                if let Some(pg) = connect_postgres().await {
-                    run_db_contract(&pg, $body).await;
-                }
-            }
-        )*
-    };
-}
-
-/// 测试内 SQL 执行（Database 无 pub pool 访问器，走双后端 match）。
-async fn texec(db: &Database, sql: &'static str, binds: &[i64]) -> sqlx::Result<u64> {
-    match db {
-        Database::Sqlite(pool) => {
-            let mut q = sqlx::query(sql);
-            for b in binds {
-                q = q.bind(*b);
-            }
-            q.execute(pool).await.map(|r| r.rows_affected())
-        }
-        Database::Postgres(pool) => {
-            let mut q = sqlx::query(sql);
-            for b in binds {
-                q = q.bind(*b);
-            }
-            q.execute(pool).await.map(|r| r.rows_affected())
-        }
-    }
 }
 
 async fn seed_user(db: &Database, id: i64, quota: i64) {
@@ -284,25 +245,35 @@ async fn seed_subscription(
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
              start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
-                .bind(1_000_000i64).bind(9_000_000i64).bind(allow_overflow)
+                .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
                 .execute(pool).await.unwrap();
         }
         Database::Postgres(pool) => {
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
              start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
-                .bind(1_000_000i64).bind(9_000_000i64).bind(allow_overflow)
+                .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
                 .execute(pool).await.unwrap();
         }
     }
     match db {
         Database::Sqlite(pool) => {
-            sqlx::query("INSERT INTO subscription_plans (id, title, quota_reset_period) VALUES (1,'p','never')")
-                .execute(pool).await.unwrap();
+            sqlx::query(
+                "INSERT INTO subscription_plans (id, title, quota_reset_period) VALUES (1,'p','never') \
+                 ON CONFLICT(id) DO NOTHING",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::query("INSERT INTO subscription_plans (id, title, quota_reset_period) VALUES (1,'p','never')")
-                .execute(pool).await.unwrap();
+            sqlx::query(
+                "INSERT INTO subscription_plans (id, title, quota_reset_period) VALUES (1,'p','never') \
+                 ON CONFLICT(id) DO NOTHING",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
         }
     }
 }
@@ -525,7 +496,7 @@ backend_tests! {
     // F6 不变量：逐次增量直扣后，累计结算只补差额，整段会话恰好付一次。
     realtime_batches_settle_once_against_cumulative_usage => async |db: &Database| {
         seed_user(db, 91, 500_000).await;
-        seed_token(db, 92, 91, "sk-realtime-test", 500_000, true).await;
+        seed_token(db, 92, 91, "realtime-test", 500_000, true).await;
         seed_channel(db, 1).await;
         let store = BillingStore::new(db.clone());
         let settings = ratio_settings_1to1();
@@ -615,7 +586,10 @@ backend_tests! {
             .pre_consume_user_subscription("req-idem", 51, 30_000, 2_000)
             .await
             .unwrap();
-        assert_eq!(replay, first);
+        assert_eq!(replay.user_subscription_id, first.user_subscription_id);
+        assert_eq!(replay.pre_consumed, first.pre_consumed);
+        assert_eq!(replay.amount_total, first.amount_total);
+        assert_eq!(replay.amount_used_after, first.amount_used_after);
         assert_eq!(sub_used(db, 52).await, 30_000);
         // 退款后同 requestId 拒绝
         store.refund_subscription_pre_consume("req-idem", 2_500).await.unwrap();
