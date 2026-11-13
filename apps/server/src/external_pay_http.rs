@@ -24,11 +24,11 @@
 //! [`WaffoTransport`] / [`PancakeCheckoutTransport`]），测试注入替身，生产
 //! 走 reqwest 实现。订单状态机复用 `newapi_billing::topup` 的 CAS 事务。
 //!
-//! 已知偏差：订阅订单（`CompleteSubscriptionOrder` /
-//! `ExpireSubscriptionOrder` / `subscription_orders` 表）尚未移植，webhook
-//! 在 Go 中的「先试订阅订单」分支按 `ErrSubscriptionOrderNotFound` 等价
-//! 处理——Stripe / Creem 直接走充值核销，Pancake 的 `WAFFO_PANCAKE_SUB-`
-//! 前缀按订阅订单不存在处理（错误日志 + 200 OK）。
+//! 已知偏差：无。订阅订单状态机已移植（`newapi_billing::subscription::orders`），
+//! webhook 在 Go 中的「先试订阅订单」分支按 Go 语义补全——Stripe / Creem 先
+//! `complete_subscription_order`（`ErrSubscriptionOrderNotFound` 等价于订单
+//! 不存在才落回充值核销），Pancake 的 `WAFFO_PANCAKE_SUB-` 前缀走订阅订单
+//! 解析 + 核销。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -42,6 +42,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::Engine;
+use newapi_billing::subscription::{
+    SubscriptionCompleteOutcome, SubscriptionOrderError, complete_subscription_order,
+    expire_subscription_order, get_subscription_order_by_trade_no,
+};
 use newapi_billing::topup::{
     ExternalQuotaSource, ExternalRechargeParams, ExternalUserUpdate, PROVIDER_CREEM,
     PROVIDER_STRIPE, PROVIDER_WAFFO, PROVIDER_WAFFO_PANCAKE, STATUS_EXPIRED, STATUS_FAILED,
@@ -1815,7 +1819,8 @@ struct AmountOnlyRequest {
 // Webhooks
 // ---------------------------------------------------------------------------
 
-/// Stripe 事件体（仅本切片使用的字段）。
+/// Stripe 事件体（仅本切片使用的字段）。`amount_total` / `currency` 为
+/// Go `event.GetObjectValue(...)` 的履约载荷字段。
 #[derive(Default)]
 struct StripeEvent {
     event_type: String,
@@ -1823,6 +1828,8 @@ struct StripeEvent {
     client_reference_id: String,
     status: String,
     payment_status: String,
+    amount_total: String,
+    currency: String,
 }
 
 fn parse_stripe_event(payload: &[u8]) -> Option<StripeEvent> {
@@ -1854,6 +1861,18 @@ fn parse_stripe_event(payload: &[u8]) -> Option<StripeEvent> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
+        amount_total: object
+            .get("amount_total")
+            .map(|value| match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default(),
+        currency: object
+            .get("currency")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
     })
 }
 
@@ -1870,18 +1889,93 @@ fn stripe_permanent_error(error: &newapi_billing::topup::RechargeError) -> bool 
     )
 }
 
-/// Go `fulfillOrder`（充值半边；订阅订单未移植，见模块注释）。
+/// Go `fulfillOrder` 的订阅订单半边（`topup_stripe.go:294-312`）：先试订阅
+/// 核销（载荷为 customer + amount_total + currency + event_type 的 JSON）；
+/// `ErrSubscriptionOrderNotFound` 等价于订单不存在 → 返回 `Ok(false)` 落回
+/// 充值核销。永久失败（网关不符/状态非法）记 warn 后返回 `Ok(true)`
+/// （让 Stripe 停止重投）；其余错误上抛等待重试。
+async fn fulfill_subscription_order(
+    db: &newapi_storage::Database,
+    trade_no: &str,
+    provider: &str,
+    customer: &str,
+    amount_total: &str,
+    currency: &str,
+    event_type: &str,
+) -> Result<bool, SubscriptionOrderError> {
+    let payload = json!({
+        "customer": customer,
+        "amount_total": amount_total,
+        "currency": currency.to_uppercase(),
+        "event_type": event_type,
+    })
+    .to_string();
+    match complete_subscription_order(db, trade_no, &payload, provider, "", now_seconds()).await {
+        Ok(outcome) => Ok(matches!(outcome, SubscriptionCompleteOutcome::Completed(_))),
+        Err(SubscriptionOrderError::NotFound) => Ok(false),
+        Err(error) => {
+            if matches!(
+                error,
+                SubscriptionOrderError::ProviderMismatch | SubscriptionOrderError::StatusInvalid
+            ) {
+                tracing::warn!(
+                    trade_no = %trade_no,
+                    error = %error,
+                    "订阅订单永久失败，不再重试"
+                );
+                Ok(true)
+            } else {
+                tracing::error!(
+                    trade_no = %trade_no,
+                    error = %error,
+                    "订阅订单处理失败，等待重试"
+                );
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Go `fulfillOrder`（订阅订单半边先行，充值半边兜底）。
 async fn stripe_fulfill_order(
     db: &newapi_storage::Database,
     event: &StripeEvent,
     quota_per_unit: f64,
-) -> Result<(), newapi_billing::topup::RechargeError> {
+    event_type: &str,
+    amount_total: &str,
+    currency: &str,
+) -> Result<(), ()> {
     if event.client_reference_id.is_empty() {
         tracing::warn!(
             event = "stripe_fulfill_missing_trade_no",
             "Stripe 完成订单时缺少订单号"
         );
         return Ok(());
+    }
+    // Go：`LockOrder` 之后先试订阅订单（`topup_stripe.go:301`）。进程内锁
+    // 只是优化，正确性由订单状态机的事务 + CAS 承担。
+    match fulfill_subscription_order(
+        db,
+        &event.client_reference_id,
+        PROVIDER_STRIPE,
+        &event.customer,
+        amount_total,
+        currency,
+        event_type,
+    )
+    .await
+    {
+        Ok(true) => {
+            tracing::info!(
+                trade_no = %event.client_reference_id,
+                event_type = %event_type,
+                "Stripe 订阅订单处理成功"
+            );
+            return Ok(());
+        }
+        Ok(false) => {}
+        // 订阅订单可重试失败：与充值侧同型（上抛 → webhook 回 5xx 重投）。
+        Err(_) => return Err(()),
     }
     // Go `Recharge`：额度来自订单行的 `Money × QuotaPerUnit`
     // （`QuotaFromDecimalStrict` → decimal `Round(0)` 后取整），`amount_total`
@@ -1913,7 +2007,8 @@ async fn stripe_fulfill_order(
                 trade_no = %event.client_reference_id,
                 "Stripe 充值处理失败，等待重试"
             );
-            Err(error)
+            let _ = error;
+            Err(())
         }
     }
 }
@@ -2003,21 +2098,39 @@ pub async fn stripe_webhook(
                 tracing::warn!("Stripe checkout.expired 缺少订单号");
                 None
             } else {
-                match update_pending_top_up_status(
+                // Go：先试订阅订单过期（`topup_stripe.go:356-362`），NotFound
+                // 等价于订阅订单不存在 → 落回充值订单过期。
+                match expire_subscription_order(
                     &db,
                     &event.client_reference_id,
                     PROVIDER_STRIPE,
-                    STATUS_EXPIRED,
+                    newapi_billing::topup::now_seconds(),
                 )
                 .await
                 {
                     Ok(()) => {
-                        tracing::info!(trade_no = %event.client_reference_id, "Stripe 充值订单已过期");
+                        tracing::info!(trade_no = %event.client_reference_id, "Stripe 订阅订单已过期");
                         None
                     }
-                    Err(newapi_billing::topup::RechargeError::NotFound) => {
-                        tracing::warn!(trade_no = %event.client_reference_id, "Stripe 充值订单不存在，无法标记过期");
-                        None
+                    Err(SubscriptionOrderError::NotFound) => {
+                        match update_pending_top_up_status(
+                            &db,
+                            &event.client_reference_id,
+                            PROVIDER_STRIPE,
+                            STATUS_EXPIRED,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                tracing::info!(trade_no = %event.client_reference_id, "Stripe 充值订单已过期");
+                                None
+                            }
+                            Err(newapi_billing::topup::RechargeError::NotFound) => {
+                                tracing::warn!(trade_no = %event.client_reference_id, "Stripe 充值订单不存在，无法标记过期");
+                                None
+                            }
+                            Err(_) => None,
+                        }
                     }
                     Err(_) => None,
                 }
@@ -2029,7 +2142,15 @@ pub async fn stripe_webhook(
         }
     };
     if fulfill == Some(true)
-        && let Err(_error) = stripe_fulfill_order(&db, &event, display.quota_per_unit).await
+        && let Err(_error) = stripe_fulfill_order(
+            &db,
+            &event,
+            display.quota_per_unit,
+            &event.event_type,
+            &event.amount_total,
+            &event.currency,
+        )
+        .await
     {
         tracing::error!(event_type = %event.event_type, "Stripe webhook 履约失败，返回 5xx 等待重试");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -2126,6 +2247,36 @@ pub async fn creem_webhook(
     if request_id.is_empty() {
         tracing::warn!(event_id = ?event.get("id"), order_id = %order_id, "Creem webhook 缺少 request_id");
         return StatusCode::BAD_REQUEST.into_response();
+    }
+    // Go：先试订阅订单核销（`topup_creem.go:322-331`）。NotFound 等价于订阅
+    // 订单不存在 → 落回充值核销；其余错误 5xx（Creem 会重投）。
+    match complete_subscription_order(
+        &db,
+        &request_id,
+        &event.to_string(),
+        PROVIDER_CREEM,
+        "",
+        newapi_billing::topup::now_seconds(),
+    )
+    .await
+    {
+        Ok(_) => {
+            tracing::info!(
+                trade_no = %request_id,
+                creem_order_id = %order_id,
+                "Creem 订阅订单处理成功"
+            );
+            return StatusCode::OK.into_response();
+        }
+        Err(SubscriptionOrderError::NotFound) => {}
+        Err(_) => {
+            tracing::error!(
+                trade_no = %request_id,
+                creem_order_id = %order_id,
+                "Creem 订阅订单处理失败"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
     // 订单类型门：只处理一次性付款（充值）。
     let order_type = order
@@ -2445,13 +2596,50 @@ pub async fn waffo_pancake_webhook(
     }
     let raw_trade_no = event.order_merchant_external_id.trim().to_owned();
     if raw_trade_no.starts_with("WAFFO_PANCAKE_SUB-") {
-        // 订阅订单未移植：等价于 Go 的订阅订单不存在分支（错误日志 + 200）。
-        tracing::error!(
-            event_id = %event.event_id,
-            order_id = %event.order_id,
-            "Waffo Pancake webhook 订阅订单解析失败（订阅订单存储未移植）"
-        );
-        return text_response(StatusCode::OK, "OK");
+        // Go：按订阅订单解析（店铺绑定 + 归属 + 买家身份 + 金额），核销订阅
+        // 订单（`topup_waffo_pancake.go:482-506`）。
+        let trade_no = match resolve_pancake_subscription_trade_no(&db, &event, &settings).await {
+            Ok(trade_no) => trade_no,
+            Err(error) => {
+                tracing::error!(
+                    event_id = %event.event_id,
+                    order_id = %event.order_id,
+                    buyer_identity = %event.merchant_provided_buyer_identity,
+                    error = %error,
+                    "Waffo Pancake webhook 订阅订单解析失败"
+                );
+                return text_response(StatusCode::OK, "OK");
+            }
+        };
+        return match complete_subscription_order(
+            &db,
+            &trade_no,
+            &String::from_utf8_lossy(&body),
+            PROVIDER_WAFFO_PANCAKE,
+            "",
+            newapi_billing::topup::now_seconds(),
+        )
+        .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    trade_no = %trade_no,
+                    event_id = %event.event_id,
+                    order_id = %event.order_id,
+                    "Waffo Pancake 订阅完成"
+                );
+                text_response(StatusCode::OK, "OK")
+            }
+            Err(_) => {
+                tracing::error!(
+                    trade_no = %trade_no,
+                    event_id = %event.event_id,
+                    order_id = %event.order_id,
+                    "Waffo Pancake 订阅完成失败"
+                );
+                text_response(StatusCode::INTERNAL_SERVER_ERROR, "retry")
+            }
+        };
     }
     let trade_no = match resolve_pancake_trade_no(&db, &event, &settings).await {
         Ok(trade_no) => trade_no,
@@ -2597,6 +2785,63 @@ fn verify_pancake_webhook(
             .unwrap_or("")
             .to_owned(),
     })
+}
+
+/// Go `ResolveWaffoPancakeSubscriptionTradeNo`（`call_waffo_pancake.go:285-314`）：
+/// 店铺绑定 + 订阅订单归属 + 买家身份 + 金额/币种校验。
+async fn resolve_pancake_subscription_trade_no(
+    db: &newapi_storage::Database,
+    event: &PancakeWebhookEvent,
+    settings: &TopUpSettings,
+) -> Result<String, String> {
+    let trade_no = event.order_merchant_external_id.trim().to_owned();
+    if trade_no.is_empty() {
+        return Err("missing webhook orderMerchantExternalId".to_owned());
+    }
+    let expected_store = settings.waffo_pancake_store_id.trim().to_owned();
+    if !expected_store.is_empty() && event.store_id.trim() != expected_store {
+        return Err(format!(
+            "waffo pancake store mismatch for tradeNo={trade_no}: expected={expected_store:?} actual={:?}",
+            event.store_id.trim()
+        ));
+    }
+    let Some(order) = get_subscription_order_by_trade_no(db, &trade_no).await else {
+        return Err(format!(
+            "waffo pancake subscription order not found for tradeNo={trade_no}"
+        ));
+    };
+    if order.payment_provider != PROVIDER_WAFFO_PANCAKE {
+        return Err(format!(
+            "waffo pancake subscription order not found for tradeNo={trade_no}"
+        ));
+    }
+    let expected_identity = pancake_buyer_identity(order.user_id);
+    let actual_identity = event.merchant_provided_buyer_identity.trim().to_owned();
+    if actual_identity != expected_identity {
+        return Err(format!(
+            "waffo pancake buyer identity mismatch for subscription tradeNo={trade_no}: expected={expected_identity:?} actual={actual_identity:?}"
+        ));
+    }
+    let expected_amount = format_pancake_amount(order.money);
+    let actual_amount = event.amount.trim().to_owned();
+    if actual_amount.is_empty() {
+        return Err(format!(
+            "waffo pancake event missing amount for tradeNo={trade_no}"
+        ));
+    }
+    if !decimal_eq(&expected_amount, &actual_amount) {
+        return Err(format!(
+            "waffo pancake amount mismatch for tradeNo={trade_no}: expected={expected_amount} actual={actual_amount} currency={:?}",
+            event.currency
+        ));
+    }
+    if !event.currency.trim().eq_ignore_ascii_case("USD") {
+        return Err(format!(
+            "waffo pancake currency mismatch for tradeNo={trade_no}: expected=USD actual={:?}",
+            event.currency.trim()
+        ));
+    }
+    Ok(trade_no)
 }
 
 /// Go `ResolveWaffoPancakeTradeNo`：店铺绑定 + 订单归属 + 买家身份 + 金额。
