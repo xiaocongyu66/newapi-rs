@@ -298,7 +298,6 @@ async fn send(
         .unwrap()
 }
 
-#[track_caller]
 async fn body_json(response: Response) -> Value {
     let bytes = to_bytes(response.into_body(), 1024 * 1024)
         .await
@@ -306,22 +305,32 @@ async fn body_json(response: Response) -> Value {
     serde_json::from_slice(&bytes).expect("response JSON")
 }
 
-#[track_caller]
-async fn assert_success(response: Response) -> Value {
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = body_json(response).await;
-    assert_eq!(body["success"], json!(true), "{body}");
-    assert_eq!(body["message"], json!(""));
-    body
+/// Macros so panics report the call site (`#[track_caller]` is a no-op on
+/// async functions).
+macro_rules! assert_success {
+    ($response:expr) => {{
+        async {
+            let response = $response;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            assert_eq!(body["success"], json!(true), "{body}");
+            assert_eq!(body["message"], json!(""), "{body}");
+            body
+        }
+    }};
 }
 
-#[track_caller]
-async fn assert_failure(response: Response, message: Value) -> Value {
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = body_json(response).await;
-    assert_eq!(body["success"], json!(false), "{body}");
-    assert_eq!(body["message"], message, "{body}");
-    body
+macro_rules! assert_failure {
+    ($response:expr, $message:expr) => {{
+        async {
+            let response = $response;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            assert_eq!(body["success"], json!(false), "{body}");
+            assert_eq!(body["message"], $message, "{body}");
+            body
+        }
+    }};
 }
 
 fn now() -> i64 {
@@ -389,7 +398,7 @@ async fn run_contract(db: Database) {
     seed_plan(&db, 2, "Pro", 10, true).await;
     seed_plan(&db, 3, "Max", 10, true).await;
     sync_pg_sequences(&db).await;
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "GET",
@@ -434,7 +443,7 @@ async fn run_contract(db: Database) {
         Some("{not json".into()),
     )
     .await;
-    assert_failure(response, json!("参数错误")).await;
+    assert_failure!(response, json!("参数错误")).await;
 
     // Validation ladder mirrors the Go order.
     for (payload, message) in [
@@ -482,7 +491,7 @@ async fn run_contract(db: Database) {
             Some(payload.into()),
         )
         .await;
-        assert_failure(response, json!(message)).await;
+        assert_failure!(response, json!(message)).await;
     }
 
     // Happy path: defaults applied (currency USD, duration month/1, pointers
@@ -501,7 +510,7 @@ async fn run_contract(db: Database) {
         }
     })
     .to_string();
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "POST",
@@ -526,7 +535,7 @@ async fn run_contract(db: Database) {
     let pro_id = body["data"]["id"].as_i64().unwrap();
 
     // The stored row renders displays through the list endpoint.
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "GET",
@@ -553,10 +562,10 @@ async fn run_contract(db: Database) {
         Some(r#"{"plan":{"title":"Pro2","price_amount":3.0,"max_purchase_per_user":2}}"#.into()),
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(body["data"], json!(null), "{body}");
 
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "GET",
@@ -588,7 +597,7 @@ async fn run_contract(db: Database) {
         Some(r#"{"plan":{"title":"Pro2","price_amount":3.0,"enabled":false}}"#.into()),
     )
     .await;
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "GET",
@@ -615,7 +624,7 @@ async fn run_contract(db: Database) {
         Some(r#"{"plan":{"title":"X"}}"#.into()),
     )
     .await;
-    assert_failure(response, json!("无效的ID")).await;
+    assert_failure!(response, json!("无效的ID")).await;
 
     // --- PATCH status ---
     let response = send(
@@ -626,8 +635,8 @@ async fn run_contract(db: Database) {
         Some(r#"{"enabled":true}"#.into()),
     )
     .await;
-    assert_success(response).await;
-    let body = assert_success(
+    assert_success!(response).await;
+    let body = assert_success!(
         send(
             &app,
             "GET",
@@ -653,11 +662,11 @@ async fn run_contract(db: Database) {
         Some(r#"{}"#.into()),
     )
     .await;
-    assert_failure(response, json!("参数错误")).await;
+    assert_failure!(response, json!("参数错误")).await;
 
     // --- bind: creates a subscription, applies upgrade group ---
     let payload = json!({"plan":{"title":"VipPlan","price_amount":1.0,"max_purchase_per_user":2,"upgrade_group":"vip"}}).to_string();
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "POST",
@@ -678,7 +687,7 @@ async fn run_contract(db: Database) {
         Some(json!({"user_id": 2, "plan_id": vip_plan_id}).to_string()),
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(
         body["data"]["message"],
         json!("用户分组将升级到 vip"),
@@ -694,7 +703,7 @@ async fn run_contract(db: Database) {
     });
 
     // The created subscription is listed for the user.
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "GET",
@@ -722,7 +731,7 @@ async fn run_contract(db: Database) {
         Some(json!({"user_id": 2, "plan_id": vip_plan_id}).to_string()),
     )
     .await;
-    assert_failure(response, json!("已达到该套餐购买上限")).await;
+    assert_failure!(response, json!("已达到该套餐购买上限")).await;
 
     // Unknown plan / unknown user are gorm record not found.
     let response = send(
@@ -733,7 +742,7 @@ async fn run_contract(db: Database) {
         Some(json!({"user_id": 2, "plan_id": 9999}).to_string()),
     )
     .await;
-    assert_failure(response, json!("record not found")).await;
+    assert_failure!(response, json!("record not found")).await;
     let response = send(
         &app,
         "POST",
@@ -742,7 +751,7 @@ async fn run_contract(db: Database) {
         Some(json!({"user_id": 9999, "plan_id": vip_plan_id}).to_string()),
     )
     .await;
-    assert_failure(response, json!("record not found")).await;
+    assert_failure!(response, json!("record not found")).await;
     // Bad params.
     let response = send(
         &app,
@@ -752,7 +761,7 @@ async fn run_contract(db: Database) {
         Some(json!({"user_id": 0, "plan_id": 1}).to_string()),
     )
     .await;
-    assert_failure(response, json!("参数错误")).await;
+    assert_failure!(response, json!("参数错误")).await;
 
     // POST /users/:id/subscriptions is the same bind flow.
     let response = send(
@@ -763,7 +772,7 @@ async fn run_contract(db: Database) {
         Some(json!({"plan_id": vip_plan_id}).to_string()),
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(
         body["data"]["message"],
         json!("用户分组将升级到 vip"),
@@ -777,7 +786,7 @@ async fn run_contract(db: Database) {
         Some(json!({"plan_id": vip_plan_id}).to_string()),
     )
     .await;
-    assert_failure(response, json!("无效的用户ID")).await;
+    assert_failure!(response, json!("无效的用户ID")).await;
     let response = send(
         &app,
         "GET",
@@ -786,7 +795,7 @@ async fn run_contract(db: Database) {
         None,
     )
     .await;
-    assert_failure(response, json!("无效的用户ID")).await;
+    assert_failure!(response, json!("无效的用户ID")).await;
 
     // --- reset (user scope) ---
     let future = now() + 3600;
@@ -838,7 +847,7 @@ async fn run_contract(db: Database) {
         Some(json!({"plan_id": vip_plan_id, "advance_reset_time": false}).to_string()),
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(body["data"]["plan_id"], json!(vip_plan_id), "{body}");
     assert_eq!(body["data"]["matched_count"], json!(2));
     assert_eq!(body["data"]["reset_count"], json!(2));
@@ -872,7 +881,7 @@ async fn run_contract(db: Database) {
         Some(json!({"plan_id": vip_plan_id}).to_string()),
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(body["data"]["advance_reset_time"], json!(true));
     backend!(&db, pool, {
         let (last, next): (i64, i64) = sqlx::query_as(
@@ -898,11 +907,11 @@ async fn run_contract(db: Database) {
     )
     .await;
     // plan 9999 doesn't exist → record not found first.
-    assert_failure(response, json!("record not found")).await;
+    assert_failure!(response, json!("record not found")).await;
     // A plan with no active subs for the user → 该用户没有有效的此套餐订阅.
     let payload =
         json!({"plan":{"title":"Lonely","price_amount":1.0,"max_purchase_per_user":5}}).to_string();
-    let body = assert_success(
+    let body = assert_success!(
         send(
             &app,
             "POST",
@@ -922,7 +931,7 @@ async fn run_contract(db: Database) {
         Some(json!({"plan_id": lonely_id}).to_string()),
     )
     .await;
-    assert_failure(response, json!("该用户没有有效的此套餐订阅")).await;
+    assert_failure!(response, json!("该用户没有有效的此套餐订阅")).await;
     // plan_id <= 0 → 参数错误.
     let response = send(
         &app,
@@ -932,7 +941,7 @@ async fn run_contract(db: Database) {
         Some(json!({"plan_id": 0}).to_string()),
     )
     .await;
-    assert_failure(response, json!("参数错误")).await;
+    assert_failure!(response, json!("参数错误")).await;
 
     // --- reset (plan scope) ---
     seed_subscription(
@@ -957,7 +966,7 @@ async fn run_contract(db: Database) {
         Some(json!({"advance_reset_time": false}).to_string()),
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     // Active subs of this plan: 11, 12 (user 3) and 21 (user 2).
     assert_eq!(body["data"]["matched_count"], json!(3), "{body}");
     assert_eq!(body["data"]["user_count"], json!(2));
@@ -969,7 +978,7 @@ async fn run_contract(db: Database) {
         Some(json!({}).to_string()),
     )
     .await;
-    assert_failure(response, json!("record not found")).await;
+    assert_failure!(response, json!("record not found")).await;
     let response = send(
         &app,
         "POST",
@@ -978,7 +987,7 @@ async fn run_contract(db: Database) {
         Some(json!({}).to_string()),
     )
     .await;
-    assert_failure(response, json!("无效的ID")).await;
+    assert_failure!(response, json!("无效的ID")).await;
 
     // --- invalidate: cancels and downgrades the group ---
     // user 3 has two active upgraded subs (11, 12) → the "other active"
@@ -991,7 +1000,7 @@ async fn run_contract(db: Database) {
         None,
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(body["data"], json!(null), "{body}");
     backend!(&db, pool, {
         let (status, end, group): (String, i64, String) = sqlx::query_as(
@@ -1015,7 +1024,7 @@ async fn run_contract(db: Database) {
         None,
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(
         body["data"]["message"],
         json!("用户分组将回退到 default"),
@@ -1038,7 +1047,7 @@ async fn run_contract(db: Database) {
         None,
     )
     .await;
-    assert_failure(response, json!("record not found")).await;
+    assert_failure!(response, json!("record not found")).await;
     let response = send(
         &app,
         "POST",
@@ -1047,7 +1056,7 @@ async fn run_contract(db: Database) {
         None,
     )
     .await;
-    assert_failure(response, json!("无效的订阅ID")).await;
+    assert_failure!(response, json!("无效的订阅ID")).await;
 
     // --- delete: hard delete, same downgrade semantics ---
     let response = send(
@@ -1058,7 +1067,7 @@ async fn run_contract(db: Database) {
         None,
     )
     .await;
-    let body = assert_success(response).await;
+    let body = assert_success!(response).await;
     assert_eq!(
         body["data"]["message"],
         json!("用户分组将回退到 default"),
@@ -1080,7 +1089,7 @@ async fn run_contract(db: Database) {
         None,
     )
     .await;
-    assert_failure(response, json!("record not found")).await;
+    assert_failure!(response, json!("record not found")).await;
 }
 
 async fn sqlite_fixture() -> Database {
