@@ -1857,9 +1857,11 @@ name = "newapi-relay"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "url",
 ]
 
 [[package]]
@@ -1883,10 +1885,11 @@ dependencies = [
  "newapi-i18n",
  "newapi-identity",
  "newapi-mailer",
+ "newapi-relay",
  "newapi-security",
  "newapi-storage",
- "rand 0.10.3",
  "newapi-usage",
+ "rand 0.10.3",
  "redis",
  "regex",
  "reqwest",
