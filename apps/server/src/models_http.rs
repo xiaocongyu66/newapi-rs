@@ -58,8 +58,9 @@ use axum::{
 };
 use newapi_catalog::abilities::enabled_models;
 use newapi_catalog::models::{
-    BoundChannel, ModelInput, ModelRepository, ModelRow, NAME_RULE_EXACT, NewModel, choose_status,
-    contains_field, parse_status_filter, parse_sync_filter,
+    BoundChannel, ModelInput, ModelRepository, ModelRow, NAME_RULE_CONTAINS, NAME_RULE_EXACT,
+    NAME_RULE_PREFIX, NAME_RULE_SUFFIX, NewModel, choose_status, contains_field,
+    parse_status_filter, parse_sync_filter,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -564,11 +565,25 @@ fn translate(headers: &HeaderMap, key: &str) -> String {
 }
 
 /// Go `Model` 的 JSON 形态（键集与 omitempty 语义逐字对齐）：
-/// `description`/`icon`/`tags`/`vendor_id`/`endpoints`/`bound_channels`
+/// `description`/`icon`/`tags`/`vendor_id`/`endpoints`/`bound_channels`/
+/// `enable_groups`/`quota_types`/`matched_models`/`matched_count`
 /// 为空时省略；`status`/`sync_official`/`created_time`/`updated_time`/
-/// `name_rule` 恒在。`enable_groups`/`quota_types`/`matched_models`/
-/// `matched_count` 属定价缓存裁剪，恒省略。
-pub(crate) fn model_value(row: &ModelRow, bound_channels: Option<&[BoundChannel]>) -> Value {
+/// `name_rule` 恒在。`enable_groups` 等定价缓存富化字段由
+/// [`ModelEnrichment`] 携带（Go `gorm:"-"` 计算字段，Create/Update 响应
+/// 不富化 → `None`）。
+#[derive(Default)]
+pub(crate) struct ModelEnrichment {
+    pub enable_groups: Vec<String>,
+    pub quota_types: Vec<i64>,
+    pub matched_models: Option<Vec<String>>,
+    pub matched_count: Option<i64>,
+}
+
+pub(crate) fn model_value(
+    row: &ModelRow,
+    bound_channels: Option<&[BoundChannel]>,
+    enrichment: Option<&ModelEnrichment>,
+) -> Value {
     let mut object = Map::new();
     object.insert("id".to_owned(), json!(row.id));
     object.insert("model_name".to_owned(), json!(row.model_name));
@@ -605,13 +620,78 @@ pub(crate) fn model_value(row: &ModelRow, bound_channels: Option<&[BoundChannel]
         );
     }
     object.insert("name_rule".to_owned(), json!(row.name_rule));
+    if let Some(enrichment) = enrichment {
+        if !enrichment.enable_groups.is_empty() {
+            object.insert("enable_groups".to_owned(), json!(enrichment.enable_groups));
+        }
+        if !enrichment.quota_types.is_empty() {
+            object.insert("quota_types".to_owned(), json!(enrichment.quota_types));
+        }
+        if let Some(matched) = &enrichment.matched_models
+            && !matched.is_empty()
+        {
+            object.insert("matched_models".to_owned(), json!(matched));
+        }
+        if let Some(count) = enrichment.matched_count
+            && count != 0
+        {
+            object.insert("matched_count".to_owned(), json!(count));
+        }
+    }
     Value::Object(object)
 }
 
-/// `enrichModels` 的可行化版本：绑定渠道批量查询失败按 Go 的吞错语义
-/// （`channelsByModel, _ :=`）继续，只是不带 `bound_channels`。精确模型
-/// （name_rule=0）的 `endpoints` 为空时按空定价缓存语义填 `"[]"`。
-async fn enriched_values(repo: &ModelRepository, rows: &[ModelRow]) -> Vec<Value> {
+/// Go `enrichModels` 的 `pricings := channel.GetPricing()`（吞错语义）：定价
+/// 缓存读取失败时退化为 `None`（富化字段为空缓存语义）。
+async fn load_pricing(
+    state: &AppState,
+    db: &newapi_storage::Database,
+) -> Option<std::sync::Arc<newapi_catalog::pricing::PricingSnapshot>> {
+    match newapi_catalog::pricing::get_pricing(db, &state.ratio_settings(), &state.group_settings())
+        .await
+    {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => {
+            tracing::warn!(
+                event = "pricing_cache_load_failed",
+                category = crate::database_error_class(&error),
+                "pricing cache load failed; enriching with empty cache semantics"
+            );
+            None
+        }
+    }
+}
+
+/// Go `channel.RefreshPricing()`（`manage_model_metadata.go:303,340,361`）：
+/// 模型元数据写路径后的强制重建。Go `RefreshPricing` 不返回错误
+/// （updatePricing 内部吞错）；这里同样只记日志。
+async fn refresh_pricing(state: &AppState, db: &newapi_storage::Database) {
+    if let Err(error) = newapi_catalog::pricing::refresh_pricing(
+        db,
+        &state.ratio_settings(),
+        &state.group_settings(),
+    )
+    .await
+    {
+        tracing::warn!(
+            event = "pricing_refresh_failed",
+            category = crate::database_error_class(&error),
+            "pricing refresh after model mutation failed"
+        );
+    }
+}
+
+/// `enrichModels`（`manage_model_metadata.go:19-185`）的移植：绑定渠道批量
+/// 查询失败按 Go 的吞错语义（`channelsByModel, _ :=`）继续，只是不带
+/// `bound_channels`；定价缓存读取失败同样按吞错语义退化为空缓存富化。
+/// 精确模型（name_rule=0）的 `endpoints` 为空时从定价缓存
+/// `GetModelSupportEndpointTypes` 序列化；规则模型按 prefix/suffix/contains
+/// 对定价条目做匹配，聚合端点/分组/配额类型/绑定渠道并集。
+async fn enriched_values(
+    repo: &ModelRepository,
+    pricing: Option<std::sync::Arc<newapi_catalog::pricing::PricingSnapshot>>,
+    rows: &[ModelRow],
+) -> Vec<Value> {
     let exact: Vec<String> = rows
         .iter()
         .filter(|row| row.name_rule == NAME_RULE_EXACT)
@@ -628,19 +708,116 @@ async fn enriched_values(repo: &ModelRepository, rows: &[ModelRow]) -> Vec<Value
             BTreeMap::new()
         }
     };
+    // Go 步骤 5：汇总规则模型匹配到的名字，批量查询绑定渠道一次。
+    let rule_names: Vec<String> = match &pricing {
+        Some(snapshot) => {
+            let mut names: Vec<String> = Vec::new();
+            for row in rows.iter().filter(|row| row.name_rule != NAME_RULE_EXACT) {
+                for item in &snapshot.pricing {
+                    let matched = match row.name_rule {
+                        NAME_RULE_PREFIX => item.model_name.starts_with(&row.model_name),
+                        NAME_RULE_SUFFIX => item.model_name.ends_with(&row.model_name),
+                        NAME_RULE_CONTAINS => item.model_name.contains(&row.model_name),
+                        _ => false,
+                    };
+                    if matched && !names.contains(&item.model_name) {
+                        names.push(item.model_name.clone());
+                    }
+                }
+            }
+            names
+        }
+        None => Vec::new(),
+    };
+    let rule_bound = match repo.bound_channels_by_models(&rule_names).await {
+        Ok(map) => map,
+        Err(error) => {
+            tracing::warn!(
+                event = "model_bound_channels_load_failed",
+                category = crate::database_error_class(&error),
+                "model bound channels load failed"
+            );
+            BTreeMap::new()
+        }
+    };
     rows.iter()
         .map(|row| {
             let mut enriched = row.clone();
-            let mut bound_channels = None;
+            let mut enrichment = ModelEnrichment::default();
             if row.name_rule == NAME_RULE_EXACT {
+                let mut bound_channels: Option<&[BoundChannel]> = None;
                 if enriched.endpoints.is_empty() {
-                    enriched.endpoints = "[]".to_owned();
+                    if let Some(snapshot) = &pricing {
+                        let endpoints = snapshot.model_support_endpoint_types(&row.model_name);
+                        if let Ok(text) = serde_json::to_string(&endpoints) {
+                            enriched.endpoints = text;
+                        }
+                    }
+                    if enriched.endpoints.is_empty() {
+                        enriched.endpoints = "[]".to_owned();
+                    }
                 }
                 if let Some(channels) = bound.get(&row.model_name) {
                     bound_channels = Some(channels.as_slice());
                 }
+                if let Some(snapshot) = &pricing {
+                    enrichment.enable_groups = snapshot.model_enable_groups(&row.model_name);
+                    enrichment.quota_types = snapshot.model_quota_types(&row.model_name);
+                }
+                return model_value(&enriched, bound_channels, Some(&enrichment));
             }
-            model_value(&enriched, bound_channels)
+            let Some(snapshot) = &pricing else {
+                return model_value(&enriched, None, Some(&enrichment));
+            };
+            // Go 步骤 4：规则模型按定价条目聚合并集。
+            let mut endpoint_union: Vec<String> = Vec::new();
+            let mut group_union: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            let mut quota_union: std::collections::BTreeSet<i64> =
+                std::collections::BTreeSet::new();
+            let mut channel_union: BTreeMap<(String, i64), BoundChannel> = BTreeMap::new();
+            let mut matched: Vec<String> = Vec::new();
+            for item in &snapshot.pricing {
+                let is_match = match row.name_rule {
+                    NAME_RULE_PREFIX => item.model_name.starts_with(&row.model_name),
+                    NAME_RULE_SUFFIX => item.model_name.ends_with(&row.model_name),
+                    NAME_RULE_CONTAINS => item.model_name.contains(&row.model_name),
+                    _ => false,
+                };
+                if !is_match {
+                    continue;
+                }
+                matched.push(item.model_name.clone());
+                for endpoint in &item.supported_endpoint_types {
+                    if !endpoint_union.iter().any(|e| e == endpoint) {
+                        endpoint_union.push(endpoint.clone());
+                    }
+                }
+                group_union.extend(item.enable_groups.iter().cloned());
+                quota_union.insert(item.quota_type);
+                for channel in rule_bound.get(&item.model_name).into_iter().flatten() {
+                    channel_union
+                        .entry((channel.name.clone(), channel.channel_type))
+                        .or_insert_with(|| channel.clone());
+                }
+            }
+            if enriched.endpoints.is_empty()
+                && !endpoint_union.is_empty()
+                && let Ok(text) = serde_json::to_string(&endpoint_union)
+            {
+                enriched.endpoints = text;
+            }
+            enrichment.enable_groups = group_union.into_iter().collect();
+            enrichment.quota_types = quota_union.into_iter().collect();
+            let channels: Vec<BoundChannel> = channel_union.into_values().collect();
+            let bound_channels: Option<&[BoundChannel]> = if channels.is_empty() {
+                None
+            } else {
+                Some(channels.as_slice())
+            };
+            enrichment.matched_models = Some(matched.clone());
+            enrichment.matched_count = Some(matched.len() as i64);
+            model_value(&enriched, bound_channels, Some(&enrichment))
         })
         .collect()
 }
@@ -695,7 +872,7 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap, uri:
     let status = parse_status_filter(&query_value(&pairs, "status").unwrap_or_default());
     let sync_official =
         parse_sync_filter(&query_value(&pairs, "sync_official").unwrap_or_default());
-    let repository = ModelRepository::new(db);
+    let repository = ModelRepository::new(db.clone());
     let (rows, total) = match repository
         .search(
             "",
@@ -717,7 +894,7 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap, uri:
             return api_error(&headers, MSG_LIST_FAILED);
         }
     };
-    let items = enriched_values(&repository, &rows).await;
+    let items = enriched_values(&repository, load_pricing(&state, &db).await, &rows).await;
     // Go `vendorCounts, _ :=`：计数失败以 null 呈现，不影响整体成功。
     let vendor_counts = match repository.vendor_counts().await {
         Ok(counts) => vendor_counts_value(&counts),
@@ -761,7 +938,7 @@ pub async fn search_models(
     let status = parse_status_filter(&query_value(&pairs, "status").unwrap_or_default());
     let sync_official =
         parse_sync_filter(&query_value(&pairs, "sync_official").unwrap_or_default());
-    let repository = ModelRepository::new(db);
+    let repository = ModelRepository::new(db.clone());
     let (rows, total) = match repository
         .search(
             &keyword,
@@ -783,7 +960,7 @@ pub async fn search_models(
             return api_error(&headers, MSG_LIST_FAILED);
         }
     };
-    let items = enriched_values(&repository, &rows).await;
+    let items = enriched_values(&repository, load_pricing(&state, &db).await, &rows).await;
     let vendor_counts = match repository.vendor_counts().await {
         Ok(counts) => vendor_counts_value(&counts),
         Err(error) => {
@@ -821,7 +998,7 @@ pub async fn get_model(
     let Ok(id) = id.parse::<i64>() else {
         return api_error(&headers, MSG_ID_FORMAT);
     };
-    let repository = ModelRepository::new(db);
+    let repository = ModelRepository::new(db.clone());
     let row = match repository.by_id(id).await {
         Ok(Some(row)) => row,
         Ok(None) => return api_error(&headers, MSG_NOT_EXISTS),
@@ -834,7 +1011,12 @@ pub async fn get_model(
             return api_error(&headers, MSG_NOT_EXISTS);
         }
     };
-    let items = enriched_values(&repository, std::slice::from_ref(&row)).await;
+    let items = enriched_values(
+        &repository,
+        load_pricing(&state, &db).await,
+        std::slice::from_ref(&row),
+    )
+    .await;
     success_with_message(items.into_iter().next().unwrap_or(Value::Null))
 }
 
@@ -857,7 +1039,7 @@ pub async fn create_model(State(state): State<AppState>, request: Request) -> Re
     if model_name.is_empty() {
         return api_error(&headers, MSG_NAME_EMPTY);
     }
-    let repository = ModelRepository::new(db);
+    let repository = ModelRepository::new(db.clone());
     match repository.is_name_duplicated(0, &model_name).await {
         Ok(true) => return api_error(&headers, MSG_NAME_EXISTS),
         Ok(false) => {}
@@ -899,7 +1081,8 @@ pub async fn create_model(State(state): State<AppState>, request: Request) -> Re
     let mut row = input_row(&input, now);
     row.id = id;
     row.created_time = now;
-    success_with_message(model_value(&row, None))
+    refresh_pricing(&state, &db).await;
+    success_with_message(model_value(&row, None, None))
 }
 
 /// `PUT /api/models/`：Go `ops.UpdateModel`（`?status_only=true` 只改
@@ -924,7 +1107,7 @@ pub async fn update_model(State(state): State<AppState>, request: Request) -> Re
     if id == 0 {
         return api_error(&headers, MSG_ID_MISSING);
     }
-    let repository = ModelRepository::new(db);
+    let repository = ModelRepository::new(db.clone());
     if status_only {
         if let Err(error) = repository
             .update_status(id, input.status.unwrap_or(0))
@@ -938,7 +1121,8 @@ pub async fn update_model(State(state): State<AppState>, request: Request) -> Re
             return api_error(&headers, MSG_SAVE_FAILED);
         }
         // Go 返回 `&m`，updated_time 不变。
-        return success_with_message(model_value(&input_row(&input, 0), None));
+        refresh_pricing(&state, &db).await;
+        return success_with_message(model_value(&input_row(&input, 0), None, None));
     }
     let model_name = input.model_name.clone().unwrap_or_default();
     match repository.is_name_duplicated(id, &model_name).await {
@@ -963,7 +1147,8 @@ pub async fn update_model(State(state): State<AppState>, request: Request) -> Re
         return api_error(&headers, MSG_SAVE_FAILED);
     }
     // Go 返回 `&m`（updated_time 已刷新）；行不存在也是 0 行成功。
-    success_with_message(model_value(&input_row(&input, now), None))
+    refresh_pricing(&state, &db).await;
+    success_with_message(model_value(&input_row(&input, now), None, None))
 }
 
 /// `DELETE /api/models/{id}`：Go `ops.DeleteModel`（先 `First` 校验存在，
@@ -979,7 +1164,7 @@ pub async fn delete_model(
     let Ok(id) = id.parse::<i64>() else {
         return api_error(&headers, MSG_ID_FORMAT);
     };
-    let repository = ModelRepository::new(db);
+    let repository = ModelRepository::new(db.clone());
     match repository.by_id(id).await {
         Ok(Some(_)) => {}
         Ok(None) => return api_error(&headers, MSG_NOT_EXISTS),
@@ -1000,6 +1185,7 @@ pub async fn delete_model(
         );
         return api_error(&headers, MSG_SAVE_FAILED);
     }
+    refresh_pricing(&state, &db).await;
     // Go `CtxApiSuccess(c, nil)`：data 显式为 null。
     Json(json!({"success": true, "message": "", "data": null})).into_response()
 }
@@ -1710,7 +1896,7 @@ mod tests {
             updated_time: 200,
             name_rule: 0,
         };
-        let value = model_value(&row, None);
+        let value = model_value(&row, None, None);
         assert_eq!(value["id"], json!(7));
         assert_eq!(value["model_name"], json!("gpt-x"));
         assert_eq!(value["description"], json!("d"));
@@ -1732,7 +1918,7 @@ mod tests {
         let mut enriched = row.clone();
         enriched.endpoints = "[]".to_owned();
         enriched.vendor_id = 3;
-        let value = model_value(&enriched, Some(&bound));
+        let value = model_value(&enriched, Some(&bound), None);
         assert_eq!(value["endpoints"], json!("[]"));
         assert_eq!(value["vendor_id"], json!(3));
         assert_eq!(
@@ -1740,7 +1926,7 @@ mod tests {
             json!([{"name": "ch-a", "type": 1}])
         );
         // 空绑定列表同样省略（Go nil/empty slice omitempty）。
-        let value = model_value(&enriched, Some(&[]));
+        let value = model_value(&enriched, Some(&[]), None);
         assert!(value.get("bound_channels").is_none());
     }
 
