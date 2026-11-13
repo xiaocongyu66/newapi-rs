@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod billing_options;
+pub mod billing_session;
 pub mod checkin;
 mod go_options;
 pub mod qq_bot;
