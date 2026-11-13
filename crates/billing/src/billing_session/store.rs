@@ -168,7 +168,7 @@ macro_rules! with_tx {
         match $db {
             Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await?;
-                let out = (|tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, $h: &$hs| async move {
+                let out = (|tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, $h: &$hs_ty| async move {
                     let out = $body;
                     out
                 })(&mut tx, $hs_val)
@@ -183,11 +183,12 @@ macro_rules! with_tx {
             }
             Database::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
-                let out = (|tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, $h: &$hp| async move {
-                    let out = $body;
-                    out
-                })(&mut tx, $hp_val)
-                .await;
+                let out =
+                    (|tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, $h: &$hp_ty| async move {
+                        let out = $body;
+                        out
+                    })(&mut tx, $hp_val)
+                    .await;
                 match out {
                     Ok(value) => {
                         tx.commit().await?;
