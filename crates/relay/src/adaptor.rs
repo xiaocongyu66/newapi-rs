@@ -1,10 +1,13 @@
 //! Go `internal/relay/resolve_adaptor.go` + `internal/common/api_type.go` +
 //! `internal/constant/channel.go` / `api_type.go` 的移植。
 //!
-//! 本切片只产出"适配器解析端口"：`Adaptor` trait 的接口形状与
-//! `resolve_adaptor` 的注册表。各 channel 适配器的外呼实现属其他切片，
-//! 这里以 [`AdaptorKind`] 枚举占位——解析结果只回答"该 API 类型对应哪个
-//! 适配器实现"，调用方（dispatch 切片）拿到 Kind 后再下沉到具体实现。
+//! 本切片产出"适配器解析端口"：`Adaptor` trait 的接口形状与
+//! `resolve_adaptor` 的注册表。openai / claude / gemini 的外呼实现位于
+//! [`crate::adaptors`]（channel-adapter 切片），其余 45 个适配器后续落地时
+//! 逐个实现本 trait；未移植者继承 trait 的默认 `do_request`（错误占位）。
+
+use std::future::Future;
+use std::pin::Pin;
 
 /// Go `constant.APIType*`（api_type.go iota 序号，逐项对齐）。
 pub mod api_type {
@@ -225,29 +228,45 @@ pub enum AdaptorKind {
 /// 表示（Go 的 `any` 转换产物）。`Context` 是服务装配层注入的抽象，
 /// 纯 crate 内不持有 HTTP 状态，因此 `SetupRequestHeader` 的输出是
 /// 应写入的 header 集合而非直改外部对象。
+///
+/// 本切片（channel-adapter）扩展的接口形状（合并时主控协调）：
+/// - `do_request`：Go 的 `DoRequest` 完成真实外呼并返回响应。Rust 侧外呼经
+///   [`crate::adaptor_common::OutboundTransport`] 注入（生产 reqwest、测试
+///   替身），方法签名携带 transport 并返回
+///   `Pin<Box<dyn Future<...>>>`（`apps/server/src/external_pay_http.rs` 形态）。
+/// - `do_response`：Go 的 `DoResponse` 直接向客户端写流并返回 usage。Rust 侧
+///   客户端写出经 [`crate::adaptor_common::ClientSink`] 注入，返回
+///   [`DoResponseOutcome`]（usage 与错误并存——Go 的 `(usage, *NewAPIError)`）。
+/// - `convert_audio_request`：Go 接口有而此处原缺失（audio.go 特化路径）。
 pub trait Adaptor {
     /// Go `Init(info)`。
-    fn init(&mut self, info: &crate::relay_info::RelayInfo);
-    /// Go `GetRequestURL(info)`。
-    fn get_request_url(&self, info: &crate::relay_info::RelayInfo) -> Result<String, String>;
+    fn init(&mut self, info: &mut crate::relay_info::RelayInfo);
+    /// Go `GetRequestURL(info)`。Go 会在此改写 info（UpstreamModelName 裁剪、
+    /// ChannelBaseUrl ws 改写），因此携带 `&mut`。
+    fn get_request_url(&self, info: &mut crate::relay_info::RelayInfo) -> Result<String, String>;
     /// Go `SetupRequestHeader(c, req, info)`：返回待写入的 header 键值。
-    fn setup_request_header(&self, info: &crate::relay_info::RelayInfo) -> Vec<(String, String)>;
+    /// `client_headers` 是 `c.Header(...)` 的快照。
+    fn setup_request_header(
+        &self,
+        info: &crate::relay_info::RelayInfo,
+        client_headers: &[(String, String)],
+    ) -> Result<Vec<(String, String)>, String>;
     /// Go `ConvertOpenAIRequest(...)`。
     fn convert_openai_request(
         &self,
-        info: &crate::relay_info::RelayInfo,
+        info: &mut crate::relay_info::RelayInfo,
         request: &serde_json::Value,
     ) -> Result<serde_json::Value, String>;
     /// Go `ConvertClaudeRequest(...)`。
     fn convert_claude_request(
         &self,
-        info: &crate::relay_info::RelayInfo,
+        info: &mut crate::relay_info::RelayInfo,
         request: &serde_json::Value,
     ) -> Result<serde_json::Value, String>;
     /// Go `ConvertGeminiRequest(...)`。
     fn convert_gemini_request(
         &self,
-        info: &crate::relay_info::RelayInfo,
+        info: &mut crate::relay_info::RelayInfo,
         request: &serde_json::Value,
     ) -> Result<serde_json::Value, String>;
     /// Go `ConvertRerankRequest(...)`。
@@ -259,36 +278,68 @@ pub trait Adaptor {
     /// Go `ConvertEmbeddingRequest(...)`。
     fn convert_embedding_request(
         &self,
-        info: &crate::relay_info::RelayInfo,
+        info: &mut crate::relay_info::RelayInfo,
         request: &serde_json::Value,
     ) -> Result<serde_json::Value, String>;
     /// Go `ConvertImageRequest(...)`。
     fn convert_image_request(
         &self,
-        info: &crate::relay_info::RelayInfo,
+        info: &mut crate::relay_info::RelayInfo,
         request: &serde_json::Value,
-    ) -> Result<serde_json::Value, String>;
+        multipart: Option<&crate::adaptor_common::ParsedMultipartForm>,
+    ) -> Result<crate::adaptor_common::ConvertedRequestBody, String>;
     /// Go `ConvertOpenAIResponsesRequest(...)`。
     fn convert_openai_responses_request(
         &self,
-        info: &crate::relay_info::RelayInfo,
+        info: &mut crate::relay_info::RelayInfo,
         request: &serde_json::Value,
     ) -> Result<serde_json::Value, String>;
-    /// Go `DoRequest(...)`：本切片不做外呼，默认返回未实现。
-    fn do_request(
+    /// Go `ConvertAudioRequest(...)`：speech 分支返回 JSON 体积，其余分支返回
+    /// multipart 体。
+    fn convert_audio_request(
         &self,
-        info: &crate::relay_info::RelayInfo,
-        request_body: &[u8],
-    ) -> Result<Vec<u8>, String> {
-        let _ = (info, request_body);
-        Err("adaptor outbound dispatch is owned by the channel-adapter slice".to_owned())
+        info: &mut crate::relay_info::RelayInfo,
+        request: &serde_json::Value,
+        multipart: Option<&crate::adaptor_common::ParsedMultipartForm>,
+    ) -> Result<crate::adaptor_common::ConvertedRequestBody, String>;
+    /// Go `DoRequest(a, c, info, requestBody)`：装配外呼请求并经 transport
+    /// 执行。默认实现留给尚未移植的 45 个适配器（合并时逐个替换）。
+    fn do_request<'a>(
+        &'a self,
+        info: &'a mut crate::relay_info::RelayInfo,
+        context: &'a crate::adaptor_common::RequestContext<'_>,
+        request_body: &'a [u8],
+        transport: &'a dyn crate::adaptor_common::OutboundTransport,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        crate::adaptor_common::OutboundResponse,
+                        crate::relay_info::AdaptorError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        let _ = (info, context, request_body, transport);
+        Box::pin(async {
+            Err(crate::relay_info::AdaptorError {
+                status_code: 500,
+                message: "adaptor outbound dispatch not ported yet".to_owned(),
+                code: "bad_response".to_owned(),
+                error_type: "new_api_error".to_owned(),
+                skip_retry: false,
+            })
+        })
     }
-    /// Go `DoResponse(...)`。
+    /// Go `DoResponse(c, resp, info)`：解析上游响应、折算 usage、经 sink 写出
+    /// 客户端载荷。usage 与错误并存（Go `(usage any, err *NewAPIError)`）。
     fn do_response(
         &self,
         info: &mut crate::relay_info::RelayInfo,
-        response: &[u8],
-    ) -> Result<serde_json::Value, crate::relay_info::AdaptorError>;
+        response: &mut crate::adaptor_common::OutboundResponse,
+        sink: &mut dyn crate::adaptor_common::ClientSink,
+    ) -> crate::adaptor_common::DoResponseOutcome;
     /// Go `GetModelList()`。
     fn get_model_list(&self) -> Vec<String>;
     /// Go `GetChannelName()`。
