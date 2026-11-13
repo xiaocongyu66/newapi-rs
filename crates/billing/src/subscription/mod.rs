@@ -23,8 +23,8 @@
 
 mod admin_store;
 mod orders;
-mod period;
-mod store;
+pub(crate) mod period;
+pub(crate) mod store;
 
 pub use admin_store::{AdminError, MSG_RECORD_NOT_FOUND, PlanWrite, SubscriptionResetResult};
 pub use orders::{

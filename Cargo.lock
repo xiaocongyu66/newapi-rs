@@ -1771,6 +1771,7 @@ version = "0.1.0"
 dependencies = [
  "md5",
  "newapi-storage",
+ "newapi-usage",
  "rand 0.8.8",
  "serde",
  "serde_json",
