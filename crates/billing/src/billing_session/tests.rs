@@ -190,6 +190,46 @@ async fn connect_postgres() -> Option<Database> {
     Some(db)
 }
 
+// 兼容 rust 1.99 的 AsyncFn（edition 2024 内建）不可用时退化写法：
+async fn run_db_contract(db: &Database, contract: impl AsyncFn(&Database)) {
+    contract(db).await;
+}
+
+macro_rules! backend_tests {
+    ($($name:ident => $body:expr;)*) => {
+        $(
+            #[tokio::test]
+            async fn $name() {
+                let sqlite = connect_sqlite().await;
+                run_db_contract(&sqlite, $body).await;
+                if let Some(pg) = connect_postgres().await {
+                    run_db_contract(&pg, $body).await;
+                }
+            }
+        )*
+    };
+}
+
+/// 测试内 SQL 执行（Database 无 pub pool 访问器，走双后端 match）。
+async fn texec(db: &Database, sql: &'static str, binds: &[i64]) -> sqlx::Result<u64> {
+    match db {
+        Database::Sqlite(pool) => {
+            let mut q = sqlx::query(sql);
+            for b in binds {
+                q = q.bind(*b);
+            }
+            q.execute(pool).await.map(|r| r.rows_affected())
+        }
+        Database::Postgres(pool) => {
+            let mut q = sqlx::query(sql);
+            for b in binds {
+                q = q.bind(*b);
+            }
+            q.execute(pool).await.map(|r| r.rows_affected())
+        }
+    }
+}
+
 async fn seed_user(db: &Database, id: i64, quota: i64) {
     texec(
         db,
