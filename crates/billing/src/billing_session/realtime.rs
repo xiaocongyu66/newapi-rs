@@ -33,13 +33,11 @@ pub struct QuotaInfo {
 }
 
 /// Go `calculateAudioQuota`（consume_quota_realtime.go:53-90）。
-/// UsePrice 时按次计费（modelPrice * QuotaPerUnit * groupRatio）；否则为
-/// `(text_in + text_out*completion + audio_in*audioRatio
-///   + audio_out*audioRatio*audioCompletion) * (groupRatio*modelRatio)`，
-/// 且 ratio 非零、结果 ≤0 时取最小计费单位 1。
 ///
-/// clippy::doc_lazy_continuation 注意：缩进的公式续行前面有一空行段落，
-/// 不会被解析为列表。
+/// UsePrice 时按次计费（modelPrice * QuotaPerUnit * groupRatio）。否则为
+/// `(text_in + text_out*completion + audio_in*audioRatio
+///   plus audio_out*audioRatio*audioCompletion) * (groupRatio*modelRatio)`，
+/// 且 ratio 非零、结果 ≤0 时取最小计费单位 1。
 pub fn calculate_audio_quota(
     settings: &dyn RatioSettings,
     info: &QuotaInfo,
