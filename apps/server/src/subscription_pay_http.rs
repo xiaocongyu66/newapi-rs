@@ -200,6 +200,7 @@ async fn purchase_limit_gate(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_order_and_respond(
     db: &newapi_storage::Database,
     user_id: i64,
