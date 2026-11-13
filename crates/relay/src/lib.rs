@@ -3,5 +3,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adaptor;
 pub mod channel_prompt;
+pub mod classify_billing;
+pub mod client_ban;
+pub mod insight_client;
+pub mod normalize_relay_values;
+pub mod param_override;
+pub mod relay_info;
+pub mod relay_mode;
 pub mod response_cache;

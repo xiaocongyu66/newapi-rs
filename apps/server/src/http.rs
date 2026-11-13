@@ -69,6 +69,8 @@ pub fn router(state: AppState) -> Router {
 
 fn build_router(state: AppState) -> Router {
     let app = Router::new()
+        // relay 路由组（Go `SetRelayRouter`：/v1、/v1beta、/v1/models）。
+        .merge(crate::relay_http::relay_routes(state.clone()))
         .route("/api/notice", get(notice))
         .route("/api/about", get(about))
         .route("/api/home_page_content", get(home_page_content))
