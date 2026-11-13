@@ -86,10 +86,10 @@ const PLANS_POSTGRES: &str = r#"CREATE TABLE subscription_plans (
     duration_unit VARCHAR(32) NOT NULL DEFAULT 'month',
     duration_value BIGINT NOT NULL DEFAULT 1,
     custom_seconds BIGINT NOT NULL DEFAULT 0,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    enabled BIGINT NOT NULL DEFAULT 1,
     sort_order BIGINT NOT NULL DEFAULT 0,
-    allow_balance_pay BOOLEAN,
-    allow_wallet_overflow BOOLEAN,
+    allow_balance_pay BIGINT,
+    allow_wallet_overflow BIGINT,
     stripe_price_id VARCHAR(255) NOT NULL DEFAULT '',
     creem_product_id VARCHAR(255) NOT NULL DEFAULT '',
     waffo_pancake_product_id VARCHAR(255) NOT NULL DEFAULT '',
@@ -138,7 +138,7 @@ const USER_SUBS_POSTGRES: &str = r#"CREATE TABLE user_subscriptions (
     upgrade_group VARCHAR(64) NOT NULL DEFAULT '',
     prev_user_group VARCHAR(64) NOT NULL DEFAULT '',
     downgrade_group VARCHAR(64) NOT NULL DEFAULT '',
-    allow_wallet_overflow BOOLEAN NOT NULL DEFAULT TRUE,
+    allow_wallet_overflow BIGINT NOT NULL DEFAULT 1,
     created_at BIGINT NOT NULL DEFAULT 0,
     updated_at BIGINT NOT NULL DEFAULT 0
 )"#;
@@ -286,7 +286,7 @@ async fn seed_plan(db: &Database, id: i64, upgrade_group: &str, max_purchase: i6
                    (id, title, price_amount, duration_unit, duration_value,
                     enabled, max_purchase_per_user, upgrade_group, total_amount,
                     quota_reset_period)
-                   VALUES ($1, $2, 10.0, 'day', 30, TRUE, $3, $4, 500000, 'never')"#,
+                   VALUES ($1, $2, 10.0, 'day', 30, 1, $3, $4, 500000, 'never')"#,
             )
             .bind(id)
             .bind(format!("plan{id}"))
