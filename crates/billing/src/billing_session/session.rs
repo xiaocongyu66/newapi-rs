@@ -246,27 +246,25 @@ impl<'a> BillingSession<'a> {
         if extra_reserved > 0
             && self.funding.source() == BILLING_SOURCE_SUBSCRIPTION
             && subscription_id > 0
-        {
-            if let Err(err) = self
+            && let Err(err) = self
                 .store
                 .post_consume_user_subscription_delta(subscription_id, -extra_reserved, unix_now())
                 .await
-            {
-                tracing::error!(
-                    "error refunding subscription extra reserved quota: {}",
-                    err.message()
-                );
-            }
+        {
+            tracing::error!(
+                "error refunding subscription extra reserved quota: {}",
+                err.message()
+            );
         }
         // 2) 退还令牌额度
-        if token_consumed > 0 && !is_playground {
-            if let Err(err) = self
+        if token_consumed > 0
+            && !is_playground
+            && let Err(err) = self
                 .store
                 .increase_token_quota(self.info.token_id, token_consumed, unix_now())
                 .await
-            {
-                tracing::error!("error refunding token quota: {err}");
-            }
+        {
+            tracing::error!("error refunding token quota: {}", err.message());
         }
     }
 
@@ -698,7 +696,7 @@ async fn try_subscription<'a>(
 /// 创建会话。Rust 侧会话由调用方持有（无 RelayInfo.Billing 挂载点）。
 pub async fn pre_consume_billing<'a>(
     store: &'a BillingStore,
-    mut info: RelayBillingInfo,
+    info: RelayBillingInfo,
     pre_consumed_quota: i64,
 ) -> Result<BillingSession<'a>, BillingApiError> {
     if let Some(clamp) = &info.quota_clamp {

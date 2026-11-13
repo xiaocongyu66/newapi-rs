@@ -141,12 +141,13 @@ pub fn merge_tool_surcharge_items(items: Vec<ToolSurchargeItem>) -> Vec<ToolSurc
     });
     let mut merged: Vec<ToolSurchargeItem> = Vec::with_capacity(items.len());
     for item in items {
-        if let Some(last) = merged.last_mut() {
-            if last.name == item.name && last.price == item.price {
-                let sum = last.count.saturating_add(item.count);
-                last.count = sum;
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && last.name == item.name
+            && last.price == item.price
+        {
+            let sum = last.count.saturating_add(item.count);
+            last.count = sum;
+            continue;
         }
         merged.push(item);
     }
@@ -220,10 +221,10 @@ pub fn calculate_text_tool_call_surcharge(
 
 /// Go `noteQuotaClamp`（consume_text_quota.go:199-206）：首个非空 clamp 胜出。
 pub fn note_quota_clamp(info: &mut RelayBillingInfo, clamp: Option<QuotaClamp>) {
-    if let Some(clamp) = clamp {
-        if info.quota_clamp.is_none() {
-            info.quota_clamp = Some(clamp);
-        }
+    if let Some(clamp) = clamp
+        && info.quota_clamp.is_none()
+    {
+        info.quota_clamp = Some(clamp);
     }
 }
 
@@ -232,10 +233,10 @@ pub fn usage_semantic_from_usage(
     final_relay_format: &str,
     usage: Option<&super::usage::Usage>,
 ) -> String {
-    if let Some(usage) = usage {
-        if !usage.usage_semantic.is_empty() {
-            return usage.usage_semantic.clone();
-        }
+    if let Some(usage) = usage
+        && !usage.usage_semantic.is_empty()
+    {
+        return usage.usage_semantic.clone();
     }
     if final_relay_format == "claude" {
         return "anthropic".into();
@@ -657,12 +658,12 @@ pub fn append_text_consume_other_fields(
     if cache_write_tokens > 0 {
         other.insert("cache_write_tokens".into(), json!(cache_write_tokens));
     }
-    if final_relay_format != "claude" {
-        if let Some(usage) = origin_usage {
-            if !usage.usage_source.is_empty() && usage.input_tokens > 0 {
-                other.insert("input_tokens_total".into(), json!(usage.input_tokens));
-            }
-        }
+    if final_relay_format != "claude"
+        && let Some(usage) = origin_usage
+        && !usage.usage_source.is_empty()
+        && usage.input_tokens > 0
+    {
+        other.insert("input_tokens_total".into(), json!(usage.input_tokens));
     }
 }
 
@@ -727,11 +728,11 @@ pub fn log_quota(quota: i64) -> String {
 
 /// Go PostTextConsumeQuota 的 gizmo 模型名归一（543-551 行）。
 pub fn normalize_gizmo_model(model: &str, extra_content: &mut Vec<String>) -> String {
-    if let Some(stripped) = model.strip_prefix("gpt-4-gizmo") {
-        if stripped.starts_with('-') || model != "gpt-4-gizmo" {
-            extra_content.push(format!("模型 {model}"));
-            return "gpt-4-gizmo-*".into();
-        }
+    if let Some(stripped) = model.strip_prefix("gpt-4-gizmo")
+        && (stripped.starts_with('-') || model != "gpt-4-gizmo")
+    {
+        extra_content.push(format!("模型 {model}"));
+        return "gpt-4-gizmo-*".into();
     }
     if let Some(_stripped) = model.strip_prefix("gpt-4o-gizmo") {
         extra_content.push(format!("模型 {model}"));
