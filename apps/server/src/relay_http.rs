@@ -28,7 +28,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use newapi_i18n::translate;
 use newapi_identity::{
@@ -692,7 +692,6 @@ pub fn relay_routes(state: AppState) -> Router<AppState> {
         .route("/v1/rerank", post(relay_entry_rerank))
         .route("/v1/moderations", post(relay_entry_openai))
         .route("/v1/engines/{model}/embeddings", post(relay_entry_gemini))
-        .route("/v1/models/{*path}", post(relay_entry_gemini))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             insight_client_ban,
@@ -710,9 +709,16 @@ pub fn relay_routes(state: AppState) -> Router<AppState> {
 
     // /v1/models 与 /v1beta models 列表组（register_relay.go:699-740）：
     // 仅 RouteTag → TokenAuth，无 Ban / RateLimit。
+    //
+    // axum 0.8 的 matchit 不允许同一段位置 {model} 与 {*path} 并存，而
+    // Go 在 /v1/models/ 前缀上有三个 handler：GET ""（ListModels）、
+    // GET /:model（RetrieveModel）、POST /*path（Gemini relay）。Rust 侧
+    // 统一收敛到 {*path} 通配（与 Gemini relay 组共用处理器形状），按
+    // 方法/剩余段数分流：GET 零段=ListModels、GET 单段=RetrieveModel、
+    // POST=Relay(Gemini)。URL 空间与 Go 完全一致。
     let models_routes = Router::new()
         .route("/v1/models", get(list_models_entry))
-        .route("/v1/models/{model}", get(retrieve_model_entry))
+        .route("/v1/models/{*path}", any(models_path_dispatch))
         .route("/v1beta/models", get(list_models_entry))
         .route("/v1beta/openai/models", get(list_models_entry))
         .route_layer(middleware::from_fn_with_state(state, token_auth));
@@ -896,10 +902,12 @@ async fn list_models_entry(request: Request) -> Response {
 
 /// Go `RetrieveModel`：未知名返回 200 + error 信封（handle_model.go:329-352）。
 /// 静态目录未移植，所有名字按未处理。
-async fn retrieve_model_entry(
-    axum::extract::Path(model): axum::extract::Path<String>,
-    request: Request,
-) -> Response {
+async fn retrieve_model_entry(request: Request) -> Response {
+    let model = request
+        .extensions()
+        .get::<axum::extract::RawPathParams>()
+        .and_then(|params| params.iter().next().map(|(_, seg)| seg.to_owned()))
+        .unwrap_or_default();
     let _ = token_auth_passed(&request);
     (
         StatusCode::OK,
@@ -913,6 +921,16 @@ async fn retrieve_model_entry(
         })),
     )
         .into_response()
+}
+
+/// `/v1/models/{*path}` 方法分流：GET = RetrieveModel（单段 = model 名），
+/// POST = Relay(Gemini)（register_relay.go:714-721, 831-833）。
+async fn models_path_dispatch(request: axum::extract::Request) -> Response {
+    if request.method() == axum::http::Method::POST {
+        relay_entry_gemini(request).await
+    } else {
+        retrieve_model_entry(request).await
+    }
 }
 
 fn token_auth_passed(request: &Request) -> bool {

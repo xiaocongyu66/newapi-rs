@@ -340,8 +340,12 @@ async fn run_contract(db: &Database) {
     exec(db, "DELETE FROM users").await;
 
     // ── 分组门：令牌指定分组不在可用列表 → 403 ──────────────────────────
+    // 默认 UserUsableGroups 含 default/vip；"vip2" 不在列表 → 第一道门
+    // （无权访问）；倍率缺失的门（分组已被弃用）由 vip 命中 GroupRatio
+    // 空表的行为覆盖，二者同属 Go 分组门的两段。
+    exec(db, "DELETE FROM tokens").await;
     seed_user(db, USER_ID, 1, "default").await;
-    seed_token(db, TOKEN_KEY, "vip", true).await;
+    seed_token(db, TOKEN_KEY, "vip2", true).await;
     let response = send_relay(
         &state(db),
         "/v1/chat/completions",
@@ -356,7 +360,7 @@ async fn run_contract(db: &Database) {
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("无权访问 vip 分组")
+            .contains("无权访问 vip2 分组")
     );
     exec(db, "DELETE FROM tokens").await;
 
@@ -395,6 +399,9 @@ async fn run_contract(db: &Database) {
 
     // ── 全局封禁：识别为 curl → 403（封禁的代价为零，不进渠道分发）──────
     set_option(db, "user_insight_setting.client_ban_enabled", "true").await;
+    // 先播种单用户封禁再发首个 relay 请求：user ban 集合有 30s TTL 缓存，
+    // 若先以空表触发缓存，后续播种在 TTL 内不生效（Go invalidateUserClientBanCache 语义）。
+    seed_user_ban(db, "okhttp").await;
     let response = send_relay(
         &state(db),
         "/v1/chat/completions",
@@ -405,11 +412,16 @@ async fn run_contract(db: &Database) {
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let body = body_json(response).await;
-    assert_eq!(body["error"]["message"], "您使用的客户端已被站点管理员封禁");
+    // Go MessageWithRequestId：message 后缀 " (request id: ...)"。
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("您使用的客户端已被站点管理员封禁 (request id: ")
+    );
 
     // ── 单用户封禁：换其它客户端仍可用 ───────────────────────────────────
     set_option(db, "user_insight_setting.blocked_clients", "[]").await;
-    seed_user_ban(db, "okhttp").await;
     let response = send_relay(
         &state(db),
         "/v1/chat/completions",
@@ -420,7 +432,12 @@ async fn run_contract(db: &Database) {
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let body = body_json(response).await;
-    assert_eq!(body["error"]["message"], "该客户端已被管理员对您的账号禁用");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("该客户端已被管理员对您的账号禁用 (request id: ")
+    );
     exec(db, "DELETE FROM user_insight_client_bans").await;
 
     // 识别不出客户端（空 UA）时不封。
