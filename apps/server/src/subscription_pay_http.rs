@@ -49,10 +49,8 @@ const MSG_PLAN_PRICE_TOO_LOW: &str = "套餐金额过低";
 const MSG_PAY_METHOD_MISSING: &str = "支付方式不存在";
 const MSG_PAY_METHOD_UNSUPPORTED: &str = "不支持的支付方式";
 const MSG_PURCHASE_LIMIT: &str = "已达到该套餐购买上限";
-const MSG_CALLBACK_CONFIG_ERROR: &str = "回调地址配置错误";
 const MSG_PAY_CONFIG_MISSING: &str = "当前管理员未配置支付信息";
 const MSG_ORDER_CREATE_FAILED: &str = "创建订单失败";
-const MSG_PAY_START_FAILED: &str = "拉起支付失败";
 
 fn api_error(message: &str) -> Response {
     Json(json!({"success": false, "message": message})).into_response()

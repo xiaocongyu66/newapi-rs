@@ -16,10 +16,11 @@ use newapi_billing::subscription::{
 };
 use newapi_storage::Database;
 use sqlx::{
-    ConnectOptions, Row,
+    ConnectOptions, Executor, Row,
     postgres::PgPoolOptions,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::str::FromStr;
 
 // subscription_orders 列序对齐 Go AutoMigrate（setup.rs 的登记清单）。
 const ORDERS_SQLITE: &str = r#"CREATE TABLE subscription_orders (

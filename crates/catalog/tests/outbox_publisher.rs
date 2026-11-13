@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 
 use newapi_catalog::gateway_revision::{
     initialize_gateway_config_revision, list_pending_gateway_config_outbox,
-    record_gateway_config_outbox_attempt,
 };
 use newapi_catalog::outbox_publisher::{
     GATEWAY_ROUTING_REVISION_CHANNEL, OutboxPublishError, RevisionPublishFailure,
@@ -22,10 +21,11 @@ use newapi_catalog::outbox_publisher::{
 };
 use newapi_storage::Database;
 use sqlx::{
-    ConnectOptions,
+    ConnectOptions, Executor,
     postgres::PgPoolOptions,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use std::str::FromStr;
 
 const REVISION_SQLITE: &str = "CREATE TABLE gateway_config_revisions (id BIGINT PRIMARY KEY, routing_revision BIGINT NOT NULL)";
 const REVISION_POSTGRES: &str = "CREATE TABLE gateway_config_revisions (id BIGINT PRIMARY KEY, routing_revision BIGINT NOT NULL)";
@@ -114,8 +114,12 @@ impl RoutingRevisionPublisher for FakePublisher {
 
 async fn execute(db: &Database, statement: &'static str) {
     match db {
-        Database::Sqlite(pool) => sqlx::query(statement).execute(pool).await.unwrap(),
-        Database::Postgres(pool) => sqlx::query(statement).execute(pool).await.unwrap(),
+        Database::Sqlite(pool) => {
+            sqlx::query(statement).execute(pool).await.unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query(statement).execute(pool).await.unwrap();
+        }
     }
 }
 
@@ -323,12 +327,17 @@ async fn publisher_loop_publishes_and_exits_on_shutdown() {
 
         let publisher = FakePublisher::ok();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let db_ref = &db;
-        let publisher_ref = publisher.as_ref();
+        let db_for_task = db.clone();
+        let publisher_for_task: Arc<dyn RoutingRevisionPublisher> = publisher.clone();
         let loop_task = tokio::spawn(async move {
-            run_gateway_config_outbox_publisher(db_ref, publisher_ref, 1, async move {
-                let _ = shutdown_rx.await;
-            })
+            run_gateway_config_outbox_publisher(
+                &db_for_task,
+                &*publisher_for_task,
+                1,
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+            )
             .await;
         });
         // 等待首轮发布落地（每轮先发布再等待）。
