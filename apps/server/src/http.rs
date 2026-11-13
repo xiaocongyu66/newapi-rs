@@ -93,6 +93,18 @@ fn build_router(state: AppState) -> Router {
     // `/api/user/groups`：Go 该路由不挂 UserAuth；同 handler 也挂在
     // `/api/user/self/groups`（那一条在 UserAuth 组内）。
     let app = app.route("/api/user/groups", get(crate::groups_http::user_groups));
+    // `GET /api/pricing`：Go `HeaderNavModuleAuth("pricing")` 缺省走
+    // `TryUserAuth`（`register_api.go:48`）——宽松认证层 + handler 内的
+    // HeaderNavModules 门判定，见 `pricing_http.rs`。
+    let pricing_state = state.clone();
+    let app = app.merge(
+        Router::new()
+            .route("/api/pricing", get(crate::pricing_http::get_pricing))
+            .route_layer(middleware::from_fn_with_state(
+                pricing_state,
+                crate::auth::try_user_auth,
+            )),
+    );
     // `POST /api/user/register`：Go 顺序 CriticalRateLimit → 匿名体上限 →
     // TurnstileCheck → handler（该路由不挂 DisableCache）。
     let register_state = state.clone();

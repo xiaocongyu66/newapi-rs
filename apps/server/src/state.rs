@@ -6,7 +6,9 @@ use std::sync::{
 use std::time::Duration;
 
 use newapi_billing::quota_display::QuotaDisplay;
-use newapi_catalog::{AuthSettings, PublicConfig, group_settings::GroupSettings};
+use newapi_catalog::{
+    AuthSettings, PublicConfig, group_settings::GroupSettings, ratio_settings::RatioSettings,
+};
 use newapi_config::SessionCookieSettings;
 use newapi_identity::auth_flow::auth_flow_key;
 use newapi_identity::auth_session::{AuthFence, SessionAuth};
@@ -145,6 +147,12 @@ pub struct AppState {
     /// `token_setting.max_user_tokens`）：与用户组选项同频装载，
     /// token 端点只读此快照，与 `/api/user/groups` 的新鲜度一致。
     token_runtime: Arc<RwLock<TokenRuntimeSettings>>,
+    /// ratio 选项快照（ModelRatio/ModelPrice/CompletionRatio/CacheRatio/
+    /// CreateCacheRatio/ImageRatio/AudioRatio/AudioCompletionRatio）：定价
+    /// 缓存与 `/api/pricing` 只读此快照。装载时机与 GroupSettings 一致；
+    /// 快照值变化时失效定价缓存（Go `settings.OnBillingSettingChanged =
+    /// InvalidatePricingCache`，`register_group_resolver.go:22`）。
+    ratio_settings: Arc<RwLock<RatioSettings>>,
     /// auth_flow 的 HMAC key：`auth-flow-v1:` + session secret，与 Go 一致。
     flow_key: Option<Arc<Vec<u8>>>,
     /// 可信代理解析策略；未注入时只信任直连 peer（测试路径）。
@@ -187,6 +195,7 @@ impl Default for AppState {
             auth_settings: Arc::new(RwLock::new(AuthSettings::default())),
             quota_display: Arc::new(RwLock::new(QuotaDisplay::default())),
             group_settings: Arc::new(RwLock::new(GroupSettings::default())),
+            ratio_settings: Arc::new(RwLock::new(RatioSettings::defaults())),
             token_runtime: Arc::new(RwLock::new(TokenRuntimeSettings::default())),
             flow_key: None,
             proxy_policy: None,
@@ -428,6 +437,14 @@ impl AppState {
             .clone()
     }
 
+    /// ratio 选项快照（启动与 reload worker 装载，handler/定价缓存只读）。
+    pub fn ratio_settings(&self) -> RatioSettings {
+        self.ratio_settings
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
     /// 令牌运行时选项快照（启动与 reload worker 装载，handler 只读）。
     pub fn token_runtime_settings(&self) -> TokenRuntimeSettings {
         self.token_runtime
@@ -528,6 +545,19 @@ impl AppState {
                 return Err(error);
             }
         };
+        // ratio 选项与用户组选项同频装载；装载失败同样不发布部分状态。
+        let ratio_previous = self
+            .ratio_settings
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let ratio_next = match RatioSettings::load(db, &ratio_previous).await {
+            Ok(next) => next,
+            Err(error) => {
+                self.mark_not_ready();
+                return Err(error);
+            }
+        };
         // 令牌运行时选项与用户组选项同频装载：与 Go 的
         // InitOptionMap/SyncOptions 一致，失败同样不发布部分状态。
         let runtime_next = match TokenRuntimeSettings::load(db).await {
@@ -556,6 +586,15 @@ impl AppState {
             .group_settings
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = group_next;
+        // Go `settings.OnBillingSettingChanged = InvalidatePricingCache`：
+        // ratio 选项值变化时失效定价缓存（下次读取按 TTL/立即重建）。
+        if ratio_next != ratio_previous {
+            newapi_catalog::pricing::invalidate_pricing_cache();
+        }
+        *self
+            .ratio_settings
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = ratio_next;
         *self
             .token_runtime
             .write()
