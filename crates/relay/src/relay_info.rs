@@ -420,6 +420,16 @@ pub fn gen_relay_info_mj_proxy(input: &RelayInfoInput) -> RelayInfo {
 #[derive(Debug, PartialEq)]
 pub struct UnsupportedRelayFormat;
 
+/// Go `types.NewAPIError` 的适配器层简化：DoResponse 失败携带的协议错误摘要。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AdaptorError {
+    pub status_code: i32,
+    pub message: String,
+    pub code: String,
+    pub error_type: String,
+    pub skip_retry: bool,
+}
+
 pub fn gen_relay_info(
     relay_format: &str,
     input: &RelayInfoInput,
@@ -750,7 +760,7 @@ mod tests {
     #[test]
     fn gen_relay_info_rejects_unknown_format() {
         let result = gen_relay_info("bogus", &input("/x", "/x"), &json!({}));
-        assert_eq!(result, Err(UnsupportedRelayFormat));
+        assert!(matches!(result, Err(UnsupportedRelayFormat)));
     }
 
     #[test]

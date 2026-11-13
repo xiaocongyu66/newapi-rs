@@ -24,6 +24,7 @@ use serde_json::{Map, Value};
 
 const CONTEXT_REQUEST_HEADERS: &str = "request_headers";
 const CONTEXT_HEADER_OVERRIDE: &str = "header_override";
+#[allow(dead_code)] // 与 Go 上下文键名对齐，供 dispatch 切片接线审计时复用
 const CONTEXT_AUDIT_RECORDER: &str = "__param_override_audit_recorder";
 
 /// Go `paramOverrideSensitivePathPrefixes`。
@@ -209,7 +210,11 @@ pub fn apply_param_override(
         }
         apply_operations(working, &operations, context)
     } else {
-        apply_operations_legacy(json_data, override_map, context)
+        apply_operations_legacy(
+            json_data,
+            &build_legacy_param_override(override_map),
+            context,
+        )
     }
 }
 
@@ -230,8 +235,9 @@ fn apply_operations_legacy(
 ) -> Result<Value, ParamOverrideError> {
     let mut result = json_data;
     for (key, value) in param_override {
-        result =
-            set_path(result, key, value.clone()).map_err(|e| ParamOverrideError::Message(e))?;
+        let escaped = escape_literal_key(key);
+        result = set_path(result, &escaped, value.clone())
+            .map_err(|e| ParamOverrideError::Message(e))?;
         context.record_operation("set", key, "", "", value);
     }
     Ok(result)
@@ -360,7 +366,7 @@ fn apply_operations(
     operations: &[ParamOperation],
     context: &mut ParamOverrideContext,
 ) -> Result<Value, ParamOverrideError> {
-    let context_json = context_map_json(&context.map)?;
+    let context_json = context_map_json(&context.map).map_err(ParamOverrideError::Message)?;
     let mut result = json_data;
     for op in operations {
         let ok = check_conditions(&result, &context_json, &op.conditions, &op.logic)
@@ -383,7 +389,7 @@ fn apply_operations(
             "delete" => {
                 let mut r = Ok(result);
                 for path in &op_paths {
-                    r = r.and_then(|v| delete_value(&v, path));
+                    r = r.and_then(|v| delete_value(v, path));
                     context.record_operation("delete", path, "", "", &Value::Null);
                 }
                 r
@@ -391,7 +397,12 @@ fn apply_operations(
             "set" => {
                 let mut r = Ok(result);
                 for path in &op_paths {
-                    if op.keep_origin && get_path(&result, path).is_some() {
+                    let exists = r
+                        .as_ref()
+                        .ok()
+                        .and_then(|v| get_path(v, path).cloned())
+                        .is_some();
+                    if op.keep_origin && exists {
                         continue;
                     }
                     r = r.and_then(|v| set_path(v, path, op.value.clone()));
@@ -547,7 +558,8 @@ fn apply_operations(
                 }
             }
             "pass_headers" => {
-                let header_names = parse_header_pass_through_names(&op.value)?;
+                let header_names = parse_header_pass_through_names(&op.value)
+                    .map_err(ParamOverrideError::Message)?;
                 for name in &header_names {
                     match copy_header_in_context(&mut context.map, name, name, op.keep_origin) {
                         Ok(()) => {}
@@ -729,20 +741,24 @@ fn check_single_condition(
     condition: &ConditionOperation,
 ) -> Result<bool, String> {
     let path = process_negative_index(data, &condition.path);
-    let mut value = get_path(data, &path);
-    if value.is_none() && !context_json.is_empty() {
+    let mut value_owned: Option<Value> = get_path(data, &path).cloned();
+    if value_owned.is_none() && !context_json.is_empty() {
         if let Ok(parsed) = serde_json::from_str::<Value>(context_json) {
-            value = get_path(&parsed, &condition.path);
+            value_owned = get_path(&parsed, &condition.path).cloned();
         }
     }
-    let Some(value) = value else {
+    let Some(value) = value_owned else {
         if condition.pass_missing_key {
             return Ok(true);
         }
         return Ok(false);
     };
-    let result = compare_values(&value, &condition.value, condition.mode.to_lowercase())
-        .map_err(|e| format!("comparison failed for path {}: {}", condition.path, e))?;
+    let result = compare_values(
+        &value,
+        &condition.value,
+        condition.mode.to_lowercase().as_str(),
+    )
+    .map_err(|e| format!("comparison failed for path {}: {}", condition.path, e))?;
     Ok(if condition.invert { !result } else { result })
 }
 
@@ -952,7 +968,7 @@ fn set_at(node: Value, segments: &[String], value: Value) -> Result<Value, Strin
         let arr = match node {
             Value::Array(arr) => arr,
             Value::Null => Vec::new(),
-            other => return Err(format!("cannot index into non-array at {segment}")),
+            _other => return Err(format!("cannot index into non-array at {segment}")),
         };
         return Ok(Value::Array(set_array_at(arr, segments, value)?));
     }
@@ -1500,7 +1516,7 @@ fn set_header_override_in_context(
             raw_headers.insert(header_name, Value::String(header_value));
         }
         None => {
-            raw_headers.shift_remove(&header_name);
+            raw_headers.remove(&header_name);
         }
     }
     Ok(())
@@ -1668,7 +1684,7 @@ fn delete_header_override_in_context(
         return Err("header name is required".to_owned());
     }
     let raw_headers = ensure_map_key_in_context(context, CONTEXT_HEADER_OVERRIDE);
-    raw_headers.shift_remove(&header_name);
+    raw_headers.remove(&header_name);
     Ok(())
 }
 
@@ -2095,6 +2111,7 @@ pub fn build_param_override_context(info: &crate::relay_info::RelayInfo) -> Map<
         }
         headers.insert(normalized, Value::String(value.to_owned()));
     }
+
     ctx.insert(CONTEXT_REQUEST_HEADERS.to_owned(), Value::Object(headers));
 
     let override_map = info
@@ -2103,9 +2120,11 @@ pub fn build_param_override_context(info: &crate::relay_info::RelayInfo) -> Map<
         .map(|m| m.headers_override.clone())
         .unwrap_or(Value::Object(Map::new()));
     let effective = if info.use_runtime_headers_override {
-        sanitize_header_override_map(&Value::Object(
-            info.runtime_headers_override.clone().into_iter().collect(),
-        ))
+        let mut runtime = Map::new();
+        for (key, value) in &info.runtime_headers_override {
+            runtime.insert(key.clone(), Value::String(value.clone()));
+        }
+        sanitize_header_override_map(&Value::Object(runtime))
     } else {
         sanitize_header_override_map(&override_map)
     };

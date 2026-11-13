@@ -221,12 +221,12 @@ pub async fn token_auth(State(state): State<AppState>, request: Request, next: N
         }
     }
 
-    let mut key = auth_value.as_str();
-    if key.starts_with("Bearer ") || key.starts_with("bearer ") {
-        key = key[7..].trim();
-    }
+    let mut auth_value = auth_value;
     let mut specific_channel_candidate: Option<String> = None;
-    if key.is_empty() || key == "midjourney-proxy" {
+    if auth_value.starts_with("Bearer ") || auth_value.starts_with("bearer ") {
+        auth_value = auth_value[7..].trim().to_owned();
+    }
+    if auth_value.is_empty() || auth_value == "midjourney-proxy" {
         let mut mj_key = headers
             .get("mj-api-secret")
             .and_then(|v| v.to_str().ok())
@@ -237,14 +237,18 @@ pub async fn token_auth(State(state): State<AppState>, request: Request, next: N
         }
         mj_key = mj_key.strip_prefix("sk-").unwrap_or(&mj_key).to_owned();
         let mut parts = mj_key.split('-');
-        key = parts.next().unwrap_or("");
+        auth_value = parts.next().unwrap_or("").to_owned();
     } else {
-        let stripped = key.strip_prefix("sk-").unwrap_or(key);
+        let stripped = auth_value
+            .strip_prefix("sk-")
+            .unwrap_or(&auth_value)
+            .to_owned();
         let mut parts = stripped.split('-');
-        key = parts.next().unwrap_or("");
+        auth_value = parts.next().unwrap_or("").to_owned();
         // 管理员的 specific channel 语法 `key-<id>`。
         specific_channel_candidate = parts.next().map(str::to_owned);
     }
+    let key = auth_value.as_str();
     if key.is_empty() {
         return abort_with_openai_message(
             StatusCode::UNAUTHORIZED,
@@ -494,17 +498,25 @@ async fn load_user_client_ban_set(db: &newapi_storage::Database, user_id: i64) -
         return HashSet::new();
     }
     let now = now_unix();
-    let mut guard = USER_BAN_CACHE.lock().expect("ban cache lock");
-    let cache = guard.get_or_insert_with(HashMap::new);
-    if let Some((set, expires_at)) = cache.get(&user_id)
-        && *expires_at > now
-    {
-        return set.clone();
+    // 锁只覆盖缓存读写：MutexGuard 不 Send，绝不能跨 await 持有。
+    let cached = {
+        let mut guard = USER_BAN_CACHE.lock().expect("ban cache lock");
+        let cache = guard.get_or_insert_with(HashMap::new);
+        match cache.get(&user_id) {
+            Some((set, expires_at)) if *expires_at > now => Some(set.clone()),
+            _ => None,
+        }
+    };
+    if let Some(set) = cached {
+        return set;
     }
     let loaded = query_user_client_bans(db, user_id).await;
+    let mut guard = USER_BAN_CACHE.lock().expect("ban cache lock");
+    let cache = guard.get_or_insert_with(HashMap::new);
     let set = match loaded {
         Ok(set) => set,
         Err(_) => {
+            // 查询失败沿用旧缓存（没有旧缓存则放行）。
             if let Some((set, _)) = cache.get(&user_id) {
                 return set.clone();
             }
@@ -678,13 +690,19 @@ pub fn relay_routes(state: AppState) -> Router<AppState> {
         .route("/v1/moderations", post(relay_entry_openai))
         .route("/v1/engines/{model}/embeddings", post(relay_entry_gemini))
         .route("/v1/models/{*path}", post(relay_entry_gemini))
-        .route_layer(middleware::from_fn(insight_client_ban))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            insight_client_ban,
+        ))
         .route_layer(middleware::from_fn_with_state(state.clone(), token_auth));
 
     // /v1beta Gemini relay 组（register_relay.go:872-885）。
     let relay_gemini = Router::new()
         .route("/v1beta/models/{*path}", post(relay_entry_gemini))
-        .route_layer(middleware::from_fn(insight_client_ban))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            insight_client_ban,
+        ))
         .route_layer(middleware::from_fn_with_state(state.clone(), token_auth));
 
     // /v1/models 与 /v1beta models 列表组（register_relay.go:699-740）：
@@ -743,6 +761,7 @@ async fn relay_entry_core(request: Request, relay_format: &'static str) -> Respo
         .to_owned();
 
     let input = newapi_relay::relay_info::RelayInfoInput {
+        request_start_time_ms: 0,
         token_group: identity
             .as_ref()
             .map(|i| i.token_group.clone())

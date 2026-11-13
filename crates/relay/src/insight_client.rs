@@ -762,14 +762,16 @@ pub fn resolve_client(headers: &HeaderMapLite, prompt: &str) -> ResolvedClient {
 pub fn discover_client(headers: &HeaderMapLite) -> Option<(String, String)> {
     let ua_token = discover_ua_token(&header_get(headers, "User-Agent"));
     let vendor_header = discover_vendor_header(headers);
-    match (ua_token, vendor_header) {
-        (Some(token), Some(vendor)) => Some((
+    match (ua_token, vendor_header.as_str()) {
+        (Some(token), vendor) if !vendor.is_empty() => Some((
             format!("{DISCOVERED_CLIENT_ID}{token}+{vendor}"),
             format!("{token} ({vendor})"),
         )),
-        (Some(token), None) => Some((format!("{DISCOVERED_CLIENT_ID}{token}"), token)),
-        (None, Some(vendor)) => Some((format!("{DISCOVERED_CLIENT_ID}{vendor}"), vendor)),
-        (None, None) => None,
+        (Some(token), _) => Some((format!("{DISCOVERED_CLIENT_ID}{token}"), token)),
+        (None, vendor) if !vendor.is_empty() => {
+            Some((format!("{DISCOVERED_CLIENT_ID}{vendor}"), vendor.to_owned()))
+        }
+        (None, _) => None,
     }
 }
 

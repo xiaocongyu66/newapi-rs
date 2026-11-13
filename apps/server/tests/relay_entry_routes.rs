@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::{
     Router,
     body::{Body, to_bytes},
+    extract::Request,
     http::{Method, StatusCode, header},
     response::Response,
 };
@@ -159,14 +160,24 @@ async fn create_schema(db: &Database) {
 }
 
 async fn reset(db: &Database) {
-    for table in ["options", "user_insight_client_bans", "tokens", "users"] {
-        backend!(db, pool, {
-            sqlx::query(&format!("DELETE FROM {table}"))
-                .execute(pool)
-                .await
-                .expect("reset table");
-        });
-    }
+    backend!(db, pool, {
+        sqlx::query("DELETE FROM options")
+            .execute(pool)
+            .await
+            .expect("reset");
+        sqlx::query("DELETE FROM user_insight_client_bans")
+            .execute(pool)
+            .await
+            .expect("reset");
+        sqlx::query("DELETE FROM tokens")
+            .execute(pool)
+            .await
+            .expect("reset");
+        sqlx::query("DELETE FROM users")
+            .execute(pool)
+            .await
+            .expect("reset");
+    });
 }
 
 async fn seed_user(db: &Database, id: i64, status: i64, group: &str) {
