@@ -245,12 +245,12 @@ async fn seed_token(db: &Database, id: i64, user_id: i64, key: &str, remain: i64
     // key 是字符串：单独执行避免 binds 全 i64 的简化签名
     match db {
         Database::Sqlite(pool) => {
-            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,CAST($5 AS BIGINT))")
+            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,CAST($5 AS INT) :: BIGINT)")
                 .bind(id).bind(user_id).bind(key).bind(remain).bind(unlimited)
                 .execute(pool).await.unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,CAST($5 AS BIGINT))")
+            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,CAST($5 AS INT) :: BIGINT)")
                 .bind(id).bind(user_id).bind(key).bind(remain).bind(unlimited)
                 .execute(pool).await.unwrap();
         }
@@ -283,14 +283,14 @@ async fn seed_subscription(
     match db {
         Database::Sqlite(pool) => {
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
-             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',CAST($8 AS BIGINT))")
+             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',CAST(CAST($8 AS INT) AS BIGINT))")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
                 .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
                 .execute(pool).await.unwrap();
         }
         Database::Postgres(pool) => {
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
-             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',CAST($8 AS BIGINT))")
+             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',CAST(CAST($8 AS INT) AS BIGINT))")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
                 .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
                 .execute(pool).await.unwrap();
@@ -543,6 +543,7 @@ backend_tests! {
         let price = price_data_1to1();
         let mut info = relay_info(91, 92, "sk-realtime-test", "req-rt");
         info.token_unlimited = true;
+        info.origin_model_name = "realtime-test-model".into();
 
         let usage = |units: i64| RealtimeUsage {
             total_tokens: 2 * units,
