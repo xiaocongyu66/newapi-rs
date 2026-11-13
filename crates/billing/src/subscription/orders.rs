@@ -65,6 +65,20 @@ impl From<sqlx::Error> for SubscriptionOrderError {
     }
 }
 
+impl std::fmt::Display for SubscriptionOrderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("subscription order not found"),
+            Self::ProviderMismatch => f.write_str("payment method mismatch"),
+            Self::StatusInvalid => f.write_str("subscription order status invalid"),
+            Self::Business(message) => f.write_str(message),
+            Self::Db(error) => write!(f, "subscription order storage error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for SubscriptionOrderError {}
+
 /// 核销成功时带回的事务外字段（Go 的日志半边，`:1571-1577`）。
 #[derive(Debug)]
 pub struct SubscriptionCompleteRecord {

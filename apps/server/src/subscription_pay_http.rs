@@ -30,8 +30,8 @@ use newapi_billing::subscription::{
     get_subscription_order_by_trade_no, insert_subscription_order,
 };
 use newapi_billing::topup::{
-    TopUpSettings, codepay_sign, constant_time_eq, epay_sign, gateway_pay_type_code, now_seconds,
-    random_string, vmq_create_sign, vmq_notify_sign,
+    PayMethod, TopUpSettings, codepay_sign, constant_time_eq, epay_sign, gateway_pay_type_code,
+    now_seconds, random_string, vmq_create_sign, vmq_notify_sign,
 };
 use serde_json::{Value, json};
 
@@ -134,8 +134,8 @@ fn bind_subscription_pay(headers: &HeaderMap, body: &[u8]) -> Result<Subscriptio
 }
 
 /// Go `payMethodGateway`：缺失/空网关按 Epay。
-fn gateway_of(method: &Value) -> &'static str {
-    match method.get("gateway").map(Value::as_str) {
+fn gateway_of(method: &PayMethod) -> &'static str {
+    match method.get("gateway").map(String::as_str) {
         Some("vmq") => "vmq",
         Some("codepay") => "codepay",
         _ => "epay",
@@ -148,9 +148,9 @@ fn find_pay_method<'a>(
     settings: &'a TopUpSettings,
     method_type: &str,
     gateway: &str,
-) -> Option<&'a Value> {
+) -> Option<&'a PayMethod> {
     settings.pay_methods.as_deref()?.iter().find(|method| {
-        method.get("type").map(Value::as_str) == Some(method_type) && gateway_of(method) == gateway
+        method.get("type").map(String::as_str) == Some(method_type) && gateway_of(method) == gateway
     })
 }
 
@@ -476,7 +476,7 @@ pub async fn subscription_request_vmq_pay(
         return api_error(MSG_PAY_METHOD_MISSING);
     };
     let Some(type_code) =
-        gateway_pay_type_code("vmq", method.get("type").map(Value::as_str).unwrap_or(""))
+        gateway_pay_type_code("vmq", method.get("type").map(String::as_str).unwrap_or(""))
     else {
         return api_error(MSG_PAY_METHOD_UNSUPPORTED);
     };
@@ -637,7 +637,7 @@ pub async fn subscription_request_codepay_pay(
     };
     let Some(type_code) = gateway_pay_type_code(
         "codepay",
-        method.get("type").map(Value::as_str).unwrap_or(""),
+        method.get("type").map(String::as_str).unwrap_or(""),
     ) else {
         return api_error(MSG_PAY_METHOD_UNSUPPORTED);
     };

@@ -50,8 +50,8 @@ use newapi_billing::topup::{
     ExternalQuotaSource, ExternalRechargeParams, ExternalUserUpdate, PROVIDER_CREEM,
     PROVIDER_STRIPE, PROVIDER_WAFFO, PROVIDER_WAFFO_PANCAKE, STATUS_EXPIRED, STATUS_FAILED,
     STATUS_PENDING, TopUpQuotaRejection, TopUpSettings, base62_string, check_capacity,
-    insert_topup, recharge_external_top_up, set_topup_status, sha1_hex, stripe_pay_units,
-    update_pending_top_up_status, validate_credited_quota, validate_top_up_quota,
+    insert_topup, now_seconds, recharge_external_top_up, set_topup_status, sha1_hex,
+    stripe_pay_units, update_pending_top_up_status, validate_credited_quota, validate_top_up_quota,
     waffo_pancake_pay_money, waffo_pay_money,
 };
 use newapi_identity::self_user::QuotaDisplayKind;
@@ -895,7 +895,7 @@ fn verify_stripe_signature(
         return Err(StripeVerifyError::NoValidSignature);
     }
     let timestamp = timestamp.ok_or(StripeVerifyError::InvalidHeader)?;
-    let now = newapi_billing::topup::now_seconds();
+    let now = now_seconds();
     if now - timestamp > 300 {
         return Err(StripeVerifyError::TooOld);
     }
@@ -2104,7 +2104,7 @@ pub async fn stripe_webhook(
                     &db,
                     &event.client_reference_id,
                     PROVIDER_STRIPE,
-                    newapi_billing::topup::now_seconds(),
+                    now_seconds(),
                 )
                 .await
                 {
@@ -2256,7 +2256,7 @@ pub async fn creem_webhook(
         &event.to_string(),
         PROVIDER_CREEM,
         "",
-        newapi_billing::topup::now_seconds(),
+        now_seconds(),
     )
     .await
     {
@@ -2617,7 +2617,7 @@ pub async fn waffo_pancake_webhook(
             &String::from_utf8_lossy(&body),
             PROVIDER_WAFFO_PANCAKE,
             "",
-            newapi_billing::topup::now_seconds(),
+            now_seconds(),
         )
         .await
         {
