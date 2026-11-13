@@ -10,7 +10,6 @@
 
 use serde_json::{Map, Value, json};
 
-use super::classify_usage_path::effective_billing_usage;
 use super::pricing::{PriceData, RatioSettings, has_custom_model_ratio};
 use super::quota_math::{
     QUOTA_PER_UNIT, QuotaClamp, quota_from_decimal_checked, quota_from_float_checked,

@@ -137,6 +137,7 @@ pub async fn pre_wss_consume_quota(
         },
         model_name: model_name.clone(),
         use_price: price_data.use_price,
+        model_price: price_data.model_price,
         model_ratio,
         group_ratio: actual_group_ratio,
     };
@@ -212,6 +213,7 @@ pub async fn post_wss_consume_quota(
         },
         model_name: model_name.to_string(),
         use_price: price_data.use_price,
+        model_price: price_data.model_price,
         model_ratio: price_data.model_ratio,
         group_ratio: price_data.group_ratio(),
     };
@@ -303,6 +305,7 @@ pub async fn post_audio_consume_quota(
         },
         model_name: info.origin_model_name.clone(),
         use_price: price_data.use_price,
+        model_price: price_data.model_price,
         model_ratio: price_data.model_ratio,
         group_ratio: price_data.group_ratio(),
     };

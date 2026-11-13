@@ -543,7 +543,7 @@ fn unix_now() -> i64 {
 /// Go `NewBillingSession`：根据用户计费偏好创建会话，处理
 /// subscription_first / wallet_first 回退。会话内部持有 [`RelayBillingInfo`]
 /// 的同步副本；成功后调用方经 `session.info` 读取最新字段。
-pub async fn new_billing_session(
+pub async fn new_billing_session<'a>(
     store: &'a BillingStore,
     info: RelayBillingInfo,
     pre_consumed_quota: i64,
@@ -590,7 +590,7 @@ pub async fn new_billing_session(
 }
 
 /// Go `tryWallet` 闭包：钱包路径需要先检查用户额度。
-async fn try_wallet(
+async fn try_wallet<'a>(
     store: &'a BillingStore,
     mut info: RelayBillingInfo,
     pre_consumed_quota: i64,
@@ -644,7 +644,7 @@ async fn try_wallet(
 }
 
 /// Go `trySubscription` 闭包。
-async fn try_subscription(
+async fn try_subscription<'a>(
     store: &'a BillingStore,
     info: RelayBillingInfo,
     pre_consumed_quota: i64,
@@ -680,7 +680,7 @@ async fn try_subscription(
 
 /// Go `PreConsumeBilling`（settle_billing_delta.go:15-36）：入口校验 +
 /// 创建会话。Rust 侧会话由调用方持有（无 RelayInfo.Billing 挂载点）。
-pub async fn pre_consume_billing(
+pub async fn pre_consume_billing<'a>(
     store: &'a BillingStore,
     mut info: RelayBillingInfo,
     pre_consumed_quota: i64,

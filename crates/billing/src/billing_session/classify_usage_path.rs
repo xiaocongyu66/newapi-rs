@@ -117,7 +117,7 @@ pub fn usage_from_billing_usage(usage: &Usage) -> Option<Usage> {
 /// Go `usageFromOpenAIBillingUsage`（classify_usage_path.go:99-120）：
 /// prompt/completion 与 input/output 双向补齐，total 缺失时求和。
 pub fn usage_from_openai_billing_usage(billing_usage: &BillingUsage) -> Usage {
-    let mut usage = (*billing_usage.openai_usage.as_ref().expect("checked caller")).clone();
+    let mut usage = (**billing_usage.openai_usage.as_ref().expect("checked caller")).clone();
     if usage.prompt_tokens == 0 && usage.input_tokens > 0 {
         usage.prompt_tokens = usage.input_tokens;
     }

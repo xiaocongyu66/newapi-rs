@@ -46,11 +46,16 @@ pub struct SubscriptionFunding {
 }
 
 /// Go `FundingSource` 接口的枚举形态。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub enum Funding {
-    #[default]
     Wallet(WalletFunding),
     Subscription(SubscriptionFunding),
+}
+
+impl Default for Funding {
+    fn default() -> Self {
+        Funding::Wallet(WalletFunding::default())
+    }
 }
 
 impl Funding {
@@ -97,7 +102,7 @@ impl Funding {
                 s.amount_total = res.amount_total;
                 s.amount_used_after = res.amount_used_after;
                 // 获取订阅计划信息（Go：出错静默跳过）
-                if let Ok(info) = store.subscription_plan_info(s.subscription_id).await {
+                if let Ok(Some(info)) = store.subscription_plan_info(s.subscription_id).await {
                     s.plan_id = info.plan_id;
                     s.plan_title = info.plan_title;
                 }

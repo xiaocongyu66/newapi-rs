@@ -113,7 +113,7 @@ pub async fn charge_violation_fee_if_needed(
     // 依赖 mailer 切片，未随本切片移植。
     super::session::post_consume_quota(store, info, fee_quota, 0)
         .await
-        .map_err(|e| SubscriptionError::Db(e.message))?;
+        .map_err(|e| SubscriptionError::Db(e.message()))?;
 
     store
         .update_user_used_quota_and_request_count(info.user_id, fee_quota)

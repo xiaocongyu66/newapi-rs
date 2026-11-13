@@ -82,6 +82,14 @@ impl SubscriptionError {
     }
 }
 
+impl std::fmt::Display for SubscriptionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for SubscriptionError {}
+
 impl From<sqlx::Error> for SubscriptionError {
     fn from(err: sqlx::Error) -> Self {
         SubscriptionError::Db(err.to_string())
@@ -156,14 +164,14 @@ const SQL_SUB_CANDIDATES_LOCK: &str = "SELECT id, plan_id, amount_total, amount_
 /// 零尺寸事务辅助类型，`$h` 是同一调用点标识符，事务体内用它调用共享
 /// 逻辑（`fetch_sub` / 锁读 / 惰性重置等）。
 macro_rules! with_tx {
-    ($db:expr, $hs:ty, $hp:ty, $h:ident, |$tx:ident| $body:block) => {
+    ($db:expr, $hs_ty:ty, $hp_ty:ty, $hs_val:expr, $hp_val:expr, $h:ident, |$tx:ident| $body:block) => {
         match $db {
             Database::Sqlite(pool) => {
                 let mut tx = pool.begin().await?;
                 let out = (|tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, $h: &$hs| async move {
                     let out = $body;
                     out
-                })(&mut tx, &$hs)
+                })(&mut tx, $hs_val)
                 .await;
                 match out {
                     Ok(value) => {
@@ -178,7 +186,7 @@ macro_rules! with_tx {
                 let out = (|tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, $h: &$hp| async move {
                     let out = $body;
                     out
-                })(&mut tx, &$hp)
+                })(&mut tx, $hp_val)
                 .await;
                 match out {
                     Ok(value) => {
@@ -582,87 +590,88 @@ impl BillingStore {
             return Err(SubscriptionError::InvalidArgument("amount must be > 0"));
         }
         let mut result = SubscriptionPreConsumeResult::default();
-        let outcome: Result<(), SubscriptionError> = with_tx!(self.db, SqliteTx, PgTx, txh, |tx| {
-            // 1) request_id 幂等重放
-            let existing: Option<(i64, i64, String)> = sqlx::query_as(SQL_PRECONSUME_REPLAY)
-                .bind(request_id)
-                .fetch_optional(&mut **tx)
-                .await?;
-            if let Some((sub_id, pre_consumed, status)) = existing {
-                if status == "refunded" {
-                    return Err(SubscriptionError::AlreadyRefunded);
-                }
-                let row = txh.fetch_sub(tx, sub_id).await?;
-                result.user_subscription_id = sub_id;
-                result.pre_consumed = pre_consumed;
-                result.amount_total = row.amount_total;
-                result.amount_used_before = row.amount_used;
-                result.amount_used_after = row.amount_used;
-                return Ok(());
-            }
-
-            // 2) 活跃订阅候选（PG 加 FOR UPDATE；SQLite 单写者事务已互斥）
-            let candidates: Vec<(i64, i64, i64, i64)> =
-                txh.sub_candidates(tx, user_id, now).await?;
-            if candidates.is_empty() {
-                return Err(SubscriptionError::NoActiveSubscription);
-            }
-            for (sub_id, plan_id, amount_total, amount_used) in candidates {
-                // Go：候选先跑 maybeResetUserSubscriptionWithPlanTx
-                let (amount_total, amount_used) = txh
-                    .maybe_reset(tx, sub_id, plan_id, amount_total, amount_used, now)
-                    .await?;
-                let mut used = amount_used;
-                if amount_total > 0 {
-                    let remain = amount_total - used;
-                    if remain < amount {
-                        continue;
-                    }
-                }
-                let insert = sqlx::query(SQL_INSERT_PRECONSUME)
+        let outcome: Result<(), SubscriptionError> =
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+                // 1) request_id 幂等重放
+                let existing: Option<(i64, i64, String)> = sqlx::query_as(SQL_PRECONSUME_REPLAY)
                     .bind(request_id)
-                    .bind(user_id)
-                    .bind(sub_id)
-                    .bind(amount)
-                    .bind(now)
-                    .execute(&mut **tx)
-                    .await;
-                if let Err(err) = insert {
-                    // 唯一索引冲突 → 幂等重放（Go First(&dup) 分支）
-                    let dup: Option<(i64, String)> = sqlx::query_as(SQL_PRECONSUME_DUP)
-                        .bind(request_id)
-                        .fetch_optional(&mut **tx)
-                        .await?;
-                    if let Some((dup_sub, dup_status)) = dup {
-                        if dup_status == "refunded" {
-                            return Err(SubscriptionError::AlreadyRefunded);
-                        }
-                        let row = txh.fetch_sub(tx, dup_sub).await?;
-                        result.user_subscription_id = dup_sub;
-                        result.pre_consumed = amount;
-                        result.amount_total = row.amount_total;
-                        result.amount_used_before = row.amount_used;
-                        result.amount_used_after = row.amount_used;
-                        return Ok(());
-                    }
-                    return Err(err.into());
-                }
-                used += amount;
-                sqlx::query(SQL_UPDATE_SUB_USED)
-                    .bind(used)
-                    .bind(now)
-                    .bind(sub_id)
-                    .execute(&mut **tx)
+                    .fetch_optional(&mut **tx)
                     .await?;
-                result.user_subscription_id = sub_id;
-                result.pre_consumed = amount;
-                result.amount_total = amount_total;
-                result.amount_used_before = amount_used;
-                result.amount_used_after = used;
-                return Ok(());
-            }
-            Err(SubscriptionError::QuotaInsufficient(amount))
-        });
+                if let Some((sub_id, pre_consumed, status)) = existing {
+                    if status == "refunded" {
+                        return Err(SubscriptionError::AlreadyRefunded);
+                    }
+                    let row = txh.fetch_sub(tx, sub_id).await?;
+                    result.user_subscription_id = sub_id;
+                    result.pre_consumed = pre_consumed;
+                    result.amount_total = row.amount_total;
+                    result.amount_used_before = row.amount_used;
+                    result.amount_used_after = row.amount_used;
+                    return Ok(());
+                }
+
+                // 2) 活跃订阅候选（PG 加 FOR UPDATE；SQLite 单写者事务已互斥）
+                let candidates: Vec<(i64, i64, i64, i64)> =
+                    txh.sub_candidates(tx, user_id, now).await?;
+                if candidates.is_empty() {
+                    return Err(SubscriptionError::NoActiveSubscription);
+                }
+                for (sub_id, plan_id, amount_total, amount_used) in candidates {
+                    // Go：候选先跑 maybeResetUserSubscriptionWithPlanTx
+                    let (amount_total, amount_used) = txh
+                        .maybe_reset(tx, sub_id, plan_id, amount_total, amount_used, now)
+                        .await?;
+                    let mut used = amount_used;
+                    if amount_total > 0 {
+                        let remain = amount_total - used;
+                        if remain < amount {
+                            continue;
+                        }
+                    }
+                    let insert = sqlx::query(SQL_INSERT_PRECONSUME)
+                        .bind(request_id)
+                        .bind(user_id)
+                        .bind(sub_id)
+                        .bind(amount)
+                        .bind(now)
+                        .execute(&mut **tx)
+                        .await;
+                    if let Err(err) = insert {
+                        // 唯一索引冲突 → 幂等重放（Go First(&dup) 分支）
+                        let dup: Option<(i64, String)> = sqlx::query_as(SQL_PRECONSUME_DUP)
+                            .bind(request_id)
+                            .fetch_optional(&mut **tx)
+                            .await?;
+                        if let Some((dup_sub, dup_status)) = dup {
+                            if dup_status == "refunded" {
+                                return Err(SubscriptionError::AlreadyRefunded);
+                            }
+                            let row = txh.fetch_sub(tx, dup_sub).await?;
+                            result.user_subscription_id = dup_sub;
+                            result.pre_consumed = amount;
+                            result.amount_total = row.amount_total;
+                            result.amount_used_before = row.amount_used;
+                            result.amount_used_after = row.amount_used;
+                            return Ok(());
+                        }
+                        return Err(err.into());
+                    }
+                    used += amount;
+                    sqlx::query(SQL_UPDATE_SUB_USED)
+                        .bind(used)
+                        .bind(now)
+                        .bind(sub_id)
+                        .execute(&mut **tx)
+                        .await?;
+                    result.user_subscription_id = sub_id;
+                    result.pre_consumed = amount;
+                    result.amount_total = amount_total;
+                    result.amount_used_before = amount_used;
+                    result.amount_used_after = used;
+                    return Ok(());
+                }
+                Err(SubscriptionError::QuotaInsufficient(amount))
+            });
         outcome?;
         Ok(result)
     }
@@ -677,34 +686,35 @@ impl BillingStore {
         if request_id.trim().is_empty() {
             return Err(SubscriptionError::InvalidArgument("requestId is empty"));
         }
-        let outcome: Result<(), SubscriptionError> = with_tx!(self.db, SqliteTx, PgTx, txh, |tx| {
-            let record: Option<(i64, i64, String)> = sqlx::query_as(SQL_PRECONSUME_RECORD)
-                .bind(request_id)
-                .fetch_optional(&mut **tx)
-                .await?;
-            let Some((sub_id, pre_consumed, status)) = record else {
-                return Err(SubscriptionError::NotFound);
-            };
-            if status == "refunded" {
-                return Ok(());
-            }
-            if pre_consumed <= 0 {
+        let outcome: Result<(), SubscriptionError> =
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+                let record: Option<(i64, i64, String)> = sqlx::query_as(SQL_PRECONSUME_RECORD)
+                    .bind(request_id)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+                let Some((sub_id, pre_consumed, status)) = record else {
+                    return Err(SubscriptionError::NotFound);
+                };
+                if status == "refunded" {
+                    return Ok(());
+                }
+                if pre_consumed <= 0 {
+                    sqlx::query(SQL_MARK_REFUNDED)
+                        .bind(request_id)
+                        .bind(now)
+                        .execute(&mut **tx)
+                        .await?;
+                    return Ok(());
+                }
+                txh.post_consume_delta(tx, sub_id, -pre_consumed, now)
+                    .await?;
                 sqlx::query(SQL_MARK_REFUNDED)
                     .bind(request_id)
                     .bind(now)
                     .execute(&mut **tx)
                     .await?;
-                return Ok(());
-            }
-            txh.post_consume_delta(tx, sub_id, -pre_consumed, now)
-                .await?;
-            sqlx::query(SQL_MARK_REFUNDED)
-                .bind(request_id)
-                .bind(now)
-                .execute(&mut **tx)
-                .await?;
-            Ok(())
-        });
+                Ok(())
+            });
         outcome
     }
 
@@ -718,9 +728,10 @@ impl BillingStore {
         if delta == 0 {
             return Ok(());
         }
-        let outcome: Result<(), SubscriptionError> = with_tx!(self.db, SqliteTx, PgTx, txh, |tx| {
-            txh.post_consume_delta(tx, sub_id, delta, now).await
-        });
+        let outcome: Result<(), SubscriptionError> =
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+                txh.post_consume_delta(tx, sub_id, delta, now).await
+            });
         outcome
     }
 
@@ -741,21 +752,22 @@ impl BillingStore {
             return Err(SubscriptionError::InvalidArgument("delta must be positive"));
         }
         let mut overflow = 0i64;
-        let outcome: Result<(), SubscriptionError> = with_tx!(self.db, SqliteTx, PgTx, txh, |tx| {
-            let row = txh.fetch_sub_locked(tx, sub_id).await?;
-            let mut new_used = row.amount_used + delta;
-            if row.amount_total > 0 && new_used > row.amount_total {
-                overflow = new_used - row.amount_total;
-                new_used = row.amount_total;
-            }
-            sqlx::query(SQL_UPDATE_SUB_USED)
-                .bind(new_used)
-                .bind(now)
-                .bind(sub_id)
-                .execute(&mut **tx)
-                .await?;
-            Ok(())
-        });
+        let outcome: Result<(), SubscriptionError> =
+            with_tx!(self.db, SqliteTx, PgTx, &SqliteTx, &PgTx, txh, |tx| {
+                let row = txh.fetch_sub_locked(tx, sub_id).await?;
+                let mut new_used = row.amount_used + delta;
+                if row.amount_total > 0 && new_used > row.amount_total {
+                    overflow = new_used - row.amount_total;
+                    new_used = row.amount_total;
+                }
+                sqlx::query(SQL_UPDATE_SUB_USED)
+                    .bind(new_used)
+                    .bind(now)
+                    .bind(sub_id)
+                    .execute(&mut **tx)
+                    .await?;
+                Ok(())
+            });
         outcome?;
         Ok(overflow)
     }

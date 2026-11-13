@@ -22,8 +22,8 @@
 //! `newapi_identity::self_user::QuotaDisplaySettings`，本 crate 不引入该边。
 
 mod admin_store;
-mod period;
-mod store;
+pub(crate) mod period;
+pub(crate) mod store;
 
 pub use admin_store::{AdminError, MSG_RECORD_NOT_FOUND, PlanWrite, SubscriptionResetResult};
 pub use store::{SubscriptionPlanRow, SubscriptionRepository, UserSubscriptionRow};
