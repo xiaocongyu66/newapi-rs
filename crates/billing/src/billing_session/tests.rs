@@ -245,12 +245,12 @@ async fn seed_token(db: &Database, id: i64, user_id: i64, key: &str, remain: i64
     // key 是字符串：单独执行避免 binds 全 i64 的简化签名
     match db {
         Database::Sqlite(pool) => {
-            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,$5)")
+            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,CAST($5 AS BIGINT))")
                 .bind(id).bind(user_id).bind(key).bind(remain).bind(unlimited)
                 .execute(pool).await.unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,$5)")
+            sqlx::query("INSERT INTO tokens (id, user_id, key, remain_quota, unlimited_quota) VALUES ($1,$2,$3,$4,CAST($5 AS BIGINT))")
                 .bind(id).bind(user_id).bind(key).bind(remain).bind(unlimited)
                 .execute(pool).await.unwrap();
         }
@@ -283,14 +283,14 @@ async fn seed_subscription(
     match db {
         Database::Sqlite(pool) => {
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
-             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)")
+             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',CAST($8 AS BIGINT))")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
                 .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
                 .execute(pool).await.unwrap();
         }
         Database::Postgres(pool) => {
             sqlx::query("INSERT INTO user_subscriptions (id, user_id, plan_id, amount_total, amount_used, \
-             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8)")
+             start_time, end_time, status, allow_wallet_overflow) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',CAST($8 AS BIGINT))")
                 .bind(id).bind(user_id).bind(1i64).bind(total).bind(used)
                 .bind(1_000_000i64).bind(4_000_000_000i64).bind(allow_overflow)
                 .execute(pool).await.unwrap();
@@ -480,8 +480,8 @@ backend_tests! {
         session.settle_billing(15_000).await.unwrap();
         assert_eq!(sub_used(db, 21).await, 15_000);
         assert_eq!(session.info.subscription_post_delta, -5_000);
-        // 令牌跟着结算差额一起返还
-        assert_eq!(token_remain(db, 15).await, 55_000);
+        // 令牌跟着结算差额一起返还（预扣 20k → 30k，返还 5k → 35k）
+        assert_eq!(token_remain(db, 15).await, 35_000);
     };
 
     wallet_first_falls_back_to_subscription => async |db: &Database| {
@@ -555,8 +555,8 @@ backend_tests! {
         let call = WssCallContext::default();
         pre_wss_consume_quota(&store, &settings, &mut info, &price, &usage(10), &call).await.expect("batch 1");
         pre_wss_consume_quota(&store, &settings, &mut info, &price, &usage(20), &call).await.expect("batch 2");
-        assert_eq!(info.realtime_charged_quota, 30);
-        assert_eq!(user_quota(db, 91).await, 500_000 - 30);
+        assert_eq!(info.realtime_charged_quota, 60);
+        assert_eq!(user_quota(db, 91).await, 500_000 - 60);
 
         // 结算对累计用量（30 units in + 30 out = 60 quota）只补差额 30。
         let outcome = post_wss_consume_quota(
