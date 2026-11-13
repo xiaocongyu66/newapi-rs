@@ -165,34 +165,36 @@ const SQL_SUB_CANDIDATES_LOCK: &str = "SELECT id, plan_id, amount_total, amount_
 /// 逻辑（`fetch_sub` / 锁读 / 惰性重置等）。
 macro_rules! with_tx {
     ($db:expr, $hs_ty:ty, $hp_ty:ty, $hs_val:expr, $hp_val:expr, $tx:ident, $h:ident, $body:block) => {
-        match $db {
+        match &$db {
             Database::Sqlite(pool) => {
-                let mut $tx = pool.begin().await?;
-                let out =
-                    (|$tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, $h: &$hs_ty| async move {
-                        let out = $body;
-                        out
-                    })(&mut $tx, $hs_val)
-                    .await;
+                let mut __tx = pool.begin().await?;
+                let $h: &$hs_ty = $hs_val;
+                let out = async {
+                    let $tx = &mut *__tx;
+                    let out = $body;
+                    out
+                }
+                .await;
                 match out {
                     Ok(value) => {
-                        $tx.commit().await?;
+                        __tx.commit().await?;
                         Ok(value)
                     }
                     Err(err) => Err(err),
                 }
             }
             Database::Postgres(pool) => {
-                let mut $tx = pool.begin().await?;
-                let out =
-                    (|$tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, $h: &$hp_ty| async move {
-                        let out = $body;
-                        out
-                    })(&mut $tx, $hp_val)
-                    .await;
+                let mut __tx = pool.begin().await?;
+                let $h: &$hp_ty = $hp_val;
+                let out = async {
+                    let $tx = &mut *__tx;
+                    let out = $body;
+                    out
+                }
+                .await;
                 match out {
                     Ok(value) => {
-                        $tx.commit().await?;
+                        __tx.commit().await?;
                         Ok(value)
                     }
                     Err(err) => Err(err),
@@ -201,7 +203,6 @@ macro_rules! with_tx {
         }
     };
 }
-
 impl BillingStore {
     pub fn new(db: Database) -> Self {
         Self { db }
