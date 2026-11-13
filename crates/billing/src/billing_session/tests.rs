@@ -6,7 +6,7 @@
 //! `consume_text_quota_test.go` 的公式锚点。
 
 use super::funding::{Funding, SubscriptionFunding};
-use super::pricing::{PriceData, RatioSettings, StaticRatioSettings};
+use super::pricing::{PriceData, StaticRatioSettings};
 use super::quota_math::QUOTA_PER_UNIT;
 use super::realtime::{
     QuotaInfo, TokenDetails, WssCallContext, calculate_audio_quota, post_wss_consume_quota,
@@ -210,7 +210,7 @@ macro_rules! backend_tests {
 }
 
 /// 测试内 SQL 执行（Database 无 pub pool 访问器，走双后端 match）。
-async fn texec(db: &Database, sql: &str, binds: &[i64]) -> sqlx::Result<u64> {
+async fn texec(db: &Database, sql: &'static str, binds: &[i64]) -> sqlx::Result<u64> {
     match db {
         Database::Sqlite(pool) => {
             let mut q = sqlx::query(sql);
@@ -307,7 +307,7 @@ async fn seed_subscription(
     }
 }
 
-async fn tscalar(db: &Database, sql: &str, id: i64) -> i64 {
+async fn tscalar(db: &Database, sql: &'static str, id: i64) -> i64 {
     match db {
         Database::Sqlite(pool) => sqlx::query_scalar::<_, i64>(sql)
             .bind(id)
@@ -537,8 +537,8 @@ backend_tests! {
             total_tokens: 2 * units,
             input_tokens: units,
             output_tokens: units,
-            input_token_details: TokenDetails { text_tokens: units, ..Default::default() },
-            output_token_details: TokenDetails { text_tokens: units, ..Default::default() },
+            input_token_details: super::usage::InputTokenDetails { text_tokens: units, ..Default::default() },
+            output_token_details: super::usage::OutputTokenDetails { text_tokens: units, ..Default::default() },
         };
 
         let call = WssCallContext::default();
@@ -646,7 +646,7 @@ backend_tests! {
     };
 
     // Go consume_quota_saturation_test.go 的落库面：饱和事件挂 admin_info。
-    saturation_marker_nests_under_admin_info => async |db: &Database| {
+    saturation_marker_nests_under_admin_info => async |_db: &Database| {
         let mut other = serde_json::Map::new();
         other.insert("model_price".into(), serde_json::json!(0.004));
         super::text_quota::attach_quota_saturation(
