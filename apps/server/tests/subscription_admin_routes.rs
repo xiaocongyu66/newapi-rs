@@ -308,7 +308,7 @@ async fn body_json(response: Response) -> Value {
 /// Macros so panics report the call site (`#[track_caller]` is a no-op on
 /// async functions).
 macro_rules! assert_success {
-    ($response:expr) => {{
+    ($response:expr $(,)?) => {{
         async {
             let response = $response;
             assert_eq!(response.status(), StatusCode::OK);
@@ -321,7 +321,7 @@ macro_rules! assert_success {
 }
 
 macro_rules! assert_failure {
-    ($response:expr, $message:expr) => {{
+    ($response:expr, $message:expr $(,)?) => {{
         async {
             let response = $response;
             assert_eq!(response.status(), StatusCode::OK);
