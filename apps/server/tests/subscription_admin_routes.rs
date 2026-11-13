@@ -732,6 +732,17 @@ async fn run_contract(db: Database) {
     )
     .await;
     assert_failure!(response, json!("已达到该套餐购买上限")).await;
+    // Expire the bound subscription so the reset/delete sections below see
+    // only their seeded rows (the bind route itself is verified above).
+    backend!(&db, pool, {
+        sqlx::query(
+            "UPDATE user_subscriptions SET status = 'expired' WHERE user_id = 2 AND plan_id = $1",
+        )
+        .bind(vip_plan_id)
+        .execute(pool)
+        .await
+        .expect("expire bound sub");
+    });
 
     // Unknown plan / unknown user are gorm record not found.
     let response = send(
