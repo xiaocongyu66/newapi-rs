@@ -40,6 +40,7 @@ newapi-i18n = { path = "crates/i18n" }
 newapi-billing = { path = "crates/billing" }
 newapi-usage = { path = "crates/usage" }
 newapi-mailer = { path = "crates/mailer" }
+newapi-relay = { path = "crates/relay" }
 # SMTP 外呼（feat/log-write-email）：0.11.23 在本机 cargo 缓存中已有 .crate，
 # 锁内已有 tokio-rustls 0.26 / rustls-native-certs / webpki-roots 等传递依赖。
 # default-features = false 关掉 native-tls 与 hostname；aws-lc-rs 对齐工作区
