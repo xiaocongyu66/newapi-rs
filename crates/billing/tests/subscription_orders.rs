@@ -16,7 +16,7 @@ use newapi_billing::subscription::{
 };
 use newapi_storage::Database;
 use sqlx::{
-    ConnectOptions, Executor, Row,
+    ConnectOptions, Row,
     postgres::PgPoolOptions,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
