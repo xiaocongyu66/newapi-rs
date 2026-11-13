@@ -34,8 +34,8 @@ pub struct QuotaInfo {
 
 /// Go `calculateAudioQuota`（consume_quota_realtime.go:53-90）。
 /// UsePrice 时按次计费（modelPrice * QuotaPerUnit * groupRatio）；否则
-/// text_in + text_out*completion + audio_in*audioRatio
-///   + audio_out*audioRatio*audioCompletion，整体乘 (groupRatio*modelRatio)；
+/// 为 `(text_in + text_out*completion + audio_in*audioRatio
+///   + audio_out*audioRatio*audioCompletion) * (groupRatio*modelRatio)`，
 /// ratio 非零且结果 ≤0 时取最小计费单位 1。
 pub fn calculate_audio_quota(
     settings: &dyn RatioSettings,
