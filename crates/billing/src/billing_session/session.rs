@@ -126,6 +126,22 @@ pub struct BillingSession<'a> {
     refunded: bool,
 }
 
+impl std::fmt::Debug for BillingSession<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BillingSession")
+            .field("info", &self.info)
+            .field("funding", &self.funding)
+            .field("pre_consumed_quota", &self.pre_consumed_quota)
+            .field("token_consumed", &self.token_consumed)
+            .field("extra_reserved", &self.extra_reserved)
+            .field("trusted", &self.trusted)
+            .field("funding_settled", &self.funding_settled)
+            .field("settled", &self.settled)
+            .field("refunded", &self.refunded)
+            .finish()
+    }
+}
+
 impl<'a> BillingSession<'a> {
     /// Go `BillingSession.Settle`：资金来源与令牌额度分两步提交；若资金来源
     /// 已提交但令牌调整失败，标记 fundingSettled 防止 Refund 误退资金。

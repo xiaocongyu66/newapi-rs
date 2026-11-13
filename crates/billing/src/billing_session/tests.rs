@@ -22,6 +22,7 @@ use super::text_quota::{
 };
 use super::usage::{RealtimeUsage, Usage};
 use newapi_storage::Database;
+use sqlx::ConnectOptions;
 
 // ---------------------------------------------------------------------------
 // 双后端 fixture
@@ -127,8 +128,12 @@ async fn create_schema(db: &Database) {
     };
     for statement in statements {
         match db {
-            Database::Sqlite(pool) => sqlx::query(statement).execute(pool).await.unwrap(),
-            Database::Postgres(pool) => sqlx::query(statement).execute(pool).await.unwrap(),
+            Database::Sqlite(pool) => {
+                sqlx::query(*statement).execute(pool).await.unwrap();
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(*statement).execute(pool).await.unwrap();
+            }
         }
     }
 }
@@ -185,17 +190,19 @@ async fn connect_postgres() -> Option<Database> {
 }
 
 // 兼容 rust 1.99 的 AsyncFn（edition 2024 内建）不可用时退化写法：
+async fn run_db_contract(db: &Database, contract: impl AsyncFn(&Database)) {
+    contract(db).await;
+}
+
 macro_rules! backend_tests {
     ($($name:ident => $body:expr;)*) => {
         $(
             #[tokio::test]
             async fn $name() {
                 let sqlite = connect_sqlite().await;
-                let contract: std::sync::Arc<dyn Fn(&Database) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
-                    std::sync::Arc::new(|db| Box::pin($body(db)));
-                contract(&sqlite).await;
+                run_db_contract(&sqlite, $body).await;
                 if let Some(pg) = connect_postgres().await {
-                    contract(&pg).await;
+                    run_db_contract(&pg, $body).await;
                 }
             }
         )*
@@ -203,21 +210,21 @@ macro_rules! backend_tests {
 }
 
 /// 测试内 SQL 执行（Database 无 pub pool 访问器，走双后端 match）。
-async fn texec(db: &Database, sql: &str, binds: &[i64]) -> sqlx::Result<sqlx::query::QueryResult> {
+async fn texec(db: &Database, sql: &str, binds: &[i64]) -> sqlx::Result<u64> {
     match db {
         Database::Sqlite(pool) => {
             let mut q = sqlx::query(sql);
             for b in binds {
                 q = q.bind(*b);
             }
-            q.execute(pool).await
+            q.execute(pool).await.map(|r| r.rows_affected())
         }
         Database::Postgres(pool) => {
             let mut q = sqlx::query(sql);
             for b in binds {
                 q = q.bind(*b);
             }
-            q.execute(pool).await
+            q.execute(pool).await.map(|r| r.rows_affected())
         }
     }
 }
@@ -943,7 +950,7 @@ fn audio_quota_formula_and_minimum_unit() {
         ..Default::default()
     };
     let (quota, _) = calculate_audio_quota(&settings, &priced);
-    assert_eq!(quota, 0.02 * 500_000.0 * 2.0f64);
+    assert_eq!(quota, (0.02 * 500_000.0 * 2.0) as i64);
 }
 
 #[test]
