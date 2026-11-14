@@ -2919,15 +2919,25 @@ mod tests {
             request: OutboundRequest,
         ) -> Pin<Box<dyn Future<Output = Result<OutboundResponse, String>> + Send + 'a>> {
             self.captured.lock().expect("poisoned").push(request);
-            let response = OutboundResponse {
-                status: self.response.status,
-                headers: self.response.headers.clone(),
-                body: match &self.response.body {
-                    OutboundResponseBody::Full(bytes) => OutboundResponseBody::Full(bytes.clone()),
-                    OutboundResponseBody::Stream(_) => panic!("stub is not a stream"),
-                },
+            // 在 async 块外物化响应体：Box<dyn ByteStream> 非 Sync，引用不能
+            // 进入 Send future。
+            let status = self.response.status;
+            let headers = self.response.headers.clone();
+            let full_body = match &self.response.body {
+                OutboundResponseBody::Full(bytes) => Some(bytes.clone()),
+                OutboundResponseBody::Stream(_) => None,
             };
-            Box::pin(async move { Ok(response) })
+            Box::pin(async move {
+                debug_assert!(
+                    full_body.is_some(),
+                    "stub transport is not configured as a stream"
+                );
+                Ok(OutboundResponse {
+                    status,
+                    headers,
+                    body: OutboundResponseBody::Full(full_body.unwrap_or_default()),
+                })
+            })
         }
     }
 

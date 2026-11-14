@@ -174,7 +174,7 @@ pub fn setup_api_request_header(
     let accept = header_value(client_headers, "accept");
     let mut headers = Vec::new();
     if !content_type.is_empty() {
-        headers.push(("Content-Type".to_owned(), content_type));
+        headers.push(("Content-Type".to_owned(), content_type.to_owned()));
     }
     let accept = if accept.is_empty() && info.is_stream {
         "text/event-stream"

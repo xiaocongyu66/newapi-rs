@@ -210,7 +210,7 @@ pub fn handle_stream_response_data(
     info: &mut RelayInfo,
     sink: &mut dyn ClientSink,
     claude_info: &mut ClaudeResponseInfo,
-    mut data: &str,
+    data: &str,
 ) -> Result<(), AdaptorError> {
     let mut claude_response: ClaudeResponse = serde_json::from_str(data)
         .map_err(|err| new_error(err.to_string(), error_code::BAD_RESPONSE_BODY))?;
@@ -228,6 +228,8 @@ pub fn handle_stream_response_data(
     if info.relay_format == relay_format::CLAUDE {
         format_claude_response_info(&claude_response, None, claude_info);
 
+        // Go: data = patchClaudeMessageDeltaUsageData(...) —— 补洞后的帧载荷。
+        let mut forward = data.to_owned();
         if claude_response.kind == "message_start" {
             // message_start, 获取usage
             if let Some(message) = &claude_response.message {
@@ -239,14 +241,13 @@ pub fn handle_stream_response_data(
             if !should_skip_claude_message_delta_usage_patch(info) {
                 let patch =
                     build_message_delta_patch_usage(Some(&claude_response), Some(claude_info));
-                let patched = patch_claude_message_delta_usage_data(data, Some(&patch));
-                claude_response = serde_json::from_str(&patched).unwrap_or(claude_response);
-                data = patched.as_str();
+                forward = patch_claude_message_delta_usage_data(data, Some(&patch));
+                claude_response = serde_json::from_str(&forward).unwrap_or(claude_response);
             }
         }
         count_claude_stream_billable_tools(info, sink, &claude_response);
         // Go: helper.ClaudeChunkData(c, claudeResponse, data)。
-        sink.claude_chunk_data(&claude_response.kind, data);
+        sink.claude_chunk_data(&claude_response.kind, &forward);
     } else if info.relay_format == relay_format::OPENAI {
         let response = stream_response_claude_2_openai(&claude_response);
 

@@ -27,6 +27,7 @@
 //!   oaichat），走 seam 错误。
 //! - openai→gemini / claude→gemini 的**请求**转换归转换切片 seam。
 
+use crate::adaptor::Adaptor as _;
 use crate::adaptor_common::convert_gemini::{
     GeminiChatResponse, finish_reason, response_gemini_chat_2_openai,
     stream_response_gemini_chat_2_openai, usage_from_gemini_metadata,
@@ -36,7 +37,7 @@ use crate::adaptor_common::{
     ClientSink, DoResponseOutcome, OutboundResponse, OutboundTransport, RequestContext, error_code,
     new_error, new_openai_error, timestamp_now,
 };
-use crate::relay_info::{RelayInfo, relay_format};
+use crate::relay_info::{AdaptorError, RelayInfo, relay_format};
 use crate::relay_mode as relay_constant;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

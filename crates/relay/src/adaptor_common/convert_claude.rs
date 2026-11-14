@@ -293,6 +293,7 @@ pub fn stream_response_claude_2_openai(
                             arguments: delta.partial_json.clone().unwrap_or_default(),
                             ..FunctionResponse::default()
                         },
+                        ..ToolCallResponse::default()
                     });
                 }
                 "signature_delta" => {
