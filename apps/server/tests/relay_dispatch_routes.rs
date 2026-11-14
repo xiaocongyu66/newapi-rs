@@ -352,6 +352,19 @@ async fn seed_user(db: &Database, quota: i64, group: &str, role: i64) -> i64 {
     id
 }
 
+/// 重复 seeding 同一 user 行（PK 冲突面）改为 UPDATE：role/quota 复位。
+async fn reset_user(db: &Database, quota: i64, role: i64) {
+    backend!(db, pool, {
+        sqlx::query(r#"UPDATE users SET role = $1, quota = $2 WHERE id = $3"#)
+            .bind(role)
+            .bind(quota)
+            .bind(USER_ID)
+            .execute(pool)
+            .await
+            .expect("reset user");
+    });
+}
+
 async fn seed_token(db: &Database, key: &str, group: &str) -> i64 {
     backend!(db, pool, {
         let id: i64 = sqlx::query_scalar(
@@ -691,6 +704,7 @@ async fn run_contract(db: &Database) {
     set_option(db, "RetryTimes", "1").await;
     let factory = std::sync::Arc::new(ScriptedFactory::new(1));
     let state = state_with(db, factory.clone());
+    state.reload(db).await.expect("reload options");
     let response = post_relay(
         &state,
         "/v1/chat/completions",
@@ -738,10 +752,10 @@ async fn run_contract(db: &Database) {
 
     // ── specific channel：管理员 key-<id> 直通（非管理员在 TokenAuth 403）──
     set_option(db, "RetryTimes", "0").await;
-    seed_user(db, USER_QUOTA, "default", 10).await; // admin
-    seed_token(db, TOKEN_KEY, "").await;
+    reset_user(db, USER_QUOTA, 10).await; // admin
     let factory = std::sync::Arc::new(ScriptedFactory::new(0));
     let state = state_with(db, factory.clone());
+    state.reload(db).await.expect("reload options");
     let response = router(state.clone())
         .oneshot(
             axum::extract::Request::builder()
@@ -778,7 +792,7 @@ async fn run_contract(db: &Database) {
             .unwrap()
             .contains("channel has been disabled")
     );
-    seed_user(db, USER_QUOTA, "default", 1).await; // 回到普通用户
+    reset_user(db, USER_QUOTA, 1).await; // 回到普通用户
 
     // ── token 模型限额：不在列表 → 403 ───────────────────────────────────
     backend!(db, pool, {
@@ -790,6 +804,7 @@ async fn run_contract(db: &Database) {
     });
     let factory = std::sync::Arc::new(ScriptedFactory::new(0));
     let state = state_with(db, factory);
+    state.reload(db).await.expect("reload options");
     let response = post_relay(
         &state,
         "/v1/chat/completions",
@@ -905,26 +920,7 @@ async fn postgres_contract() {
         .await
         .expect("pg pool");
     let db = Database::Postgres(pool);
-    // 共享 DDL 幂等（PG fixture 先例）：序列对齐 seed 后 setval。
-    create_schema(&db).await;
-    backend!(&db, pool, {
-        for table in [
-            "users_id_seq",
-            "tokens_id_seq",
-            "channels_id_seq",
-            "channel_model_routes_id_seq",
-            "user_subscriptions_id_seq",
-            "subscription_plans_id_seq",
-            "subscription_pre_consume_records_id_seq",
-            "logs_id_seq",
-        ] {
-            // setval 序列名来自测试常量表（非用户输入）：AssertSqlSafe 审计面。
-            let sql = format!(
-                r#"SELECT setval('{table}', COALESCE((SELECT MAX(id) FROM "{}" ), 1))"#,
-                table.strip_suffix("_id_seq").unwrap_or(table)
-            );
-            let _ = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await;
-        }
-    });
+    // run_contract 自带 create_schema + reset（进程级唯一 schema 隔离；
+    // 显式 id 的表不经序列写入，无需 setval 对齐）。
     run_contract(&db).await;
 }
