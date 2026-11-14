@@ -719,14 +719,12 @@ mod tests {
         assert_eq!(selected_group, "B");
         assert_eq!(route.group, "B");
         assert_eq!(state.group_index, 1);
-        // A retry=2（miss）→ A retry=0（miss）→ B retry=0（hit）。
+        // Go 注释示例（RetryTimes=3 的 Retry=2 段）：分组 A 在当前重试位
+        // miss（A@2）后整组让位 → B 组 priority 0 命中；组内不再重放 A@0
+        // （Go 循环体一次 miss 即切换分组）。
         assert_eq!(
             calls.into_inner().unwrap(),
-            vec![
-                ("A".to_owned(), 2),
-                ("A".to_owned(), 0),
-                ("B".to_owned(), 0)
-            ]
+            vec![("A".to_owned(), 2), ("B".to_owned(), 0)]
         );
     }
 
