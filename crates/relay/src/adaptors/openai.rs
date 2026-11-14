@@ -3101,7 +3101,7 @@ mod tests {
 
     #[test]
     fn setup_header_bearer_auth() {
-        let info = info_with_model("gpt-4o");
+        let mut info = info_with_model("gpt-4o");
         info.channel_meta.as_mut().expect("meta").api_key = "sk-x".to_owned();
         let adaptor = OpenAiAdaptor::new();
         let headers = adaptor
