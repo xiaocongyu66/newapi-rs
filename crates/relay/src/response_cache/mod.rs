@@ -4,6 +4,7 @@
 
 mod config;
 mod eligibility;
+mod facade;
 mod key;
 mod options;
 mod store;
@@ -12,6 +13,9 @@ pub use config::{
     Config, DEFAULT_ENABLED, DEFAULT_MAX_BODY_SIZE, DEFAULT_MAX_ENTRIES, DEFAULT_TTL_SECONDS,
 };
 pub use eligibility::{Eligibility, eligible};
+pub use facade::{
+    SettleKind, response_cache_build_key, response_cache_eligible, response_cache_settle_kind,
+};
 pub use key::key;
 pub use options::{
     ENABLED_OPTION, MAX_BODY_SIZE_OPTION, MAX_ENTRIES_OPTION, OptionError, TTL_SECONDS_OPTION,
