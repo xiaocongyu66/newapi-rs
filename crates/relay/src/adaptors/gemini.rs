@@ -27,7 +27,6 @@
 //!   oaichat），走 seam 错误。
 //! - openai→gemini / claude→gemini 的**请求**转换归转换切片 seam。
 
-use crate::adaptor::Adaptor as _;
 use crate::adaptor_common::convert_gemini::{
     GeminiChatResponse, finish_reason, response_gemini_chat_2_openai,
     stream_response_gemini_chat_2_openai, usage_from_gemini_metadata,
@@ -1226,6 +1225,7 @@ pub fn native_gemini_embedding_handler(
     if info.is_gemini_batch_embedding {
         #[derive(Default, serde::Deserialize)]
         #[serde(default)]
+        #[allow(dead_code)]
         struct BatchResponse {
             #[serde(rename = "embeddings", default)]
             embeddings: Vec<Value>,
@@ -1239,6 +1239,7 @@ pub fn native_gemini_embedding_handler(
     } else {
         #[derive(Default, serde::Deserialize)]
         #[serde(default)]
+        #[allow(dead_code)]
         struct SingleResponse {
             #[serde(rename = "embedding", default)]
             embedding: Option<Value>,

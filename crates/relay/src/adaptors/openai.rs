@@ -2489,7 +2489,8 @@ pub fn openai_image_stream_handler(
         let raw_bytes = raw.into_bytes();
         last_stream_data = raw_bytes.clone();
         if is_openai_image_stream_error_event(&raw_bytes) {
-            // Go: sr.Error —— 软错误，结束原因由 scanner 裁决。
+            // Go: sr.Error(msg) —— 软错误记录，结束原因由 scanner 裁决。
+            let _soft_error = extract_openai_image_stream_error_message(&raw_bytes);
         }
         if let Ok(chunk) = serde_json::from_slice::<Value>(&raw_bytes) {
             if let Some(usage_value) = chunk.get("usage")
@@ -2919,23 +2920,14 @@ mod tests {
             request: OutboundRequest,
         ) -> Pin<Box<dyn Future<Output = Result<OutboundResponse, String>> + Send + 'a>> {
             self.captured.lock().expect("poisoned").push(request);
-            // 在 async 块外物化响应体：Box<dyn ByteStream> 非 Sync，引用不能
-            // 进入 Send future。
-            let status = self.response.status;
-            let headers = self.response.headers.clone();
-            let full_body = match &self.response.body {
-                OutboundResponseBody::Full(bytes) => Some(bytes.clone()),
-                OutboundResponseBody::Stream(_) => None,
-            };
+            let status = self.status;
+            let headers = self.headers.clone();
+            let body = self.body.clone();
             Box::pin(async move {
-                debug_assert!(
-                    full_body.is_some(),
-                    "stub transport is not configured as a stream"
-                );
                 Ok(OutboundResponse {
                     status,
                     headers,
-                    body: OutboundResponseBody::Full(full_body.unwrap_or_default()),
+                    body: OutboundResponseBody::Full(body),
                 })
             })
         }
