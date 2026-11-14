@@ -918,12 +918,12 @@ async fn postgres_contract() {
             "subscription_pre_consume_records_id_seq",
             "logs_id_seq",
         ] {
-            let _ = sqlx::query(&format!(
+            // setval 序列名来自测试常量表（非用户输入）：AssertSqlSafe 审计面。
+            let sql = format!(
                 r#"SELECT setval('{table}', COALESCE((SELECT MAX(id) FROM "{}" ), 1))"#,
                 table.strip_suffix("_id_seq").unwrap_or(table)
-            ))
-            .execute(pool)
-            .await;
+            );
+            let _ = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await;
         }
     });
     run_contract(&db).await;
