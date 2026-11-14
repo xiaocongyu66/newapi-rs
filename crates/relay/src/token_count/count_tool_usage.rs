@@ -511,7 +511,13 @@ mod tests {
             observe: fn(&mut ImageGenerationCallCounter),
             want: i64,
         }
-        let item = |id: &str, call_id: &str, status: &str, result: &str, item_type: &str| {
+        fn item(
+            id: &str,
+            call_id: &str,
+            status: &str,
+            result: &str,
+            item_type: &str,
+        ) -> ResponsesOutputInput {
             ResponsesOutputInput {
                 item_type: item_type.to_owned(),
                 id: id.to_owned(),
@@ -519,7 +525,7 @@ mod tests {
                 status: status.to_owned(),
                 result: result.to_owned(),
             }
-        };
+        }
         let cases = vec![
             Case {
                 name: "one final result",

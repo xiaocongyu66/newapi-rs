@@ -561,7 +561,7 @@ mod tests {
             "model": "gpt-5-chat",
             "messages": [{"role": "user", "content": "hello world"}],
         });
-        let mut meta = chat_request_token_count_meta(&request);
+        let meta = chat_request_token_count_meta(&request);
         let text_tokens = tokenize_text::count_text_token(&meta.combine_text, "gpt-5-chat");
         let inputs = EstimateInputs {
             relay_format: crate::relay_info::relay_format::OPENAI.to_owned(),
