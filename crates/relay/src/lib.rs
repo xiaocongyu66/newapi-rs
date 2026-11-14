@@ -5,8 +5,10 @@
 
 pub mod adaptor;
 pub mod channel_prompt;
+pub mod channel_select;
 pub mod classify_billing;
 pub mod client_ban;
+pub mod dispatch;
 pub mod insight_client;
 pub mod normalize_relay_values;
 pub mod param_override;

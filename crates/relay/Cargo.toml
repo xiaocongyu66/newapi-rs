@@ -16,3 +16,6 @@ url = "=2.5.8"
 sha2 = "=0.10.9"
 
 [dev-dependencies]
+# auto 分组游走改为 RPITIT 异步端口后的契约测试执行器（rt + macros；
+# 版本与 workspace 钉版一致，锁内已有）。
+tokio = { version = "=1.54.1", features = ["rt"] }

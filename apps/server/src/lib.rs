@@ -39,6 +39,7 @@ pub mod qqbot;
 pub mod readonly_http;
 pub mod redemption_http;
 pub mod register_http;
+pub mod relay_dispatch;
 pub mod relay_http;
 pub mod request_lang;
 pub mod reset_http;

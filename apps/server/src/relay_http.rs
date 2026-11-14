@@ -45,7 +45,6 @@ use crate::AppState;
 const MSG_DATABASE_ERROR: &str = "common.database_error";
 const MSG_TOKEN_INVALID: &str = "token.invalid";
 const MSG_USER_BANNED: &str = "auth.user_banned";
-const MSG_NO_AVAILABLE_CHANNEL: &str = "distributor.no_available_channel";
 const MSG_CLIENT_BAN_GLOBAL: &str = "您使用的客户端已被站点管理员封禁";
 const MSG_CLIENT_BAN_USER: &str = "该客户端已被管理员对您的账号禁用";
 
@@ -74,7 +73,13 @@ pub struct RelayTokenIdentity {
     pub token_model_limit_enabled: bool,
     pub token_model_limit: String,
     pub token_auto_groups: Vec<String>,
+    /// Go `GetRequestAutoGroups`：令牌 auto 分组快照是否存在（存在即为
+    /// 显式快照，空列表亦然，不回退全局 Auto）。
+    pub token_auto_groups_set: bool,
     pub token_cross_group_retry: bool,
+    /// Go `GetMaxTokenAutoGroups`（出厂默认 5）。
+    pub max_token_auto_groups: usize,
+    pub username: String,
     /// 管理员通过 `key-<channelId>` 指定的渠道 ID（非管理员被 403 拦截）。
     pub specific_channel_id: Option<String>,
 }
@@ -461,7 +466,11 @@ pub async fn token_auth(State(state): State<AppState>, request: Request, next: N
         token_model_limit_enabled: token.model_limits_enabled,
         token_model_limit: token.model_limits.clone(),
         token_auto_groups: auto_groups,
+        token_auto_groups_set: !token.auto_groups.is_empty(),
         token_cross_group_retry: token.cross_group_retry,
+        // Go resolve_group.go DefaultMaxTokenAutoGroups = 5。
+        max_token_auto_groups: 5,
+        username: profile.username.clone(),
         specific_channel_id,
     };
     let mut request = request;
@@ -765,25 +774,17 @@ pub fn relay_routes(state: AppState) -> Router<AppState> {
 // 入口 handler
 // ---------------------------------------------------------------------------
 
-/// relay 入口的公共前半段：凭据身份 → relay info 构建 → 参数覆盖上下文。
-/// 渠道选择（Go Distribute）属其他切片；本切片终点是对 Distribute 的
-/// 拦截契约回放：模型无可用渠道时 503（Go distribute_channel.go:180）。
-async fn relay_entry_core(request: Request, relay_format: &'static str) -> Response {
+/// relay 入口：凭据身份 → Distribute 渠道选择 → relay 主链
+/// （预扣费 → adaptor 调用链 → 结算/退款），契约见 relay_dispatch.rs。
+async fn relay_entry_core(
+    State(state): State<AppState>,
+    request: Request,
+    relay_format: &'static str,
+) -> Response {
     let request_id = request_id_of(&request);
     let language = request_language(&request);
     let identity = request.extensions().get::<RelayTokenIdentity>().cloned();
     let path = request.uri().path().to_owned();
-    let is_stream = false; // stream 判定属 dispatch 切片；命中分发前不影响契约
-
-    let headers: Vec<(String, String)> = request
-        .headers()
-        .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|v| (k.as_str().to_owned(), v.to_owned()))
-        })
-        .collect();
 
     let body = match to_bytes(request.into_body(), 64 * 1024 * 1024).await {
         Ok(body) => body,
@@ -798,127 +799,105 @@ async fn relay_entry_core(request: Request, relay_format: &'static str) -> Respo
     };
     let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
 
-    let model = payload
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
-
-    let input = newapi_relay::relay_info::RelayInfoInput {
-        request_start_time_ms: 0,
-        token_group: identity
-            .as_ref()
-            .map(|i| i.token_group.clone())
-            .unwrap_or_default(),
-        user_group: identity
-            .as_ref()
-            .map(|i| i.user_group.clone())
-            .unwrap_or_default(),
-        request_id: request_id.clone(),
-        user_id: identity.as_ref().map(|i| i.user_id).unwrap_or_default(),
-        using_group: identity
-            .as_ref()
-            .map(|i| i.using_group.clone())
-            .unwrap_or_default(),
-        user_quota: identity
-            .as_ref()
-            .map(|i| i.token_remain_quota)
-            .unwrap_or_default(),
-        user_email: String::new(),
-        origin_model_name: model.clone(),
-        token_id: identity.as_ref().map(|i| i.token_id).unwrap_or_default(),
-        token_key: identity
-            .as_ref()
-            .map(|i| i.token_key.clone())
-            .unwrap_or_default(),
-        token_unlimited: identity
-            .as_ref()
-            .map(|i| i.token_unlimited_quota)
-            .unwrap_or_default(),
-        path: path.clone(),
-        request_uri: path,
-        request_headers: headers,
-        estimated_tokens: 0,
-        user_setting_raw: Value::Null,
-        relay_mode_fallback: 0,
-        is_stream,
-    };
-    let mut info = match newapi_relay::relay_info::gen_relay_info(relay_format, &input, &payload) {
-        Ok(info) => info,
-        Err(_) => {
-            return abort_with_openai_message(
-                StatusCode::BAD_REQUEST,
-                "invalid relay format",
-                "",
-                &request_id,
-            );
-        }
+    let Some(identity) = identity else {
+        // 无身份（测试直调或链序断裂）：复刻 Go TokenAuth 缺席时的统一 401。
+        return abort_with_openai_message(
+            StatusCode::UNAUTHORIZED,
+            &translate(
+                &language,
+                MSG_TOKEN_INVALID,
+                std::iter::empty::<(&str, &str)>(),
+            ),
+            "",
+            &request_id,
+        );
     };
 
-    // 参数覆盖：无渠道（Distribute 未接线）时 ChannelMeta 为空 →
-    // 上下文仍完整构建（user/model/retry 等字段与 Go 一致），无渠道级
-    // operations 可应用。计费端口调用点：预扣费会话由 billing 切片在
-    // Distribute 之后创建，这里保留调用位（trait 注入替身）。
-    let _override_ctx = newapi_relay::param_override::build_param_override_context(&info);
-    info.append_request_conversion(relay_format);
-
-    // Distribute 拦截契约：无可用渠道。
-    let group = info.using_group.clone();
-    let message = translate(
-        &language,
-        MSG_NO_AVAILABLE_CHANNEL,
-        [("Group", group), ("Model", model)],
-    );
-    abort_with_openai_message(
-        StatusCode::SERVICE_UNAVAILABLE,
-        &message,
-        "model_not_found",
-        &request_id,
+    // 主链（Distribute → 预扣费 → adaptor 调用链 → 结算/退款）。
+    crate::relay_dispatch::relay_chain(
+        state,
+        crate::relay_dispatch::RelayChainInput {
+            relay_format,
+            request_id,
+            language,
+            identity,
+            path,
+            payload,
+        },
     )
+    .await
 }
 
-async fn relay_entry_openai(request: Request) -> Response {
-    relay_entry_core(request, newapi_relay::relay_info::relay_format::OPENAI).await
-}
-
-async fn relay_entry_claude(request: Request) -> Response {
-    relay_entry_core(request, newapi_relay::relay_info::relay_format::CLAUDE).await
-}
-
-async fn relay_entry_openai_responses(request: Request) -> Response {
+async fn relay_entry_openai(State(state): State<AppState>, request: Request) -> Response {
     relay_entry_core(
+        State(state),
+        request,
+        newapi_relay::relay_info::relay_format::OPENAI,
+    )
+    .await
+}
+
+async fn relay_entry_claude(State(state): State<AppState>, request: Request) -> Response {
+    relay_entry_core(
+        State(state),
+        request,
+        newapi_relay::relay_info::relay_format::CLAUDE,
+    )
+    .await
+}
+
+async fn relay_entry_openai_responses(State(state): State<AppState>, request: Request) -> Response {
+    relay_entry_core(
+        State(state),
         request,
         newapi_relay::relay_info::relay_format::OPENAI_RESPONSES,
     )
     .await
 }
 
-async fn relay_entry_image(request: Request) -> Response {
+async fn relay_entry_image(State(state): State<AppState>, request: Request) -> Response {
     relay_entry_core(
+        State(state),
         request,
         newapi_relay::relay_info::relay_format::OPENAI_IMAGE,
     )
     .await
 }
 
-async fn relay_entry_embedding(request: Request) -> Response {
-    relay_entry_core(request, newapi_relay::relay_info::relay_format::EMBEDDING).await
+async fn relay_entry_embedding(State(state): State<AppState>, request: Request) -> Response {
+    relay_entry_core(
+        State(state),
+        request,
+        newapi_relay::relay_info::relay_format::EMBEDDING,
+    )
+    .await
 }
 
-async fn relay_entry_audio(request: Request) -> Response {
+async fn relay_entry_audio(State(state): State<AppState>, request: Request) -> Response {
     relay_entry_core(
+        State(state),
         request,
         newapi_relay::relay_info::relay_format::OPENAI_AUDIO,
     )
     .await
 }
 
-async fn relay_entry_rerank(request: Request) -> Response {
-    relay_entry_core(request, newapi_relay::relay_info::relay_format::RERANK).await
+async fn relay_entry_rerank(State(state): State<AppState>, request: Request) -> Response {
+    relay_entry_core(
+        State(state),
+        request,
+        newapi_relay::relay_info::relay_format::RERANK,
+    )
+    .await
 }
 
-async fn relay_entry_gemini(request: Request) -> Response {
-    relay_entry_core(request, newapi_relay::relay_info::relay_format::GEMINI).await
+async fn relay_entry_gemini(State(state): State<AppState>, request: Request) -> Response {
+    relay_entry_core(
+        State(state),
+        request,
+        newapi_relay::relay_info::relay_format::GEMINI,
+    )
+    .await
 }
 
 /// Go `/v1/models` 列表：渠道目录依赖（ratio/catalog 切片）未移植，路由
@@ -960,9 +939,12 @@ async fn retrieve_model_entry(request: Request) -> Response {
 
 /// `/v1/models/{*path}` 方法分流：GET = RetrieveModel（单段 = model 名），
 /// POST = Relay(Gemini)（register_relay.go:714-721, 831-833）。
-async fn models_path_dispatch(request: axum::extract::Request) -> Response {
+async fn models_path_dispatch(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Response {
     if request.method() == axum::http::Method::POST {
-        relay_entry_gemini(request).await
+        relay_entry_gemini(State(state), request).await
     } else {
         retrieve_model_entry(request).await
     }
