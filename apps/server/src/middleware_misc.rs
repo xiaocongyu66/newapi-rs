@@ -893,7 +893,7 @@ pub fn kling_convert(body: &[u8]) -> Option<TaskConversion> {
     Some(TaskConversion {
         body: serde_json::to_vec(&unified).ok()?,
         path: "/v1/video/generations".to_owned(),
-        action_text_generate: !image_present(&object),
+        action_text_generate: !image_present(object),
         task_id: None,
         relay_mode_video_fetch_by_id: false,
         method_get: false,

@@ -93,9 +93,7 @@ impl ModelRateLimitSettings {
         let duration = self.duration_minutes * 60;
         let (total, success) = self
             .group_rate_limit(group)
-            .map_or((self.total_max_count, self.success_max_count), |(t, s)| {
-                (t, s)
-            });
+            .unwrap_or((self.total_max_count, self.success_max_count));
         (duration, total, success)
     }
 }
@@ -255,7 +253,7 @@ pub async fn check_redis_rate_limit(
     if (sub_time as i64) < duration_seconds {
         let minutes = duration_seconds / 60;
         let _: () = connection
-            .expire(key, (minutes.max(1) * 60) as i64)
+            .expire(key, minutes.max(1) * 60)
             .await
             .map_err(|_| ModelRateLimitError::Redis)?;
         return Ok(false);
