@@ -674,7 +674,7 @@ mod tests {
         params: &mut SelectParams,
         config: &AutoGroupConfig,
         lookup: &mut SyncGroupLookup<
-            impl FnMut(&str, i32) -> Result<Option<SelectedRoute>, SelectError>,
+            impl FnMut(&str, i32) -> Result<Option<SelectedRoute>, SelectError> + Send,
         >,
     ) -> Result<(Option<SelectedRoute>, String), SelectError> {
         tokio::runtime::Builder::new_current_thread()

@@ -594,12 +594,12 @@ mod tests {
         // 冷却中 → 504 + Retry-After（向上取整）。
         let terminal = new_failover_terminal_error(None, 4500);
         assert_eq!(terminal.status_code, 504);
-        assert!(terminal.message().contains("5 秒后重试"));
+        assert!(terminal.message.contains("5 秒后重试"));
         assert!(terminal.is_skip_retry());
         // 无冷却 → 503。
         let terminal = new_failover_terminal_error(None, 0);
         assert_eq!(terminal.status_code, 503);
-        assert_eq!(terminal.message(), "所有路由暂时不可用");
+        assert_eq!(terminal.message, "所有路由暂时不可用");
         // 池饱和：槽满 429 是权威。
         let slot_full = new_concurrency_slot_full_error();
         let terminal = terminal_failover_error(Some(slot_full.clone()), Some(stashed), 5000);
