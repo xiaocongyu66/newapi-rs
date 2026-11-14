@@ -53,9 +53,8 @@ use newapi_relay::dispatch::{
     RelayAttemptError, RelayAttemptKind, classify_attempt, should_retry, terminal_failover_error,
 };
 use newapi_relay::relay_info::relay_format;
-use newapi_relay::relay_info::relay_mode as relay_mode_consts;
 use newapi_relay::relay_info::{ChannelMetaSnapshot, RelayInfo};
-use newapi_relay::relay_mode as relay_mode_table;
+use newapi_relay::relay_mode as relay_mode_consts;
 
 use crate::AppState;
 use crate::relay_http::{RelayTokenIdentity, abort_with_openai_message};
@@ -179,7 +178,7 @@ async fn route_candidates(
     db: &newapi_storage::Database,
     alias: &str,
 ) -> Result<Vec<RouteCandidate>, sqlx::Error> {
-    #[derive(sqlx::FromRow)]
+    // 手工行投影（sqlx 无 derive 宏面；对齐 channels/store.rs 的具现约定）。
     struct Row {
         id: i64,
         channel_id: i64,
@@ -187,25 +186,45 @@ async fn route_candidates(
         upstream_model: String,
         static_weight: i64,
     }
+    fn row_of(row: &sqlx::sqlite::SqliteRow) -> Result<Row, sqlx::Error> {
+        Ok(Row {
+            id: row.try_get("id")?,
+            channel_id: row.try_get("channel_id")?,
+            key_index: row.try_get("key_index")?,
+            upstream_model: row.try_get("upstream_model")?,
+            static_weight: row.try_get("static_weight")?,
+        })
+    }
+    fn row_of_pg(row: &sqlx::postgres::PgRow) -> Result<Row, sqlx::Error> {
+        Ok(Row {
+            id: row.try_get("id")?,
+            channel_id: row.try_get("channel_id")?,
+            key_index: row.try_get("key_index")?,
+            upstream_model: row.try_get("upstream_model")?,
+            static_weight: row.try_get("static_weight")?,
+        })
+    }
     let rows: Vec<Row> = match db {
-        newapi_storage::Database::Sqlite(pool) => {
-            sqlx::query_as(
-                "SELECT id, channel_id, key_index, upstream_model, static_weight \
-                 FROM channel_model_routes WHERE public_model_alias = ? AND enabled = 1",
-            )
-            .bind(alias)
-            .fetch_all(pool)
-            .await?
-        }
-        newapi_storage::Database::Postgres(pool) => {
-            sqlx::query_as(
-                "SELECT id, channel_id, key_index, upstream_model, static_weight \
-                 FROM channel_model_routes WHERE public_model_alias = $1 AND enabled = TRUE",
-            )
-            .bind(alias)
-            .fetch_all(pool)
-            .await?
-        }
+        newapi_storage::Database::Sqlite(pool) => sqlx::query(
+            "SELECT id, channel_id, key_index, upstream_model, static_weight \
+             FROM channel_model_routes WHERE public_model_alias = ? AND enabled = 1",
+        )
+        .bind(alias)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(row_of)
+        .collect::<Result<Vec<Row>, sqlx::Error>>()?,
+        newapi_storage::Database::Postgres(pool) => sqlx::query(
+            "SELECT id, channel_id, key_index, upstream_model, static_weight \
+             FROM channel_model_routes WHERE public_model_alias = $1 AND enabled = TRUE",
+        )
+        .bind(alias)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(row_of_pg)
+        .collect::<Result<Vec<Row>, sqlx::Error>>()?,
     };
     Ok(rows
         .into_iter()
@@ -1052,7 +1071,7 @@ pub async fn relay_chain(state: AppState, input: RelayChainInput) -> Response {
     let model_request = model_request_from(&input.path, &input.payload);
     let fallback_mode = model_request
         .relay_mode_override
-        .unwrap_or(relay_mode_table::RELAY_MODE_UNKNOWN);
+        .unwrap_or(relay_mode_consts::RELAY_MODE_UNKNOWN);
     let is_stream = input
         .payload
         .get("stream")
@@ -1360,7 +1379,7 @@ pub async fn relay_chain(state: AppState, input: RelayChainInput) -> Response {
     tracing::warn!(
         event = "relay_error",
         request_id = request_id,
-        used_channels = used_channels.as_slice(),
+        used_channels = ?used_channels,
         "relay error: {}",
         error.message
     );
