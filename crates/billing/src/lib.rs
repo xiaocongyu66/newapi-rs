@@ -6,8 +6,11 @@
 
 pub mod billing_options;
 pub mod billing_session;
+pub mod channel_balance;
 pub mod checkin;
 mod go_options;
+pub mod monitor_setting;
+pub mod notify_user_hook;
 pub mod qq_bot;
 pub mod quota_display;
 pub mod redemption;
