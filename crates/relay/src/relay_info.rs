@@ -120,6 +120,12 @@ pub struct RelayInfo {
     pub responses_builtin_tools: Vec<BuiltInToolInfo>,
     /// ClaudeConvertInfo.LastMessagesType。
     pub claude_last_messages_type: Option<String>,
+    /// Go `convmeta.ClaudeConvertInfo`：OpenAI chat → Claude Messages 流转换
+    /// 状态（EnsureClaudeConvertInfo 懒创建，会话内复用同一实例）。
+    pub claude_convert_info: Option<crate::convmeta::ClaudeConvertInfo>,
+    /// Go `RelayInfo.ConvOptions()`：请求级转换选项快照（宿主从设置系统
+    /// 构建；零值 = 所有适配关闭）。
+    pub conv_options: crate::convmeta::ConvOptions,
 
     // ---- ChannelMeta ----
     pub channel_meta: Option<ChannelMeta>,
@@ -307,6 +313,7 @@ pub fn gen_relay_info_claude(input: &RelayInfoInput) -> RelayInfo {
     info.relay_format = relay_format::CLAUDE.to_owned();
     info.should_include_usage = false;
     info.claude_last_messages_type = Some(last_message_type::NONE.to_owned());
+    info.claude_convert_info = Some(crate::convmeta::ClaudeConvertInfo::new());
     info.is_claude_beta_query = false; // query beta=true 由装配层传入
     info
 }
@@ -574,6 +581,76 @@ pub struct ChannelMetaSnapshot {
     pub channel_setting: serde_json::Value,
     pub channel_other_settings: serde_json::Value,
     pub pass_through_request_enabled: bool,
+}
+
+/// Go `convmeta.Meta` 在宿主侧由 `*relaycommon.RelayInfo` 实现
+/// （convmeta/meta.go:16-18 的契约）。Claude 流转换状态与 ConvOptions
+/// 快照作为 [`RelayInfo`] 的新增字段按会话生命周期存储（Go 挂在
+/// RelayInfo 上的同名结构）。
+impl crate::convmeta::ConvMeta for RelayInfo {
+    fn get_origin_model_name(&self) -> &str {
+        &self.origin_model_name
+    }
+
+    fn get_upstream_model_name(&self) -> &str {
+        match &self.channel_meta {
+            Some(meta) => &meta.upstream_model_name,
+            None => "",
+        }
+    }
+
+    fn has_channel_meta(&self) -> bool {
+        self.channel_meta.is_some()
+    }
+
+    fn get_channel_id(&self) -> i64 {
+        self.channel_meta.as_ref().map_or(0, |m| m.channel_id)
+    }
+
+    fn get_channel_type(&self) -> i32 {
+        self.channel_meta.as_ref().map_or(0, |m| m.channel_type)
+    }
+
+    fn get_is_stream(&self) -> bool {
+        self.is_stream
+    }
+
+    fn get_reasoning_effort(&self) -> &str {
+        &self.reasoning_effort
+    }
+
+    fn set_reasoning_effort(&mut self, effort: &str) {
+        RelayInfo::set_reasoning_effort(self, effort);
+    }
+
+    fn get_estimate_prompt_tokens(&self) -> i64 {
+        RelayInfo::get_estimate_prompt_tokens(self)
+    }
+
+    fn ensure_claude_convert_info(&mut self) -> &mut crate::convmeta::ClaudeConvertInfo {
+        self.claude_convert_info
+            .get_or_insert_with(crate::convmeta::ClaudeConvertInfo::new)
+    }
+
+    fn get_send_response_count(&self) -> i64 {
+        self.send_response_count
+    }
+
+    fn incr_send_response_count(&mut self) {
+        self.send_response_count += 1;
+    }
+
+    fn append_request_conversion(&mut self, format: &str) {
+        RelayInfo::append_request_conversion(self, format);
+    }
+
+    fn conv_options(&self) -> &crate::convmeta::ConvOptions {
+        &self.conv_options
+    }
+
+    fn conv_options_mut(&mut self) -> &mut crate::convmeta::ConvOptions {
+        &mut self.conv_options
+    }
 }
 
 /// Go `streamSupportedChannels`（build_relay_info.go:347-370）。
