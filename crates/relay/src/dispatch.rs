@@ -531,15 +531,16 @@ mod tests {
             classify_attempt(Some(&error(413, "bad_response_status_code"))),
             RelayAttemptKind::Fatal
         );
-        // 无上游状态/1xx/3xx：换道留在桌上。
+        // 无上游状态/1xx/3xx/2xx：换道留在桌上（Go 的
+        // `StatusCode < StatusBadRequest` 臂覆盖全部 <400 码；2xx 带错误体
+        // 的重试资格由 should_retry 的状态码表否决，分类面恒 Retryable）。
         assert_eq!(
             classify_attempt(Some(&error(302, "bad_response_status_code"))),
             RelayAttemptKind::Retryable
         );
-        // 2xx 带错误体：直通。
         assert_eq!(
             classify_attempt(Some(&error(200, "bad_response_body"))),
-            RelayAttemptKind::Fatal
+            RelayAttemptKind::Retryable
         );
     }
 
