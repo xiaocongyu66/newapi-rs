@@ -69,7 +69,7 @@ impl MonitorSetting {
             self.channel_test_mode = CHANNEL_TEST_MODE_SCHEDULED_ALL.to_owned();
         }
         if let Some(enabled) = channel_test_enabled
-            && let Ok(parsed) = parse_strconv_bool(enabled)
+            && let Some(parsed) = parse_strconv_bool(enabled)
         {
             self.auto_test_channel_enabled = parsed;
         }
@@ -85,9 +85,14 @@ impl MonitorSetting {
 
 /// Go `strconv.ParseBool`'s exact accepted spellings (no trimming — Go parses
 /// the raw env var / option value); the settings registry's bool loader keeps
-/// the current value on any other spelling.
-fn parse_strconv_bool(value: &str) -> Result<bool, std::str::ParseBoolError> {
-    value.parse()
+/// the current value on any other spelling. Rust's `bool::from_str` only
+/// accepts "true"/"false", so the spellings are spelled out.
+fn parse_strconv_bool(value: &str) -> Option<bool> {
+    match value {
+        "1" | "t" | "T" | "true" | "TRUE" | "True" => Some(true),
+        "0" | "f" | "F" | "false" | "FALSE" | "False" => Some(false),
+        _ => None,
+    }
 }
 
 async fn read_option(db: &Database, key: &str) -> Option<String> {
@@ -117,7 +122,7 @@ async fn read_option(db: &Database, key: &str) -> Option<String> {
 pub async fn load_monitor_setting(db: &Database) -> MonitorSetting {
     let mut setting = MonitorSetting::default();
     if let Some(raw) = read_option(db, MONITOR_AUTO_TEST_ENABLED_OPTION).await
-        && let Ok(parsed) = parse_strconv_bool(&raw)
+        && let Some(parsed) = parse_strconv_bool(&raw)
     {
         setting.auto_test_channel_enabled = parsed;
     }

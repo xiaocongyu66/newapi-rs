@@ -170,7 +170,10 @@ impl<'a> BalanceChannel<'a> {
 
 #[derive(serde::Deserialize)]
 struct OpenAISubscriptionResponse {
+    // Go's json.Unmarshal leaves missing fields at their zero values.
+    #[serde(default)]
     has_payment_method: bool,
+    #[serde(default)]
     hard_limit_usd: f64,
 }
 
@@ -187,6 +190,8 @@ struct AIProxyUserOverviewResponse {
     message: String,
     #[serde(default)]
     error_code: i64,
+    // Go's json.Unmarshal leaves a missing struct field at its zero value.
+    #[serde(default)]
     data: AIProxyOverviewData,
 }
 
@@ -213,6 +218,7 @@ struct SiliconFlowUsageResponse {
     code: i64,
     #[serde(default)]
     message: String,
+    #[serde(default)]
     data: SiliconFlowData,
 }
 
@@ -236,6 +242,7 @@ struct DeepSeekBalanceInfo {
 
 #[derive(serde::Deserialize)]
 struct OpenRouterCreditResponse {
+    #[serde(default)]
     data: OpenRouterCreditData,
 }
 
@@ -253,6 +260,7 @@ struct MoonshotBalanceResponse {
     #[serde(default)]
     scode: String,
     status: bool,
+    #[serde(default)]
     data: MoonshotBalanceData,
 }
 
