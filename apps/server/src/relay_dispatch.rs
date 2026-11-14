@@ -618,7 +618,7 @@ pub async fn distribute_select(
     // ── specific channel 指定（管理员 key-<id> 语法，distribute_channel.go:44-66）
     if let Some(specific_id) = identity.specific_channel_id.as_deref() {
         let Ok(id) = specific_id.parse::<i64>() else {
-            return Err(abort_with_openai_message(
+            return Err(Box::new(abort_with_openai_message(
                 StatusCode::BAD_REQUEST,
                 &newapi_i18n::translate(
                     language,
@@ -627,7 +627,7 @@ pub async fn distribute_select(
                 ),
                 "",
                 request_id,
-            ));
+            )));
         };
         let repository = ChannelRepository::new(db.clone());
         let channel = repository.by_id(id, true).await.map_err(|_| {
@@ -639,7 +639,7 @@ pub async fn distribute_select(
             )
         })?;
         let Some(channel) = channel else {
-            return Err(abort_with_openai_message(
+            return Err(Box::new(abort_with_openai_message(
                 StatusCode::BAD_REQUEST,
                 &newapi_i18n::translate(
                     language,
@@ -648,10 +648,10 @@ pub async fn distribute_select(
                 ),
                 "",
                 request_id,
-            ));
+            )));
         };
         if channel.status != CHANNEL_STATUS_ENABLED {
-            return Err(abort_with_openai_message(
+            return Err(Box::new(abort_with_openai_message(
                 StatusCode::FORBIDDEN,
                 &newapi_i18n::translate(
                     language,
@@ -660,7 +660,7 @@ pub async fn distribute_select(
                 ),
                 "",
                 request_id,
-            ));
+            )));
         }
         let route = selected_route_from_channel(db, &channel, model, &identity.using_group)
             .await
@@ -693,7 +693,7 @@ pub async fn distribute_select(
             .collect();
         if limit.is_empty() {
             // 限额开着但列表为空：全部模型拒绝（Go tokenModelLimit 缺失臂）。
-            return Err(abort_with_openai_message(
+            return Err(Box::new(abort_with_openai_message(
                 StatusCode::FORBIDDEN,
                 &newapi_i18n::translate(
                     language,
@@ -702,7 +702,7 @@ pub async fn distribute_select(
                 ),
                 "",
                 request_id,
-            ));
+            )));
         }
         let match_name = format_matching_model_name(model); // gpts / thinking-* 匹配
         if !limit.contains(&match_name) && !limit.contains(model) {
@@ -711,18 +711,18 @@ pub async fn distribute_select(
                 "distributor.token_model_forbidden",
                 [("Model", model.to_owned())],
             );
-            return Err(abort_with_openai_message(
+            return Err(Box::new(abort_with_openai_message(
                 StatusCode::FORBIDDEN,
                 &message,
                 "",
                 request_id,
-            ));
+            )));
         }
     }
 
     // ── 模型名必填（distribute_channel.go:89-93）────────────────────────
     if model.is_empty() {
-        return Err(abort_with_openai_message(
+        return Err(Box::new(abort_with_openai_message(
             StatusCode::BAD_REQUEST,
             &newapi_i18n::translate(
                 language,
@@ -731,7 +731,7 @@ pub async fn distribute_select(
             ),
             "",
             request_id,
-        ));
+        )));
     }
 
     // ── 渠道选择（distribute_channel.go:156-184）────────────────────────
@@ -787,12 +787,12 @@ pub async fn distribute_select(
             "distributor.no_available_channel",
             [("Group", show_group), ("Model", model.to_owned())],
         );
-        return Err(abort_with_openai_message(
+        return Err(Box::new(abort_with_openai_message(
             StatusCode::SERVICE_UNAVAILABLE,
             &message,
             "model_not_found",
             request_id,
-        ));
+        )));
     };
 
     // 渠道行复取（带 key）以绑定上下文（Go SetupContextForSelectedChannel 前
@@ -810,7 +810,7 @@ pub async fn distribute_select(
             )
         })?;
     let Some(channel) = channel else {
-        return Err(abort_with_openai_message(
+        return Err(Box::new(abort_with_openai_message(
             StatusCode::SERVICE_UNAVAILABLE,
             &newapi_i18n::translate(
                 language,
@@ -819,7 +819,7 @@ pub async fn distribute_select(
             ),
             "model_not_found",
             request_id,
-        ));
+        )));
     };
     Ok(DistributedChannel {
         route,
