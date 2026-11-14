@@ -612,7 +612,7 @@ pub async fn distribute_select(
     model: &str,
     request_id: &str,
     language: &str,
-) -> Result<DistributedChannel, Response> {
+) -> Result<DistributedChannel, Box<Response>> {
     let group_settings: GroupSettings = state.group_settings();
 
     // ── specific channel 指定（管理员 key-<id> 语法，distribute_channel.go:44-66）
@@ -922,8 +922,10 @@ fn model_price_helper(
         Some(price) => (price, true),
         None => (0.0, false),
     };
-    let mut group_ratio_info = GroupRatioInfo::default();
-    group_ratio_info.group_ratio = adapter.group_ratio(&adapter.using_group);
+    let mut group_ratio_info = GroupRatioInfo {
+        group_ratio: adapter.group_ratio(&adapter.using_group),
+        ..GroupRatioInfo::default()
+    };
     if let Some(special) = adapter.group_group_ratio(&adapter.user_group, &adapter.using_group) {
         group_ratio_info.group_special_ratio = special;
         group_ratio_info.group_ratio = special;
@@ -1092,7 +1094,7 @@ pub async fn relay_chain(state: AppState, input: RelayChainInput) -> Response {
     .await
     {
         Ok(distributed) => distributed,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     let input_snapshot = newapi_relay::relay_info::RelayInfoInput {
@@ -1347,15 +1349,15 @@ pub async fn relay_chain(state: AppState, input: RelayChainInput) -> Response {
         );
         // 分层计费覆盖（Go TryTieredSettle）属分层表达式计费切片，未合流：
         // 非分层路径直接采用 summary.quota。
-        if let Some(session) = session.as_mut() {
-            if let Err(error) = session.settle_billing(summary.quota).await {
-                tracing::error!(
-                    event = "settle_billing_failed",
-                    request_id = request_id,
-                    "settle billing failed: {}",
-                    error.message
-                );
-            }
+        if let Some(session) = session.as_mut()
+            && let Err(error) = session.settle_billing(summary.quota).await
+        {
+            tracing::error!(
+                event = "settle_billing_failed",
+                request_id = request_id,
+                "settle billing failed: {}",
+                error.message
+            );
         }
         record_consume_log_quiet(
             &db,
