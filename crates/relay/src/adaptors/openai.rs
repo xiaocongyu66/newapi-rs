@@ -3079,6 +3079,7 @@ mod tests {
         info.channel_meta.as_mut().expect("meta").channel_base_url =
             "https://proxy.example.com/{model}/v1".to_owned();
         info.channel_meta.as_mut().expect("meta").channel_type = ct::CUSTOM;
+        let adaptor = OpenAiAdaptor::new();
         assert_eq!(
             adaptor.get_request_url(&mut info).expect("url"),
             "https://proxy.example.com/gpt-4o/v1"
