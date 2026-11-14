@@ -182,7 +182,7 @@ pub fn setup_api_request_header(
         accept
     };
     if !accept.is_empty() {
-        headers.push(("Accept".to_owned(), accept));
+        headers.push(("Accept".to_owned(), accept.to_owned()));
     }
     headers
 }

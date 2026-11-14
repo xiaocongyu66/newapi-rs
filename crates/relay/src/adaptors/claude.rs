@@ -14,7 +14,6 @@
 //! 已知偏差：openai→claude 的**请求**转换（Go `relayconvert.ConvertRequest`）
 //! 归转换切片 seam；本适配器原生 claude→openai **响应**/流事件转换子集已移植。
 
-use crate::adaptor::Adaptor as _;
 use crate::adaptor_common::convert_claude::{
     ClaudeResponse, ClaudeResponseInfo, build_message_delta_patch_usage,
     build_openai_style_usage_from_claude_usage, format_claude_response_info,
@@ -620,6 +619,7 @@ pub const USAGE_SEMANTIC_ANTHROPIC: &str = "anthropic";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adaptor::Adaptor as _;
     use crate::adaptor_common::{OutboundRequest, OutboundResponseBody, OutboundTransport};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
