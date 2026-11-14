@@ -47,6 +47,7 @@ use axum::{
 use redis::{Script, aio::MultiplexedConnection};
 use serde_json::json;
 
+use crate::AppState;
 use crate::relay_http::{RelayTokenIdentity, abort_with_openai_message};
 
 /// Go `ModelRequestRateLimitCountMark` / `ModelRequestRateLimitSuccessCountMark`
@@ -317,7 +318,7 @@ pub async fn record_redis_request(
     let _: Result<(), _> = async {
         let () = connection.lpush::<_, _, ()>(key, stamp).await?;
         let () = connection
-            .ltrim::<_, ()>(key, 0, (max_count - 1).max(0))
+            .ltrim::<_, ()>(key, 0, (max_count - 1).max(0) as isize)
             .await?;
         let () = connection.expire::<_, ()>(key, minutes * 60).await?;
         Ok(())

@@ -24,7 +24,12 @@
 
 use std::time::Duration;
 
-use axum::{Json, Response, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde_json::{Value, json};
 
 use crate::AppState;
@@ -304,6 +309,12 @@ mod tests {
 
     struct FakeFetcher {
         routes: Vec<(&'static str, Result<&'static str, String>)>,
+    }
+
+    impl FakeFetcher {
+        fn new(routes: Vec<(&'static str, Result<&'static str, String>)>) -> Self {
+            Self { routes }
+        }
     }
 
     impl UptimeFetcher for FakeFetcher {
