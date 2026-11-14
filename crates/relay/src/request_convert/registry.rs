@@ -658,8 +658,8 @@ mod tests {
         let err = convert_request(
             &mut meta,
             formats::GEMINI,
-            &json!({"model": "gemini-test", "contents": []}),
-            Some(RequestKind::GeminiChat),
+            &json!({"model": "gpt-5", "input": []}),
+            Some(RequestKind::OpenAIResponses),
         )
         .expect_err("route must be missing");
         assert!(err.contains("is not registered"), "got: {err}");
