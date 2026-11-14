@@ -3036,7 +3036,7 @@ mod tests {
         let adaptor = OpenAiAdaptor::new();
         assert_eq!(
             adaptor.get_request_url(&mut info).expect("url"),
-            "https://x.openai.azure.com/openai/deployments/gpt41mini/chat/completions?api-version=2025-04-01-preview"
+            "https://x.openai.azure.com/openai/deployments/gpt-41-mini/chat/completions?api-version=2025-04-01-preview"
         );
     }
 
