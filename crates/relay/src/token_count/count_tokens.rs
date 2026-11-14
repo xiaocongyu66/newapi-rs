@@ -559,12 +559,10 @@ pub fn count_token_realtime(
                 }
             }
         }
-        realtime_event::RESPONSE_DONE => {
-            if !is_first_request {
-                for tool in &event.realtime_tools {
-                    text_token += 8;
-                    text_token += count_token_input_string(tool, model);
-                }
+        realtime_event::RESPONSE_DONE if !is_first_request => {
+            for tool in &event.realtime_tools {
+                text_token += 8;
+                text_token += count_token_input_string(tool, model);
             }
         }
         _ => {}

@@ -14,52 +14,60 @@ use serde_json::{Map, Value};
 
 use super::key::key;
 
+/// RelayInfo / global inputs that gate cache eligibility (Go reads these
+/// off RelayInfo and the option-backed globals inside `responseCacheEligible`).
+#[derive(Clone, Debug)]
+pub struct EligibilityContext<'a> {
+    /// Go `info.RelayMode == relayconstant.RelayModeChatCompletions`.
+    pub relay_mode_chat_completions: bool,
+    /// Go `info.RelayFormat == types.RelayFormatOpenAI`.
+    pub relay_format_openai: bool,
+    /// Go `info.ChannelSetting` wire object.
+    pub channel_setting: &'a Value,
+    /// Go `info.ChannelOtherSettings` wire object.
+    pub channel_other_settings: &'a Value,
+    /// Go `len(info.ParamOverride) > 0`.
+    pub param_override_present: bool,
+    /// Go `model_setting.GetGlobalSettings().PassThroughRequestEnabled`.
+    pub pass_through_request_enabled: bool,
+    /// Go `common.ResponseCacheEnabled`.
+    pub response_cache_enabled: bool,
+}
+
 /// Go `responseCacheEligible` (response_cache.go:41-102) evaluated directly
-/// on the chat request wire object. `relay_mode_chat_completions` /
-/// `relay_format_openai` mirror the RelayInfo fields; the channel-level
-/// inputs are the RelayInfo.ChannelSetting / ChannelOtherSettings /
-/// ParamOverride projections; the globals mirror
-/// `common.ResponseCacheEnabled` and
-/// `model_setting.GetGlobalSettings().PassThroughRequestEnabled`.
-pub fn response_cache_eligible(
-    relay_mode_chat_completions: bool,
-    relay_format_openai: bool,
-    channel_setting: &Value,
-    channel_other_settings: &Value,
-    param_override_present: bool,
-    pass_through_request_enabled: bool,
-    response_cache_enabled: bool,
-    request: &Value,
-) -> bool {
-    if !relay_mode_chat_completions {
+/// on the chat request wire object.
+pub fn response_cache_eligible(ctx: &EligibilityContext<'_>, request: &Value) -> bool {
+    if !ctx.relay_mode_chat_completions {
         return false;
     }
     // Only OpenAI-format output is cached: the replay hardcodes the OpenAI
     // JSON content type.
-    if !relay_format_openai {
+    if !ctx.relay_format_openai {
         return false;
     }
     // Pass-through channels forward the raw provider body; exclude them.
-    let pass_through_body_enabled = channel_setting
+    let pass_through_body_enabled = ctx
+        .channel_setting
         .get("pass_through_body_enabled")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if pass_through_body_enabled || pass_through_request_enabled {
+    if pass_through_body_enabled || ctx.pass_through_request_enabled {
         return false;
     }
     // Channel-level mutations change the response after this eligibility
     // point but are not part of the cache key. Exclude for safety.
-    let system_prompt = channel_setting
+    let system_prompt = ctx
+        .channel_setting
         .get("system_prompt")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if !system_prompt.is_empty() || param_override_present {
+    if !system_prompt.is_empty() || ctx.param_override_present {
         return false;
     }
     // ChannelOtherSettings influences RemoveDisabledFields; treat as
     // ineligible whenever the raw JSON representation is non-empty
     // (Go marshals and checks `len(b) > 2` — "{}" means no settings).
-    let has_other_settings = match channel_other_settings {
+    let has_other_settings = match ctx.channel_other_settings {
         Value::Object(map) => !map.is_empty(),
         Value::Null => false,
         _ => true,
@@ -67,7 +75,7 @@ pub fn response_cache_eligible(
     if has_other_settings {
         return false;
     }
-    if !response_cache_enabled {
+    if !ctx.response_cache_enabled {
         return false;
     }
     // Streaming replays chunk boundaries; v1 caches only buffered bodies.
@@ -182,101 +190,84 @@ mod tests {
         })
     }
 
-    fn eligible_args(request: &Value) -> (bool, bool, Value, Value, bool, bool, bool, &Value) {
-        (
-            true,
-            true,
-            json!({}),
-            json!({}),
-            false,
-            false,
-            true,
-            request,
-        )
+    fn eligible_ctx<'a>(
+        relay_mode_chat_completions: bool,
+        relay_format_openai: bool,
+        channel_setting: &'a Value,
+        channel_other_settings: &'a Value,
+        param_override_present: bool,
+        pass_through_request_enabled: bool,
+        response_cache_enabled: bool,
+    ) -> EligibilityContext<'a> {
+        EligibilityContext {
+            relay_mode_chat_completions,
+            relay_format_openai,
+            channel_setting,
+            channel_other_settings,
+            param_override_present,
+            pass_through_request_enabled,
+            response_cache_enabled,
+        }
     }
 
     /// Go response_cache.go:41-102 — the full gate chain.
     #[test]
     fn eligibility_gate_chain() {
         let request = base_request();
-        assert!(response_cache_eligible(eligible_args(&request)));
+        let cs = json!({});
+        let cos = json!({});
+        let ctx = eligible_ctx(true, true, &cs, &cos, false, false, true);
+        assert!(response_cache_eligible(&ctx, &request));
 
-        // Non-chat mode.
-        let (m, f, cs, cos, po, pt, en, req) = eligible_args(&request);
+        // Non-chat mode / non-OpenAI format.
         assert!(!response_cache_eligible(
-            false, f, &cs, &cos, po, pt, en, req
+            &eligible_ctx(false, true, &cs, &cos, false, false, true),
+            &request
         ));
-        // Non-OpenAI format.
         assert!(!response_cache_eligible(
-            m, false, &cs, &cos, po, pt, en, req
+            &eligible_ctx(true, false, &cs, &cos, false, false, true),
+            &request
         ));
         // Pass-through body / request.
-        let cs = json!({"pass_through_body_enabled": true});
-        assert!(!response_cache_eligible(m, f, &cs, &cos, po, pt, en, req));
-        assert!(!response_cache_eligible(m, f, &cs, &cos, po, true, en, req));
-        // Channel system prompt / param override.
-        let cs = json!({"system_prompt": "be nice"});
-        assert!(!response_cache_eligible(m, f, &cs, &cos, po, pt, en, req));
+        let cs_passthrough = json!({"pass_through_body_enabled": true});
         assert!(!response_cache_eligible(
-            m,
-            f,
-            &json!({}),
-            &cos,
-            true,
-            pt,
-            en,
-            req
+            &eligible_ctx(true, true, &cs_passthrough, &cos, false, false, true),
+            &request
+        ));
+        assert!(!response_cache_eligible(
+            &eligible_ctx(true, true, &cs, &cos, false, true, true),
+            &request
+        ));
+        // Channel system prompt / param override.
+        let cs_prompt = json!({"system_prompt": "be nice"});
+        assert!(!response_cache_eligible(
+            &eligible_ctx(true, true, &cs_prompt, &cos, false, false, true),
+            &request
+        ));
+        assert!(!response_cache_eligible(
+            &eligible_ctx(true, true, &cs, &cos, true, false, true),
+            &request
         ));
         // Channel other settings present.
-        let cos = json!({"disable_store": true});
-        assert!(!response_cache_eligible(m, f, &cs, &cos, po, pt, en, req));
+        let cos_other = json!({"disable_store": true});
+        assert!(!response_cache_eligible(
+            &eligible_ctx(true, true, &cs, &cos_other, false, false, true),
+            &request
+        ));
         // Cache disabled.
         assert!(!response_cache_eligible(
-            m,
-            f,
-            &json!({}),
-            &json!({}),
-            po,
-            pt,
-            false,
-            req
+            &eligible_ctx(true, true, &cs, &cos, false, false, false),
+            &request
         ));
         // Streaming.
         let streaming = json!({"stream": true, "messages": []});
-        assert!(!response_cache_eligible(
-            m,
-            f,
-            &json!({}),
-            &json!({}),
-            po,
-            pt,
-            en,
-            &streaming
-        ));
+        assert!(!response_cache_eligible(&ctx, &streaming));
         // Nonzero temperature.
         let warm = json!({"temperature": 0.7, "messages": []});
-        assert!(!response_cache_eligible(
-            m,
-            f,
-            &json!({}),
-            &json!({}),
-            po,
-            pt,
-            en,
-            &warm
-        ));
+        assert!(!response_cache_eligible(&ctx, &warm));
         // Explicit zero temperature is deterministic → eligible.
         let zero = json!({"temperature": 0, "messages": []});
-        assert!(response_cache_eligible(
-            m,
-            f,
-            &json!({}),
-            &json!({}),
-            po,
-            pt,
-            en,
-            &zero
-        ));
+        assert!(response_cache_eligible(&ctx, &zero));
         // Tooling present.
         for field in [
             "tools",
@@ -288,10 +279,7 @@ mod tests {
             let mut req = serde_json::Map::new();
             req.insert(field.to_owned(), json!([{"type": "function"}]));
             let req = Value::Object(req);
-            assert!(
-                !response_cache_eligible(m, f, &json!({}), &json!({}), po, pt, en, &req),
-                "{field}"
-            );
+            assert!(!response_cache_eligible(&ctx, &req), "{field}");
         }
     }
 

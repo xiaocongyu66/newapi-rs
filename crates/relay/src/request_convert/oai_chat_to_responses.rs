@@ -48,9 +48,7 @@ fn convert_chat_response_format_to_responses_text(
     response_format: Option<&Value>,
 ) -> Option<Value> {
     let raw = response_format?;
-    let Some(map) = raw.as_object() else {
-        return None;
-    };
+    let map = raw.as_object()?;
     let format_type = map.get("type").and_then(Value::as_str).unwrap_or("").trim();
     if format_type.is_empty() {
         return None;

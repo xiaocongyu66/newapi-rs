@@ -57,6 +57,9 @@ pub struct RequestResult {
     pub steps: Vec<RequestStep>,
 }
 
+/// Direct converter function shape: (meta, request) → converted value.
+pub type ConvertFn = fn(&mut dyn ConvMeta, &Value) -> Result<Value, String>;
+
 /// Go `RequestConverterSpec` (request_registry.go:45-52). `convert` is the
 /// direct implementation; `step_converters` names a composite route.
 #[derive(Clone)]
@@ -65,7 +68,7 @@ pub struct RequestConverterSpec {
     pub from: &'static str,
     pub to: &'static str,
     pub quality: RequestConverterQuality,
-    pub convert: Option<fn(&mut dyn ConvMeta, &Value) -> Result<Value, String>>,
+    pub convert: Option<ConvertFn>,
     pub step_converters: &'static [&'static str],
 }
 

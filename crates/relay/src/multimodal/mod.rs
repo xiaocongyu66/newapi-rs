@@ -324,18 +324,15 @@ fn find_ispe(data: &[u8]) -> Option<(i64, i64)> {
                     return Some(dims);
                 }
             }
-            b"ispe" => {
-                // ispe is a full box: 4 bytes version/flags, then 4 bytes
-                // width, 4 bytes height.
-                if content.len() >= 12 {
-                    let width =
-                        u32::from_be_bytes([content[4], content[5], content[6], content[7]]) as i64;
-                    let height =
-                        u32::from_be_bytes([content[8], content[9], content[10], content[11]])
-                            as i64;
-                    if width > 0 && height > 0 {
-                        return Some((width, height));
-                    }
+            // ispe is a full box: 4 bytes version/flags, then 4 bytes
+            // width, 4 bytes height.
+            b"ispe" if content.len() >= 12 => {
+                let width =
+                    u32::from_be_bytes([content[4], content[5], content[6], content[7]]) as i64;
+                let height =
+                    u32::from_be_bytes([content[8], content[9], content[10], content[11]]) as i64;
+                if width > 0 && height > 0 {
+                    return Some((width, height));
                 }
             }
             _ => {}

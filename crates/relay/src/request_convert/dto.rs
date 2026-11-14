@@ -166,23 +166,23 @@ impl ChatMessage {
                             });
                         }
                         content_type::INPUT_AUDIO => {
-                            if let Some(Value::Object(audio)) = map.get("input_audio") {
-                                if let (Some(data), Some(format)) = (
+                            if let Some(Value::Object(audio)) = map.get("input_audio")
+                                && let (Some(data), Some(format)) = (
                                     audio.get("data").and_then(Value::as_str),
                                     audio.get("format").and_then(Value::as_str),
-                                ) {
-                                    out.push(MediaContent {
-                                        kind: content_type::INPUT_AUDIO.to_owned(),
-                                        text: String::new(),
-                                        image_url: None,
-                                        input_audio: Some(serde_json::json!({
-                                            "data": data,
-                                            "format": format,
-                                        })),
-                                        file: None,
-                                        video_url: None,
-                                    });
-                                }
+                                )
+                            {
+                                out.push(MediaContent {
+                                    kind: content_type::INPUT_AUDIO.to_owned(),
+                                    text: String::new(),
+                                    image_url: None,
+                                    input_audio: Some(serde_json::json!({
+                                        "data": data,
+                                        "format": format,
+                                    })),
+                                    file: None,
+                                    video_url: None,
+                                });
                             }
                         }
                         content_type::FILE => {

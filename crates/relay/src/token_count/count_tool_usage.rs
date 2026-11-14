@@ -191,7 +191,7 @@ pub fn get_tool_price_for_model(tool_name: &str, model_name: &str) -> f64 {
     let state = price_state().lock().unwrap_or_else(|p| p.into_inner());
     let index = &state.index;
 
-    if model_name != ""
+    if !model_name.is_empty()
         && let Some(entries) = index.prefixes.get(tool_name)
     {
         for entry in entries {
@@ -221,7 +221,7 @@ fn reserved_billable_tool_names(name: &str) -> bool {
 
 /// Go `resolveWebSearchToolName` (count_tool_usage.go:56-64): prefer an
 /// already-present `web_search` entry over `web_search_preview`.
-fn resolve_web_search_tool_name<'a>(tools: &'a [BuiltInToolInfo]) -> &'static str {
+fn resolve_web_search_tool_name(tools: &[BuiltInToolInfo]) -> &'static str {
     if tools
         .iter()
         .any(|t| t.tool_name == build_in_tool::WEB_SEARCH)
