@@ -177,6 +177,9 @@ pub struct AppState {
     /// `UnconfiguredEmailSender`（复刻未配置 SMTP 的部署：发送恒报
     /// "SMTP 服务器未配置"，验证码等副作用照常发生）。
     email_sender: Arc<dyn EmailSender>,
+    /// relay adaptor 工厂端口（Go `GetAdaptor` 的消费面）；未注入时是注册表
+    /// 解析 + 占位外呼（dispatch 骨架的"未实现"错误）。测试注入替身。
+    relay_adaptor_factory: Arc<dyn newapi_relay::dispatch::AdaptorFactory>,
     anonymous_body_limit: usize,
 }
 
@@ -206,6 +209,7 @@ impl Default for AppState {
             token_cache: None,
             email_verification_rate_limiter: None,
             email_sender: Arc::new(UnconfiguredEmailSender),
+            relay_adaptor_factory: Arc::new(newapi_relay::dispatch::RegistryAdaptorFactory),
             anonymous_body_limit: anonymous_body_limit_bytes(512),
         }
     }
@@ -300,6 +304,20 @@ impl AppState {
     pub fn bind_email_sender(mut self, sender: Arc<dyn EmailSender>) -> Self {
         self.email_sender = sender;
         self
+    }
+
+    /// 注入 relay adaptor 工厂（Go `GetAdaptor` 的生产实现位置：channel-
+    /// adapter 切片合流后调用）。未注入的 state 保持注册表 + 占位外呼。
+    pub fn bind_relay_adaptor_factory(
+        mut self,
+        factory: Arc<dyn newapi_relay::dispatch::AdaptorFactory>,
+    ) -> Self {
+        self.relay_adaptor_factory = factory;
+        self
+    }
+
+    pub fn adaptor_factory(&self) -> Arc<dyn newapi_relay::dispatch::AdaptorFactory> {
+        self.relay_adaptor_factory.clone()
     }
 
     /// 邮件发送端口（`verification_http` 等发送场景共用）。

@@ -134,6 +134,34 @@ impl GroupSettings {
             .collect()
     }
 
+    /// Go `channel.FilterUserTokenAutoGroups`（resolve_group.go:171-186）：
+    /// 先按当前权限过滤令牌 auto 分组快照，再按 `MaxTokenAutoGroups` 截断。
+    /// 有意不回退全局 Auto 列表（令牌快照存在即为显式快照，空列表亦然——
+    /// `GetRequestAutoGroups` 的语义由调用方按"快照是否存在"分流）。
+    pub fn filter_user_token_auto_groups(
+        &self,
+        user_group: &str,
+        groups: &[String],
+        max_token_auto_groups: usize,
+    ) -> Vec<String> {
+        let usable = self.user_usable_groups(user_group);
+        let mut filtered = Vec::with_capacity(groups.len().min(max_token_auto_groups));
+        let mut seen = BTreeSet::new();
+        for group in groups {
+            if !self.is_user_selectable_group(&usable, group) {
+                continue;
+            }
+            if !seen.insert(group.clone()) {
+                continue;
+            }
+            filtered.push(group.clone());
+            if filtered.len() == max_token_auto_groups {
+                break;
+            }
+        }
+        filtered
+    }
+
     /// Go `channel.GetUserGroupRatio`: the user-group-specific ratio when
     /// configured, otherwise the plain group ratio. Go `GetGroupRatio` falls
     /// back to `1` for an unknown group.
