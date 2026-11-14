@@ -77,6 +77,12 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user-agreement", get(user_agreement))
         .route("/api/privacy-policy", get(privacy_policy))
         .route("/api/status", get(crate::status::handle))
+        // Go `apiRouter.GET("/uptime/status", ops.GetUptimeKumaStatus)`
+        // (`register_api.go:31`)：公开路由，无限流、无认证。
+        .route(
+            "/api/uptime/status",
+            get(crate::uptime_http::get_uptime_kuma_status),
+        )
         .route("/api/setup", get(crate::setup_http::inspect))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready));
@@ -1374,6 +1380,7 @@ fn build_router(state: AppState) -> Router {
     // 是 `/api`、`/health/*` 之外的兜底路径。两中间件的路径门互补，同一请求
     // 至多命中一个（Go 中 GA/GW 也从不在同一请求上同时出现）。
     let web_limit_state = state.clone();
+    let geo_state = state.clone();
     app.fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(
@@ -1386,6 +1393,14 @@ fn build_router(state: AppState) -> Router {
         ))
         .with_state(state)
         .layer(middleware::from_fn(boundary))
+        // Go 引擎层链（main.go:218-221）：RequestId → Version → I18n →
+        // GeoBlock。axum 后加先执行，故 GeoBlock 在 RequestId 之前注册。
+        // Version/I18n 属其他切片，未接线。
+        .layer(middleware::from_fn_with_state(
+            geo_state,
+            crate::middleware_misc::geo_block,
+        ))
+        .layer(middleware::from_fn(crate::middleware_misc::request_id))
 }
 
 async fn notice(State(state): State<AppState>) -> Response {

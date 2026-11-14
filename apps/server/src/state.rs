@@ -18,6 +18,7 @@ use newapi_identity::token_cache::RedisTokenCache;
 use newapi_identity::tokens::TokenRuntimeSettings;
 use newapi_security::client_ip::{ProxyPolicy, resolve_client_ip};
 use newapi_storage::Database;
+use redis::aio::MultiplexedConnection;
 use tokio::sync::watch;
 
 use crate::boundary_mw::anonymous_body_limit_bytes;
@@ -178,6 +179,18 @@ pub struct AppState {
     /// "SMTP 服务器未配置"，验证码等副作用照常发生）。
     email_sender: Arc<dyn EmailSender>,
     anonymous_body_limit: usize,
+    /// Go `common.GetSystemStatus` 的注入点；缺省为零值监控（Go 启动态）。
+    system_status_source: Arc<dyn crate::middleware_misc::SystemStatusSource>,
+    /// Go `geoCountryLookup`（geo_block.go:22）的注入点；缺省为无数据库的
+    /// fail-open 实现（每个 IP 均解析为空 → 放行）。
+    geo_country_lookup: Arc<dyn crate::middleware_misc::GeoCountryLookup>,
+    /// Go `security.GeoGateRole` 的注入点；缺省为不可匹配凭据（-1）。
+    geo_gate_role_resolver: Arc<dyn crate::middleware_misc::GeoGateRoleResolver>,
+    /// Go `insight.Analyze` 的注入点；未注入时 `UserInsight` 中间件直通。
+    insight_analyzer: Option<Arc<dyn crate::middleware_misc::InsightAnalyzer>>,
+    /// `ModelRequestRateLimit` 的 Redis 连接（Go `common.RDB` +
+    /// `common.RedisEnabled`）；未注入时走共享进程内限流器。
+    model_rate_redis: Option<MultiplexedConnection>,
 }
 
 impl Default for AppState {
@@ -207,6 +220,11 @@ impl Default for AppState {
             email_verification_rate_limiter: None,
             email_sender: Arc::new(UnconfiguredEmailSender),
             anonymous_body_limit: anonymous_body_limit_bytes(512),
+            system_status_source: Arc::new(crate::middleware_misc::ZeroSystemStatus),
+            geo_country_lookup: Arc::new(crate::middleware_misc::NoDatabaseCountryLookup),
+            geo_gate_role_resolver: Arc::new(crate::middleware_misc::UnmatchedGeoGateRole),
+            insight_analyzer: None,
+            model_rate_redis: None,
         }
     }
 }
@@ -305,6 +323,74 @@ impl AppState {
     /// 邮件发送端口（`verification_http` 等发送场景共用）。
     pub fn email_sender(&self) -> Arc<dyn EmailSender> {
         self.email_sender.clone()
+    }
+
+    /// Go `common.GetSystemStatus` 的注入点。
+    pub fn system_status_source(&self) -> Arc<dyn crate::middleware_misc::SystemStatusSource> {
+        self.system_status_source.clone()
+    }
+
+    /// 注入系统状态源（系统监控切片落地后由生产入口绑定）。
+    pub fn bind_system_status_source(
+        mut self,
+        source: Arc<dyn crate::middleware_misc::SystemStatusSource>,
+    ) -> Self {
+        self.system_status_source = source;
+        self
+    }
+
+    /// Go `geoCountryLookup` 的注入点。
+    pub fn geo_country_lookup(&self) -> Arc<dyn crate::middleware_misc::GeoCountryLookup> {
+        self.geo_country_lookup.clone()
+    }
+
+    /// 注入国家查询实现（geoip 集成切片落地后由生产入口绑定）。
+    pub fn bind_geo_country_lookup(
+        mut self,
+        lookup: Arc<dyn crate::middleware_misc::GeoCountryLookup>,
+    ) -> Self {
+        self.geo_country_lookup = lookup;
+        self
+    }
+
+    /// Go `security.GeoGateRole` 的注入点。
+    pub fn geo_gate_role_resolver(&self) -> Arc<dyn crate::middleware_misc::GeoGateRoleResolver> {
+        self.geo_gate_role_resolver.clone()
+    }
+
+    /// 注入管理凭据裁决实现（identity 集成落地后由生产入口绑定）。
+    pub fn bind_geo_gate_role_resolver(
+        mut self,
+        resolver: Arc<dyn crate::middleware_misc::GeoGateRoleResolver>,
+    ) -> Self {
+        self.geo_gate_role_resolver = resolver;
+        self
+    }
+
+    /// Go `insight.Analyze` 的注入点；未绑定时 `UserInsight` 直通。
+    pub fn insight_analyzer(&self) -> Option<Arc<dyn crate::middleware_misc::InsightAnalyzer>> {
+        self.insight_analyzer.clone()
+    }
+
+    /// 注入画像分析实现（usage/insight 切片落地后由生产入口绑定）。
+    pub fn bind_insight_analyzer(
+        mut self,
+        analyzer: Arc<dyn crate::middleware_misc::InsightAnalyzer>,
+    ) -> Self {
+        self.insight_analyzer = Some(analyzer);
+        self
+    }
+
+    /// `ModelRequestRateLimit` 的 Redis 连接；未绑定时走共享进程内限流器
+    /// （Go `common.RedisEnabled=false` 的部署形态）。
+    pub fn model_rate_redis(&self) -> Option<MultiplexedConnection> {
+        self.model_rate_redis.clone()
+    }
+
+    /// 注入 `ModelRequestRateLimit` 的 Redis 连接（生产入口按 Redis 配置绑定）。
+    pub fn bind_model_rate_redis(mut self, connection: MultiplexedConnection) -> Self {
+        self.model_rate_redis = Some(connection);
+        self
     }
 
     /// 解析客户端 IP：peer 不可信时忽略转发头，与 Go `resolveTrustedClientIP` 一致。

@@ -12,8 +12,10 @@
 //! 链序契约（Go 注册顺序 → 执行顺序）：
 //! `/v1` 组：RouteTag → SystemPerformanceCheck → TokenAuth →
 //! ModelRequestRateLimit → UserInsight → InsightClientBan → Distribute。
-//! 本切片实现 TokenAuth 与 InsightClientBan；RateLimit / UserInsight /
-//! Distribute 属其他切片，未接线（见交付报告遗留项）。axum `route_layer`
+//! TokenAuth 与 InsightClientBan 为本文件实现；SystemPerformanceCheck /
+//! ModelRequestRateLimit / UserInsight 由 `middleware_misc` 与
+//! `model_rate_limit` 提供（transport 中间件扫尾切片）；Distribute 归 relay
+//! 主链切片，未接线（见交付报告遗留项）。axum `route_layer`
 //! 后加先执行，故注册顺序为 Go 执行顺序的逆序。
 
 use std::collections::{HashMap, HashSet};
@@ -124,7 +126,7 @@ fn new_request_id() -> String {
     format!("{:016x}{:016x}", now, seq)
 }
 
-fn request_id_of(request: &Request) -> String {
+pub fn request_id_of(request: &Request) -> String {
     request
         .headers()
         .get("x-request-id")
@@ -673,8 +675,9 @@ pub async fn insight_client_ban(
 /// 链序见模块注释。
 pub fn relay_routes(state: AppState) -> Router<AppState> {
     // /v1 组（register_relay.go:749-853）：RouteTag → SystemPerformanceCheck →
-    // TokenAuth → RateLimit → UserInsight → InsightClientBan → Distribute。
-    // axum 后加先执行：先加 Ban 再加 TokenAuth ⇒ TokenAuth → Ban。
+    // TokenAuth → ModelRequestRateLimit → UserInsight → InsightClientBan →
+    // Distribute。axum 后加先执行：注册顺序为 Go 执行顺序的逆序
+    // （Ban → UserInsight → RateLimit → TokenAuth → PerfCheck）。
     let relay_v1 = Router::new()
         .route("/v1/messages", post(relay_entry_claude))
         .route("/v1/completions", post(relay_entry_openai))
@@ -696,16 +699,40 @@ pub fn relay_routes(state: AppState) -> Router<AppState> {
             state.clone(),
             insight_client_ban,
         ))
-        .route_layer(middleware::from_fn_with_state(state.clone(), token_auth));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware_misc::user_insight,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::model_rate_limit::model_request_rate_limit,
+        ))
+        .route_layer(middleware::from_fn_with_state(state.clone(), token_auth))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware_misc::system_performance_check,
+        ));
 
-    // /v1beta Gemini relay 组（register_relay.go:872-885）。
+    // /v1beta Gemini relay 组（register_relay.go:872-885）：链序同 /v1。
     let relay_gemini = Router::new()
         .route("/v1beta/models/{*path}", post(relay_entry_gemini))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             insight_client_ban,
         ))
-        .route_layer(middleware::from_fn_with_state(state.clone(), token_auth));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware_misc::user_insight,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::model_rate_limit::model_request_rate_limit,
+        ))
+        .route_layer(middleware::from_fn_with_state(state.clone(), token_auth))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware_misc::system_performance_check,
+        ));
 
     // /v1/models 与 /v1beta models 列表组（register_relay.go:699-740）：
     // 仅 RouteTag → TokenAuth，无 Ban / RateLimit。
@@ -723,7 +750,15 @@ pub fn relay_routes(state: AppState) -> Router<AppState> {
         .route("/v1beta/openai/models", get(list_models_entry))
         .route_layer(middleware::from_fn_with_state(state, token_auth));
 
-    models_routes.merge(relay_v1).merge(relay_gemini)
+    // Go `router.Use(middleware.StatsMiddleware())`
+    // (`register_relay.go:18`)：整个 relay 引擎级的活跃连接计数；挂在
+    // 合并后的最外层（axum 后加先执行），先于各组的 TokenAuth。
+    models_routes
+        .merge(relay_v1)
+        .merge(relay_gemini)
+        .layer(middleware::from_fn(
+            crate::middleware_misc::stats_middleware,
+        ))
 }
 
 // ---------------------------------------------------------------------------
