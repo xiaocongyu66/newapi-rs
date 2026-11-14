@@ -2282,7 +2282,8 @@ pub fn openai_tts_handler(
     match duration {
         Some(duration) if duration > 0.0 => {
             // ceil(duration) / 60.0 * 1000，即每分钟 1000 tokens。
-            let completion_tokens = (duration.ceil() / 60.0 * 1000.0) as i64;
+            // Go QuotaRound（math.Round 半值远离零），非截断。
+            let completion_tokens = (duration.ceil() / 60.0 * 1000.0).round() as i64;
             usage.completion_tokens = completion_tokens;
             usage.completion_token_details.audio_tokens = completion_tokens;
         }
@@ -3028,12 +3029,10 @@ mod tests {
     fn get_request_url_azure_removes_dots_for_old_channels() {
         let mut info = info_with_model("gpt-4.1-mini");
         info.request_url_path = "/v1/chat/completions".to_owned();
-        info.channel_meta.as_mut().expect("meta").channel_base_url =
-            "https://x.openai.azure.com".to_owned();
-        info.channel_meta
-            .as_mut()
-            .expect("meta")
-            .channel_create_time = 1_000_000;
+        let meta = info.channel_meta.as_mut().expect("meta");
+        meta.channel_type = ct::AZURE;
+        meta.channel_base_url = "https://x.openai.azure.com".to_owned();
+        meta.channel_create_time = 1_000_000;
         let adaptor = OpenAiAdaptor::new();
         assert_eq!(
             adaptor.get_request_url(&mut info).expect("url"),
@@ -3046,12 +3045,10 @@ mod tests {
     fn get_request_url_azure_keeps_dots_for_new_channels() {
         let mut info = info_with_model("gpt-4.1-mini");
         info.request_url_path = "/v1/chat/completions".to_owned();
-        info.channel_meta.as_mut().expect("meta").channel_base_url =
-            "https://x.openai.azure.com".to_owned();
-        info.channel_meta
-            .as_mut()
-            .expect("meta")
-            .channel_create_time = crate::adaptor_common::AZURE_NO_REMOVE_DOT_TIME;
+        let meta = info.channel_meta.as_mut().expect("meta");
+        meta.channel_type = ct::AZURE;
+        meta.channel_base_url = "https://x.openai.azure.com".to_owned();
+        meta.channel_create_time = crate::adaptor_common::AZURE_NO_REMOVE_DOT_TIME;
         let adaptor = OpenAiAdaptor::new();
         assert_eq!(
             adaptor.get_request_url(&mut info).expect("url"),
@@ -3064,8 +3061,9 @@ mod tests {
     fn get_request_url_azure_responses_compact() {
         let mut info = info_with_model("gpt-4o");
         info.relay_mode = relay_constant::RELAY_MODE_RESPONSES_COMPACT;
-        info.channel_meta.as_mut().expect("meta").channel_base_url =
-            "https://x.openai.azure.com".to_owned();
+        let meta = info.channel_meta.as_mut().expect("meta");
+        meta.channel_type = ct::AZURE;
+        meta.channel_base_url = "https://x.openai.azure.com".to_owned();
         let adaptor = OpenAiAdaptor::new();
         assert_eq!(
             adaptor.get_request_url(&mut info).expect("url"),
@@ -3080,8 +3078,7 @@ mod tests {
         info.request_url_path = "/v1/chat/completions".to_owned();
         info.channel_meta.as_mut().expect("meta").channel_base_url =
             "https://proxy.example.com/{model}/v1".to_owned();
-        let mut adaptor = OpenAiAdaptor::new();
-        adaptor.channel_type = ct::CUSTOM;
+        info.channel_meta.as_mut().expect("meta").channel_type = ct::CUSTOM;
         assert_eq!(
             adaptor.get_request_url(&mut info).expect("url"),
             "https://proxy.example.com/gpt-4o/v1"
@@ -3096,6 +3093,8 @@ mod tests {
         info.request_url_path = "/v1/realtime".to_owned();
         info.channel_meta.as_mut().expect("meta").channel_base_url =
             "https://api.openai.com".to_owned();
+        // Go realtime deployment URL 只在 Azure 分支产出。
+        info.channel_meta.as_mut().expect("meta").channel_type = ct::AZURE;
         let adaptor = OpenAiAdaptor::new();
         let url = adaptor.get_request_url(&mut info).expect("url");
         assert!(url.starts_with("wss://api.openai.com/openai/realtime?deployment=gpt-4o-realtime-preview&api-version=2025-04-01-preview"), "{url}");
@@ -3661,7 +3660,8 @@ mod tests {
         assert_eq!(detect_image_mime_type("a.jpg"), "image/jpeg");
         assert_eq!(detect_image_mime_type("a.JPEG"), "image/jpeg");
         assert_eq!(detect_image_mime_type("a.webp"), "image/webp");
-        assert_eq!(detect_image_mime_type("a.jXL"), "image/jpeg");
+        // ".jxl" 前缀非 ".jp"，走 png 兜底（Go detectImageMimeType）。
+        assert_eq!(detect_image_mime_type("a.jXL"), "image/png");
         assert_eq!(detect_image_mime_type("a.bmp"), "image/png");
         assert_eq!(detect_image_mime_type("noext"), "image/png");
     }

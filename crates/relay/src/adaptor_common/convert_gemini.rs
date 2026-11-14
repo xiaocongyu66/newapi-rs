@@ -9,7 +9,7 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct GeminiInlineData {
-    #[serde(alias = "mime_type", default)]
+    #[serde(rename = "mimeType", alias = "mime_type", default)]
     pub mime_type: String,
     #[serde(default)]
     pub data: String,
@@ -19,7 +19,7 @@ pub struct GeminiInlineData {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct GeminiFileData {
-    #[serde(default)]
+    #[serde(rename = "mimeType", alias = "mime_type", default)]
     pub mime_type: String,
     #[serde(rename = "fileUri", alias = "file_uri", default)]
     pub file_uri: String,

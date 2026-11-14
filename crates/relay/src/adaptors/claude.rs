@@ -888,9 +888,11 @@ mod tests {
             forwarded["choices"][0]["message"]["tool_calls"][0]["id"],
             "toolu_1"
         );
-        // openai 语义 usage：prompt 并入 cache 读/写。
+        // openai 语义 usage：prompt 并入 cache 读/写（无 cache 时 prompt=10，
+        // total = prompt + completion = 14）。
         assert_eq!(forwarded["usage"]["usage_semantic"], "openai");
-        assert_eq!(forwarded["usage"]["prompt_tokens"], 14); // 10 + 0 + 0 (无 cache)
+        assert_eq!(forwarded["usage"]["prompt_tokens"], 10);
+        assert_eq!(forwarded["usage"]["total_tokens"], 14);
         // tool_use 计费统计。
         assert!(
             info.billable_tool_calls

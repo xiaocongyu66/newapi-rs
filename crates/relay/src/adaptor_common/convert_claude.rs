@@ -405,16 +405,18 @@ pub fn response_claude_2_openai(
     full_text_response
 }
 
-/// Go `sharedclaude.NormalizeCacheCreationSplit`：聚合值缺省时归入 5m。
+/// Go `sharedclaude.NormalizeCacheCreationSplit`：聚合值与拆分值求差并入 5m
+/// （负差归零）。
 pub fn normalize_cache_creation_split(
     total_tokens: i64,
     tokens_5m: i64,
     tokens_1h: i64,
 ) -> (i64, i64) {
-    if tokens_5m == 0 && tokens_1h == 0 && total_tokens > 0 {
-        return (total_tokens, 0);
+    let mut remainder = total_tokens - tokens_5m - tokens_1h;
+    if remainder < 0 {
+        remainder = 0;
     }
-    (tokens_5m, tokens_1h)
+    (tokens_5m + remainder, tokens_1h)
 }
 
 /// Go `cacheCreationTokensForOpenAIUsage`（to_oai_chat_resp.go:68-82）。

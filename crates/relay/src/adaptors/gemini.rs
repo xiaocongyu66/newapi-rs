@@ -1960,6 +1960,8 @@ mod tests {
         };
         let mut info = gemini_info("gemini-2.5-flash");
         info.relay_format = relay_format::OPENAI.to_owned();
+        // 兼容路径（handle_compatible）默认 includeUsage=true。
+        info.should_include_usage = true;
         info.set_estimate_prompt_tokens(3);
         let mut sink = StubSink::default();
         let outcome = gemini_chat_stream_handler(&mut info, &mut response, &mut sink);
