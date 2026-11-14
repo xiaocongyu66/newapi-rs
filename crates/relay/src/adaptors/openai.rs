@@ -3273,16 +3273,11 @@ mod tests {
 
     // ---- DoRequest 契约（stub transport） -------------------------------------
 
-    /// 纯 std 阻塞轮询器（std::task::Wake 安全构造 Waker；crate 禁 unsafe）。
+    /// 纯 std 阻塞轮询器（Waker::noop；crate 禁 unsafe）。
     fn run<F: Future>(f: F) -> F::Output {
-        use std::task::{Context, Poll, Wake, Waker};
-        struct NoopWaker;
-        impl Wake for NoopWaker {
-            fn wake(self: Arc<Self>) {}
-            fn wake_by_ref(self: &Arc<Self>) {}
-        }
+        use std::task::{Context, Poll, Waker};
         let mut pinned = std::pin::pin!(f);
-        let waker = Waker::from(Arc::new(NoopWaker));
+        let waker = Waker::noop();
         let mut cx = Context::from_waker(&waker);
         loop {
             match pinned.as_mut().poll(&mut cx) {

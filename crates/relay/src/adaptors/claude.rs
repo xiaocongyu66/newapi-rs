@@ -811,14 +811,9 @@ mod tests {
         // 阻塞轮询器（std::task::Wake 安全 Waker）。
         let future = adaptor.do_request(&mut info, &context, b"{}".as_slice(), &transport);
         let response = {
-            use std::task::{Context as TaskContext, Poll, Wake, Waker};
-            struct NoopWaker;
-            impl Wake for NoopWaker {
-                fn wake(self: Arc<Self>) {}
-                fn wake_by_ref(self: &Arc<Self>) {}
-            }
+            use std::task::{Context as TaskContext, Poll, Waker};
             let mut pinned = std::pin::pin!(future);
-            let waker = Waker::from(Arc::new(NoopWaker));
+            let waker = Waker::noop();
             let mut cx = TaskContext::from_waker(&waker);
             loop {
                 if let Poll::Ready(v) = pinned.as_mut().poll(&mut cx) {

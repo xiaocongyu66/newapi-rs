@@ -1626,14 +1626,9 @@ mod tests {
         };
         let future = adaptor.do_request(&mut info, &context, b"{}".as_slice(), &transport);
         let response = {
-            use std::task::{Context as TaskContext, Poll, Wake, Waker};
-            struct NoopWaker;
-            impl Wake for NoopWaker {
-                fn wake(self: Arc<Self>) {}
-                fn wake_by_ref(self: &Arc<Self>) {}
-            }
+            use std::task::{Context as TaskContext, Poll, Waker};
             let mut pinned = std::pin::pin!(future);
-            let waker = Waker::from(Arc::new(NoopWaker));
+            let waker = Waker::noop();
             let mut cx = TaskContext::from_waker(&waker);
             loop {
                 if let Poll::Ready(v) = pinned.as_mut().poll(&mut cx) {
@@ -2002,9 +1997,7 @@ mod tests {
     // 流式（claude 格式）：STOP 时不发 stop chunk（Go 分支），终态 stop 带 usage。
     #[test]
     fn chat_stream_handler_claude_format_suppresses_stop_chunk() {
-        let chunks = concat!(
-            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}]}\n\n",
-        );
+        let chunks = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}]}\n\n";
         let mut response = OutboundResponse {
             status: 200,
             headers: vec![],
