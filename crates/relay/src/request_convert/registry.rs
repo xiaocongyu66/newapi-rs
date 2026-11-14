@@ -649,8 +649,6 @@ mod tests {
         assert_eq!(result.converter, "");
     }
 
-    /// Go request_registry.go:167-169: unregistered route error text.
-    #[test]
     /// Go request_registry.go:151-165: unregistered route errors. The
     /// responses→gemini pair has no builtin route (Go goes through explicit
     /// prepare + direct conversion instead).
