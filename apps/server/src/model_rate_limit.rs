@@ -630,18 +630,19 @@ mod tests {
     }
 
     #[test]
-    fn memory_handler_records_success_only_after_sub_400() {
-        // successMaxCount 1: probe admits, recording fills the real key, the
-        // third probe rejects.
+    fn memory_handler_probe_consumes_regardless_of_outcome() {
+        // The `_check` probe consumes a slot per call: with successMaxCount 1
+        // the second call inside the window rejects (Go's Request on the
+        // probe key), on both success and failure outcomes.
         let limiter = MemoryRequestLimiter::default();
         assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_000).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_001).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_002).is_some());
-        // A >=400 response records nothing: the probe still admits twice.
+        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_001).is_some());
+        // Window elapsed (1_060 - 1_000 >= 60): the probe admits again.
+        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_060).is_none());
+        // A >=400 outcome behaves identically: the probe still consumes.
         let limiter = MemoryRequestLimiter::default();
         assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false), 1_000).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false), 1_001).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false), 1_002).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false), 1_001).is_some());
     }
 
     #[test]
