@@ -127,15 +127,15 @@ pub async fn load_monitor_setting(db: &Database) -> MonitorSetting {
             setting.auto_test_channel_minutes = minutes;
         }
     }
-    if let Some(raw) = read_option(db, MONITOR_CHANNEL_TEST_MODE_OPTION).await {
-        if matches!(
+    if let Some(raw) = read_option(db, MONITOR_CHANNEL_TEST_MODE_OPTION).await
+        && matches!(
             raw.trim(),
             CHANNEL_TEST_MODE_AUTO_BAN_ONLY
                 | CHANNEL_TEST_MODE_PASSIVE_RECOVERY
                 | CHANNEL_TEST_MODE_SCHEDULED_ALL
-        ) {
-            setting.channel_test_mode = raw.trim().to_owned();
-        }
+        )
+    {
+        setting.channel_test_mode = raw.trim().to_owned();
     }
     setting
 }
