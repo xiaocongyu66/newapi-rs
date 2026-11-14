@@ -7,9 +7,9 @@
 
 use serde_json::Value;
 
-use super::count_tokens::FileMeta;
-use super::dto::{ChatMessage, content_type, parse_chat_message};
-use super::tokenize_text;
+use crate::token_count::count_tokens::{FileMeta, file_type};
+
+use super::dto::{content_type, parse_chat_message};
 
 /// Go `types.TokenCountMeta` projection (request_meta.go:20-32).
 #[derive(Clone, Debug, Default)]
@@ -100,19 +100,19 @@ pub fn chat_request_token_count_meta(request: &Value) -> CountMeta {
                         };
                         match part.kind.as_str() {
                             content_type::IMAGE_URL => {
-                                file.file_type = super::count_tokens::file_type::IMAGE.to_owned();
+                                file.file_type = file_type::IMAGE.to_owned();
                                 if let Some(detail) = part.image_detail() {
                                     file.detail = detail;
                                 }
                             }
                             content_type::INPUT_AUDIO => {
-                                file.file_type = super::count_tokens::file_type::AUDIO.to_owned();
+                                file.file_type = file_type::AUDIO.to_owned();
                             }
                             content_type::FILE => {
-                                file.file_type = super::count_tokens::file_type::FILE.to_owned();
+                                file.file_type = file_type::FILE.to_owned();
                             }
                             content_type::VIDEO_URL => {
-                                file.file_type = super::count_tokens::file_type::VIDEO.to_owned();
+                                file.file_type = file_type::VIDEO.to_owned();
                             }
                             _ => {}
                         }
@@ -282,7 +282,7 @@ pub fn responses_request_token_count_meta(request: &Value) -> CountMeta {
             if input.kind == "input_image" {
                 if !input.image_url.is_empty() {
                     files.push(FileMeta {
-                        file_type: super::count_tokens::file_type::IMAGE.to_owned(),
+                        file_type: file_type::IMAGE.to_owned(),
                         source: Some(input.image_url.clone()),
                         source_is_url: is_url_source(&input.image_url),
                         detail: input.detail.clone(),
@@ -291,7 +291,7 @@ pub fn responses_request_token_count_meta(request: &Value) -> CountMeta {
                 }
             } else if input.kind == "input_file" && !input.file_url.is_empty() {
                 files.push(FileMeta {
-                    file_type: super::count_tokens::file_type::FILE.to_owned(),
+                    file_type: file_type::FILE.to_owned(),
                     source: Some(input.file_url.clone()),
                     source_is_url: is_url_source(&input.file_url),
                     ..Default::default()
@@ -356,10 +356,11 @@ fn media_content_file_source(part: &super::dto::MediaContent) -> Option<(String,
     match part.kind.as_str() {
         content_type::IMAGE_URL => {
             let url = part.image_url_string()?;
+            let is_url = is_url_source(&url);
             if url.is_empty() {
                 return None;
             }
-            Some((url, is_url_source(&url)))
+            Some((url, is_url))
         }
         content_type::INPUT_AUDIO => {
             let Some(Value::Object(audio)) = part.input_audio.as_ref() else {
@@ -415,6 +416,7 @@ fn display_go_value(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::token_count::tokenize_text;
     use serde_json::json;
 
     /// Go openai_request.go:119-202 — text/tool/file collection and counts.
@@ -566,7 +568,7 @@ mod tests {
             original_model: "gpt-5-chat".into(),
             ..Default::default()
         };
-        let got = super::super::count_tokens::estimate_request_token(
+        let got = crate::token_count::count_tokens::estimate_request_token(
             &mut meta_to_count_meta(&meta),
             &inputs,
             CountSwitches::default(),
@@ -578,8 +580,8 @@ mod tests {
         assert_eq!(got, text_tokens + 1 * 3 + 3);
     }
 
-    fn meta_to_count_meta(meta: &CountMeta) -> super::super::count_tokens::TokenCountMeta {
-        super::super::count_tokens::TokenCountMeta {
+    fn meta_to_count_meta(meta: &CountMeta) -> crate::token_count::count_tokens::TokenCountMeta {
+        crate::token_count::count_tokens::TokenCountMeta {
             token_type: meta.token_type.clone(),
             combine_text: meta.combine_text.clone(),
             tools_count: meta.tools_count,

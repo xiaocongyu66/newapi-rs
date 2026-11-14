@@ -150,9 +150,9 @@ pub fn chat_completions_request_to_responses_request(
 
         // Prefer mapping system/developer messages into `instructions`.
         if role == "system" || role == "developer" {
-            let Some(content) = message.content.as_ref() else {
+            if message.content.is_none() {
                 continue;
-            };
+            }
             if message.is_string_content() {
                 let text = message.string_content().trim().to_owned();
                 if !text.is_empty() {

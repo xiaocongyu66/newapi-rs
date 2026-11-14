@@ -585,8 +585,9 @@ pub fn guess_mime_type_from_url(url: &str) -> &'static str {
 /// 100-127 uses it on 512B-64KB prefixes). Full Go signature table for the
 /// detection set; unknown → "application/octet-stream".
 pub fn detect_content_type(data: &[u8]) -> &'static str {
-    const SNIFF_LIMIT: usize = 512.min(data.len());
-    let data = &data[..SNIFF_LIMIT];
+    // Go http.DetectContentType always sniffs the first 512 bytes.
+    const SNIFF_LIMIT: usize = 512;
+    let data = &data[..SNIFF_LIMIT.min(data.len())];
     let trimmed = data
         .iter()
         .position(|b| !b.is_ascii_whitespace())
