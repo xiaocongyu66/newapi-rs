@@ -1287,7 +1287,7 @@ mod tests {
     use crate::adaptor::Adaptor as _;
     use crate::adaptor_common::{OutboundRequest, OutboundResponseBody, OutboundTransport};
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     struct StubTransport {
         captured: Mutex<Vec<OutboundRequest>>,
@@ -1629,7 +1629,7 @@ mod tests {
             use std::task::{Context as TaskContext, Poll, Waker};
             let mut pinned = std::pin::pin!(future);
             let waker = Waker::noop();
-            let mut cx = TaskContext::from_waker(&waker);
+            let mut cx = TaskContext::from_waker(waker);
             loop {
                 if let Poll::Ready(v) = pinned.as_mut().poll(&mut cx) {
                     break v.expect("response");

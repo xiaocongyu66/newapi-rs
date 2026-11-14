@@ -2884,7 +2884,7 @@ pub fn tool_call_set_index(tool: &mut ToolCallResponse, index: i64) {
 mod tests {
     use super::*;
     use crate::adaptor_common::{OutboundRequest, OutboundResponseBody, OutboundTransport};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     // ---- 测试替身（参照 external_pay_http.rs 的 transport 注入形态） ----------
 
@@ -3278,7 +3278,7 @@ mod tests {
         use std::task::{Context, Poll, Waker};
         let mut pinned = std::pin::pin!(f);
         let waker = Waker::noop();
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(waker);
         loop {
             match pinned.as_mut().poll(&mut cx) {
                 Poll::Ready(v) => return v,
