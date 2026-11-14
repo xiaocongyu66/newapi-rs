@@ -428,7 +428,7 @@ impl crate::adaptor::Adaptor for OpenAiAdaptor {
                     }
 
                     let request_url = format!("{sub_url}?api-version={responses_api_version}");
-                    Ok(get_full_request_url(&base_url, &request_url, channel_type))
+                    return Ok(get_full_request_url(&base_url, &request_url, channel_type));
                 }
 
                 let mut model = info.upstream_model_name();
