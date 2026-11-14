@@ -868,10 +868,10 @@ pub fn gemini_chat_stream_handler(
                         // Go: logger.LogError
                     }
                     response.clear_tool_calls();
-                    if response.is_finished() {
-                        if let Some(choice) = response.choices.first_mut() {
-                            choice.finish_reason = None;
-                        }
+                    if response.is_finished()
+                        && let Some(choice) = response.choices.first_mut()
+                    {
+                        choice.finish_reason = None;
                     }
                 } else if handle_stream(info, sink, &empty_response).is_err() {
                     // Go: logger.LogError
@@ -1079,13 +1079,13 @@ pub fn gemini_embedding_handler(
         "model": info.upstream_model_name(),
     });
     for (i, embedding) in embeddings.iter().enumerate() {
-        openai_response["data"].as_array_mut().map(|data| {
+        if let Some(data) = openai_response["data"].as_array_mut() {
             data.push(json!({
                 "object": "embedding",
                 "embedding": embedding.get("values").cloned().unwrap_or(Value::Null),
                 "index": i,
             }));
-        });
+        }
     }
 
     // Google 未明确 embedding 计费口径，按 openai 输入 token 口径本地估算。

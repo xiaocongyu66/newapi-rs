@@ -428,7 +428,7 @@ impl crate::adaptor::Adaptor for OpenAiAdaptor {
                     }
 
                     let request_url = format!("{sub_url}?api-version={responses_api_version}");
-                    return Ok(get_full_request_url(&base_url, &request_url, channel_type));
+                    Ok(get_full_request_url(&base_url, &request_url, channel_type))
                 }
 
                 let mut model = info.upstream_model_name();
@@ -442,7 +442,7 @@ impl crate::adaptor::Adaptor for OpenAiAdaptor {
                     request_url =
                         format!("/openai/realtime?deployment={model}&api-version={api_version}");
                 }
-                return Ok(get_full_request_url(&base_url, &request_url, channel_type));
+                Ok(get_full_request_url(&base_url, &request_url, channel_type))
             }
             ct::CUSTOM => {
                 let url = base_url.replace("{model}", &info.upstream_model_name());
@@ -1785,10 +1785,10 @@ fn stream_truncated(
     if saw_finish_reason {
         return false;
     }
-    match end_reason {
-        StreamEndReason::Done | StreamEndReason::ClientGone => false,
-        _ => true,
-    }
+    !matches!(
+        end_reason,
+        StreamEndReason::Done | StreamEndReason::ClientGone
+    )
 }
 
 fn forward_chunk(info: &mut RelayInfo, sink: &mut dyn ClientSink, data: &str, fast_path: bool) {
@@ -1898,15 +1898,15 @@ pub fn oai_stream_handler(
     }
 
     // 对音频模型，从倒数第二个stream data中提取usage信息
-    if is_audio_model && !second_last_stream_data.is_empty() {
-        if let Ok(stream_resp) =
+    if is_audio_model
+        && !second_last_stream_data.is_empty()
+        && let Ok(stream_resp) =
             serde_json::from_str::<ChatCompletionsStreamResponse>(&second_last_stream_data)
-            && let Some(second_usage) = &stream_resp.usage
-            && valid_usage(second_usage)
-        {
-            usage = second_usage.clone();
-            contain_stream_usage = true;
-        }
+        && let Some(second_usage) = &stream_resp.usage
+        && valid_usage(second_usage)
+    {
+        usage = second_usage.clone();
+        contain_stream_usage = true;
     }
 
     // #394：上游未声明终止（无 finish_reason 且无 [DONE]）时按截断失败。
