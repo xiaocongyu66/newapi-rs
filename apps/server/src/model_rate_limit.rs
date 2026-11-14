@@ -315,13 +315,13 @@ pub async fn record_redis_request(
     use redis::AsyncCommands;
     let stamp = format_model_rate_limit_time(now_unix());
     let minutes = (duration_seconds / 60).max(1);
-    let _: Result<(), _> = async {
+    let _: Result<(), redis::RedisError> = async {
         let () = connection.lpush::<_, _, ()>(key, stamp).await?;
         let () = connection
             .ltrim::<_, ()>(key, 0, (max_count - 1).max(0) as isize)
             .await?;
         let () = connection.expire::<_, ()>(key, minutes * 60).await?;
-        Ok(())
+        Ok::<(), redis::RedisError>(())
     }
     .await;
 }
