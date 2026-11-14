@@ -498,7 +498,8 @@ mod tests {
         assert_eq!(inputs[0].text, "hi");
         assert_eq!(inputs[1].image_url, "https://a.b/i.png");
         assert_eq!(inputs[2].image_url, "https://a.b/j.png");
-        assert_eq!(inputs[2].detail, "auto");
+        // Go ParseInput never fills Detail for responses inputs.
+        assert_eq!(inputs[2].detail, "");
         assert_eq!(inputs[3].kind, "input_file");
         assert_eq!(inputs[3].file_url, "https://a.b/f.pdf");
         assert_eq!(inputs[4].text, "string content");
@@ -532,7 +533,9 @@ mod tests {
     }
 
     /// Base64 media (non-URL) sources stay base64 sources
-    /// (types.NewFileSourceFromData semantics).
+    /// (types.NewFileSourceFromData semantics). A file part without
+    /// "filename" is dropped by Go ParseContent (it requires filename AND
+    /// file_data), so only the audio part yields a FileMeta.
     #[test]
     fn base64_media_sources() {
         let request = json!({
@@ -545,11 +548,23 @@ mod tests {
             ],
         });
         let meta = chat_request_token_count_meta(&request);
-        assert_eq!(meta.files.len(), 2);
+        assert_eq!(meta.files.len(), 1);
         assert_eq!(meta.files[0].file_type, "audio");
         assert!(!meta.files[0].source_is_url);
-        assert_eq!(meta.files[1].file_type, "file");
-        assert!(!meta.files[1].source_is_url);
+
+        // With filename + file_data both present the file part is kept.
+        let request = json!({
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "file", "file": {"filename": "a.txt", "file_data": "aGVsbG8="}},
+                ]},
+            ],
+        });
+        let meta = chat_request_token_count_meta(&request);
+        assert_eq!(meta.files.len(), 1);
+        assert_eq!(meta.files[0].file_type, "file");
+        assert!(!meta.files[0].source_is_url);
     }
 
     /// Estimate-token integration: the chat meta feeds

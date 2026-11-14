@@ -370,7 +370,7 @@ mod tests {
             "deepseek-ai/DeepSeek-R1/qwen"
         ));
         assert!(!is_qwen_thinking_budget_model("gpt-5"));
-        assert!(!is_qwen_thinking_budget_model("qwq"));
+        assert!(is_qwen_thinking_budget_model("qwq"));
     }
 
     /// Go openai_request.go:242-251.

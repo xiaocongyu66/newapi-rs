@@ -760,8 +760,8 @@ mod tests {
         );
     }
 
-    /// Non-image data with a decodable "format" path → 3×base
-    /// (count_tokens.go:101-108).
+    /// Undecodable image data: GetImageConfig fails and the error surfaces
+    /// unchanged (count_tokens.go:96-99 → decode_image.go:152).
     #[test]
     fn non_image_data_falls_to_three_base() {
         let switches = CountSwitches {
@@ -770,7 +770,6 @@ mod tests {
             ..Default::default()
         };
         let resolver = LocalFileResolver;
-        // gpt-4o-mini has base 2833 (count_tokens.go:60-63).
         let mut meta = FileMeta {
             source: Some("QUJD".into()),
             source_is_url: false,
@@ -779,7 +778,7 @@ mod tests {
         };
         assert_eq!(
             get_image_token(&mut meta, "gpt-4o-mini", true, switches, &resolver).unwrap_err(),
-            "fail to decode image config: QUJD"
+            "image: unknown format"
         );
     }
 

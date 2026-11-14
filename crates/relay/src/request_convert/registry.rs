@@ -94,21 +94,97 @@ pub mod converter_id {
     pub const RESPONSES_TO_CLAUDE: &str = "openai_responses_to_claude_messages";
 }
 
-/// Direct converter implementations. Only the routes ported in this slice are
-/// wired; the remaining Go converters stay unregistered so dispatch fails
-/// with the Go "not registered" error instead of silently mis-converting.
+/// Direct converter implementations. Only the chat→responses route is fully
+/// ported in this slice; the remaining Go direct converters are registered
+/// (route-table parity with text_converter_registry.go:30-140, which the
+/// composite registrations depend on) but fail closed until their underlying
+/// conversion packages are ported.
+macro_rules! fail_closed_convert {
+    ($fn_name:ident, $id:expr) => {
+        fn $fn_name(
+            _meta: &mut dyn crate::convmeta::ConvMeta,
+            _request: &Value,
+        ) -> Result<Value, String> {
+            Err(format!("request converter {:?} is not ported yet", $id))
+        }
+    };
+}
+
+fail_closed_convert!(
+    fail_claude_messages_to_openai_chat,
+    converter_id::CLAUDE_MESSAGES_TO_OPENAI_CHAT
+);
+fail_closed_convert!(
+    fail_openai_chat_to_claude_messages,
+    converter_id::OPENAI_CHAT_TO_CLAUDE_MESSAGES
+);
+fail_closed_convert!(
+    fail_gemini_content_to_openai_chat,
+    converter_id::GEMINI_CONTENT_TO_OPENAI_CHAT
+);
+fail_closed_convert!(
+    fail_openai_chat_to_gemini_content,
+    converter_id::OPENAI_CHAT_TO_GEMINI_CONTENT
+);
+fail_closed_convert!(
+    fail_openai_responses_to_openai_chat,
+    converter_id::OPENAI_RESPONSES_TO_OPENAI_CHAT
+);
+
 fn direct_converters() -> Vec<RequestConverterSpec> {
-    vec![RequestConverterSpec {
-        id: converter_id::OPENAI_CHAT_TO_OPENAI_RESPONSES,
-        from: formats::OPENAI,
-        to: formats::OPENAI_RESPONSES,
-        quality: RequestConverterQuality::Good,
-        convert: Some(|_meta, request| {
-            oai_chat_to_responses::chat_completions_request_to_responses_request(request)
-                .map_err(|e| e.0)
-        }),
-        step_converters: &[],
-    }]
+    vec![
+        RequestConverterSpec {
+            id: converter_id::OPENAI_CHAT_TO_OPENAI_RESPONSES,
+            from: formats::OPENAI,
+            to: formats::OPENAI_RESPONSES,
+            quality: RequestConverterQuality::Good,
+            convert: Some(|_meta, request| {
+                oai_chat_to_responses::chat_completions_request_to_responses_request(request)
+                    .map_err(|e| e.0)
+            }),
+            step_converters: &[],
+        },
+        RequestConverterSpec {
+            id: converter_id::CLAUDE_MESSAGES_TO_OPENAI_CHAT,
+            from: formats::CLAUDE,
+            to: formats::OPENAI,
+            quality: RequestConverterQuality::Fair,
+            convert: Some(fail_claude_messages_to_openai_chat),
+            step_converters: &[],
+        },
+        RequestConverterSpec {
+            id: converter_id::OPENAI_CHAT_TO_CLAUDE_MESSAGES,
+            from: formats::OPENAI,
+            to: formats::CLAUDE,
+            quality: RequestConverterQuality::Fair,
+            convert: Some(fail_openai_chat_to_claude_messages),
+            step_converters: &[],
+        },
+        RequestConverterSpec {
+            id: converter_id::GEMINI_CONTENT_TO_OPENAI_CHAT,
+            from: formats::GEMINI,
+            to: formats::OPENAI,
+            quality: RequestConverterQuality::Fair,
+            convert: Some(fail_gemini_content_to_openai_chat),
+            step_converters: &[],
+        },
+        RequestConverterSpec {
+            id: converter_id::OPENAI_CHAT_TO_GEMINI_CONTENT,
+            from: formats::OPENAI,
+            to: formats::GEMINI,
+            quality: RequestConverterQuality::Fair,
+            convert: Some(fail_openai_chat_to_gemini_content),
+            step_converters: &[],
+        },
+        RequestConverterSpec {
+            id: converter_id::OPENAI_RESPONSES_TO_OPENAI_CHAT,
+            from: formats::OPENAI_RESPONSES,
+            to: formats::OPENAI,
+            quality: RequestConverterQuality::Good,
+            convert: Some(fail_openai_responses_to_openai_chat),
+            step_converters: &[],
+        },
+    ]
 }
 
 /// Composite route table (Go registerBuiltinRequestConverter calls with
@@ -575,13 +651,17 @@ mod tests {
 
     /// Go request_registry.go:167-169: unregistered route error text.
     #[test]
+    /// Go request_registry.go:151-165: unregistered route errors. The
+    /// responses→gemini pair has no builtin route (Go goes through explicit
+    /// prepare + direct conversion instead).
+    #[test]
     fn convert_request_unregistered_route() {
         let mut meta = meta();
         let err = convert_request(
             &mut meta,
-            formats::CLAUDE,
-            &chat_request(),
-            Some(RequestKind::GeneralOpenAI),
+            formats::GEMINI,
+            &json!({"model": "gemini-test", "contents": []}),
+            Some(RequestKind::GeminiChat),
         )
         .expect_err("route must be missing");
         assert!(err.contains("is not registered"), "got: {err}");
@@ -715,13 +795,10 @@ mod tests {
             &json!({"model": "claude-test", "max_tokens": 16, "messages": []}),
             Some(RequestKind::Claude),
         )
-        .expect_err("composite route references unported step");
+        .expect_err("composite route resolves to unported steps");
         // claude→responses route resolves to the composite spec whose first
-        // step converter is not ported yet; Go's expand error surfaces.
-        assert!(
-            err.contains("references missing step converter") || err.contains("is not registered"),
-            "got: {err}"
-        );
+        // step converter (claude messages→chat) fails closed until ported.
+        assert!(err.contains("is not ported yet"), "got: {err}");
     }
 
     /// Go lookupRequestConverter trims the ID.

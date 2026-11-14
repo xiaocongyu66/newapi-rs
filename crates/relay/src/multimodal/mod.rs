@@ -354,9 +354,13 @@ pub fn decode_image_config(data: &[u8]) -> Result<(ImageConfig, &'static str), D
     if let Some((width, height, format)) = format {
         return Ok((ImageConfig { width, height }, format));
     }
-    Err(decode_error(
-        "failed to decode image config: unsupported format",
-    ))
+    // Go decodeImageConfig (decode_image.go:140-152): a recognized HEIF/HEIC
+    // brand whose ispe walk fails reports its own error; everything else
+    // surfaces the image.DecodeConfig error ("image: unknown format").
+    if detect_heif(data).is_some() {
+        return Err(decode_error("failed to decode HEIF/HEIC image dimensions"));
+    }
+    Err(decode_error("image: unknown format"))
 }
 
 /// Returns (width, height, format) for the first matching decoder, mirroring
@@ -848,8 +852,9 @@ mod tests {
     /// HEIF with a meta → iprp → ipco → ispe box chain (Go helper walk).
     fn sample_heif(brand: &[u8; 4]) -> Vec<u8> {
         let mut data = Vec::new();
-        // ispe box: fourcc + version/flags + width + height.
+        // Full ispe box: size(4) + fourcc + version/flags + width + height.
         let mut ispe = Vec::new();
+        ispe.extend_from_slice(&20u32.to_be_bytes());
         ispe.extend_from_slice(b"ispe");
         ispe.extend_from_slice(&[0, 0, 0, 0]); // version/flags
         ispe.extend_from_slice(&128u32.to_be_bytes());
@@ -1012,7 +1017,7 @@ mod tests {
     fn guess_mime_from_url() {
         assert_eq!(
             guess_mime_type_from_url("https://a.b/img/cat.PNG?x=1"),
-            "image/jpeg"
+            "image/png"
         );
         assert_eq!(
             guess_mime_type_from_url("https://a.b/doc.pdf"),

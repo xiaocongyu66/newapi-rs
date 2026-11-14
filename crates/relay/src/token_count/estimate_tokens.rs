@@ -256,14 +256,14 @@ mod tests {
     }
 
     /// Pure-ASCII word: one word token per contiguous latin run.
-    /// "hello world" → two words + two spaces.
+    /// "hello world" → two words + one space.
     #[test]
     fn ascii_words_and_spaces() {
         // OpenAI: word 1.02, space 0.42 → 2*1.02 + 0.42 = 2.46 → ceil 3.
         assert_eq!(estimate_token_by_model("gpt-4o", "hello world"), 3);
-        // Claude: 2*1.13 + 2*0.39 = 3.04 → ceil 4.
-        assert_eq!(estimate_token_by_model("claude-3", "hello world"), 4);
-        // Gemini: 2*1.15 + 2*0.2 = 2.7 → ceil 3.
+        // Claude: 2*1.13 + 0.39 = 2.65 → ceil 3.
+        assert_eq!(estimate_token_by_model("claude-3", "hello world"), 3);
+        // Gemini: 2*1.15 + 0.2 = 2.5 → ceil 3.
         assert_eq!(estimate_token_by_model("gemini-1.5", "hello world"), 3);
     }
 
