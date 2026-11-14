@@ -2886,29 +2886,18 @@ mod tests {
 
     /// 捕获外呼请求并回放固定响应的 transport 替身。
     struct StubTransport {
-        response: OutboundResponse,
+        status: i32,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
         captured: Mutex<Vec<OutboundRequest>>,
     }
 
     impl StubTransport {
         fn with_json(status: i32, body: &str) -> Self {
             Self {
-                response: OutboundResponse {
-                    status,
-                    headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
-                    body: OutboundResponseBody::Full(body.as_bytes().to_vec()),
-                },
-                captured: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn with_sse(chunks: &[&str]) -> Self {
-            Self {
-                response: OutboundResponse {
-                    status: 200,
-                    headers: vec![("Content-Type".to_owned(), "text/event-stream".to_owned())],
-                    body: OutboundResponseBody::Full(chunks.join("").into_bytes()),
-                },
+                status,
+                headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
+                body: body.as_bytes().to_vec(),
                 captured: Mutex::new(Vec::new()),
             }
         }
