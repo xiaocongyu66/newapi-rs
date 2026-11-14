@@ -127,8 +127,57 @@ pub struct RelayInfo {
     /// 构建；零值 = 所有适配关闭）。
     pub conv_options: crate::convmeta::ConvOptions,
 
+    // ---- channel-adapter 切片扩展 ----
+    /// Go `info.CountBillableToolCall(kind, name)` 的累计面（TokenCountMeta）。
+    pub billable_tool_calls: Vec<BillableToolCall>,
+    /// Go `info.PriceData.AddOtherRatio(key, ratio)` 的累计面（价格倍率切片
+    /// 合并前先在此聚合；PriceData 本体归 pricing 切片）。
+    pub price_other_ratios: Vec<(String, f64)>,
+    /// Go `info.Request.(*dto.AudioRequest).ResponseFormat` 的平铺
+    /// （TTS handler 读音频格式）。
+    pub audio_response_format: String,
+    /// 全局模型设置快照（Go `model_setting.GetGlobalSettings()` /
+    /// `GetGeminiSettings()` / `GetClaudeSettings()` 的请求级注入；Go 读全局，
+    /// 纯 crate 无全局状态，由装配层在构建 RelayInfo 时填入）。
+    pub global_model_settings: GlobalModelSettings,
+
     // ---- ChannelMeta ----
     pub channel_meta: Option<ChannelMeta>,
+}
+
+/// Go `info.CountBillableToolCall` 的入参（dto.BuildInCall* 常量 + 名称）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct BillableToolCall {
+    /// Go `dto.BuildInCallFunctionCall` / `BuildInCallToolUse` /
+    /// `BuildInCallWebSearchCall` / `BuildInCallFileSearchCall`。
+    pub kind: String,
+    pub name: String,
+}
+
+/// Go `dto.BuildInCall*` 常量。
+pub mod build_in_call {
+    pub const FUNCTION_CALL: &str = "function_call";
+    pub const TOOL_USE: &str = "tool_use";
+    pub const WEB_SEARCH_CALL: &str = "web_search_call";
+    pub const FILE_SEARCH_CALL: &str = "file_search_call";
+}
+
+/// Go 内部 catalog 全局设置中被三大适配器读取字段的请求级快照。
+/// （Go `model_setting.GetGlobalSettings().PassThroughRequestEnabled` /
+/// `ThinkingModelBlacklist`、`GetGeminiSettings().ThinkingAdapterEnabled` /
+/// `VersionSettings`、`GetClaudeSettings().HeadersSettings`。）
+#[derive(Clone, Debug, Default)]
+pub struct GlobalModelSettings {
+    /// Go `globalSettings.ThinkingModelBlacklist`。
+    pub thinking_model_blacklist: Vec<String>,
+    /// Go `geminiSettings.ThinkingAdapterEnabled`。
+    pub gemini_thinking_adapter_enabled: bool,
+    /// Go `globalSettings.PassThroughRequestEnabled`。
+    pub pass_through_request_enabled: bool,
+    /// Go `geminiSettings.VersionSettings`（key → version，含 "default"）。
+    pub gemini_version_settings: std::collections::BTreeMap<String, String>,
+    /// Go `claudeSettings.HeadersSettings`（model → header → value 列表）。
+    pub claude_headers_settings: std::collections::BTreeMap<String, Vec<(String, Vec<String>)>>,
 }
 
 /// Go `LastErrorSummary` 占位：ParamOverride 上下文的 `last_error` 字段来源。
@@ -567,6 +616,173 @@ impl RelayInfo {
         }
         meta.support_stream_options = stream_supported_channels(meta.channel_type);
         self.channel_meta = Some(meta);
+    }
+
+    // ---- channel-adapter 切片扩展 ----
+
+    /// Go `info.ChannelType`（ChannelMeta 平面读取；缺省 0）。
+    pub fn channel_type(&self) -> i32 {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| meta.channel_type)
+            .unwrap_or(0)
+    }
+
+    /// Go `info.ApiKey`。
+    pub fn api_key(&self) -> String {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| meta.api_key.clone())
+            .unwrap_or_default()
+    }
+
+    /// Go `info.Organization`。
+    pub fn organization(&self) -> String {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| meta.organization.clone())
+            .unwrap_or_default()
+    }
+
+    /// Go `info.ChannelBaseUrl`。
+    pub fn channel_base_url(&self) -> String {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| meta.channel_base_url.clone())
+            .unwrap_or_default()
+    }
+
+    /// Go `info.ChannelBaseUrl = x`（realtime ws 改写）。
+    pub fn set_channel_base_url(&mut self, base_url: String) {
+        if let Some(meta) = self.channel_meta.as_mut() {
+            meta.channel_base_url = base_url;
+        }
+    }
+
+    /// Go `info.UpstreamModelName`。
+    pub fn upstream_model_name(&self) -> String {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| meta.upstream_model_name.clone())
+            .unwrap_or_default()
+    }
+
+    /// Go `info.UpstreamModelName = x`。
+    pub fn set_upstream_model_name(&mut self, name: String) {
+        if let Some(meta) = self.channel_meta.as_mut() {
+            meta.upstream_model_name = name;
+        }
+    }
+
+    /// Go `info.ApiVersion`。
+    pub fn api_version(&self) -> String {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| meta.api_version.clone())
+            .unwrap_or_default()
+    }
+
+    /// Go `info.ChannelCreateTime`。
+    pub fn channel_create_time(&self) -> i64 {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| meta.channel_create_time)
+            .unwrap_or(0)
+    }
+
+    /// Go `info.ChannelSetting`。
+    pub fn channel_setting(&self) -> &serde_json::Value {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| &meta.channel_setting)
+            .unwrap_or(&serde_json::Value::Null)
+    }
+
+    /// Go `info.ChannelOtherSettings`。
+    pub fn channel_other_settings(&self) -> &serde_json::Value {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| &meta.channel_other_settings)
+            .unwrap_or(&serde_json::Value::Null)
+    }
+
+    /// Go `info.HeadersOverride`。
+    pub fn headers_override(&self) -> &serde_json::Value {
+        self.channel_meta
+            .as_ref()
+            .map(|meta| &meta.headers_override)
+            .unwrap_or(&serde_json::Value::Null)
+    }
+
+    /// Go `info.CountBillableToolCall(kind, name)`。
+    pub fn count_billable_tool_call(&mut self, kind: &str, name: &str) {
+        self.billable_tool_calls.push(BillableToolCall {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+        });
+    }
+
+    /// Go `info.PriceData.AddOtherRatio(key, ratio)` 的聚合面。
+    pub fn add_other_ratio(&mut self, key: &str, ratio: f64) {
+        self.price_other_ratios.push((key.to_owned(), ratio));
+    }
+
+    /// Go `info.PriceData.OtherRatios()[key]` 的聚合面（取最后一次写入）。
+    pub fn other_ratio(&self, key: &str) -> Option<f64> {
+        self.price_other_ratios
+            .iter()
+            .rev()
+            .find(|(existing, _)| existing == key)
+            .map(|(_, value)| *value)
+    }
+
+    /// Go `ChannelSetting.ForceFormat`。
+    pub fn force_format(&self) -> bool {
+        self.channel_setting()
+            .get("force_format")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Go `ChannelSetting.ThinkingToContent`。
+    pub fn thinking_to_content(&self) -> bool {
+        self.channel_setting()
+            .get("thinking_to_content")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Go `ChannelSetting.PassThroughBodyEnabled`。
+    pub fn pass_through_body_enabled(&self) -> bool {
+        self.channel_setting()
+            .get("pass_through_body_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Go `ChannelOtherSettings.AzureResponsesVersion`。
+    pub fn azure_responses_version(&self) -> String {
+        self.channel_other_settings()
+            .get("azure_responses_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned()
+    }
+
+    /// Go `ChannelOtherSettings.IsOpenRouterEnterprise()`。
+    pub fn is_openrouter_enterprise(&self) -> bool {
+        self.channel_other_settings()
+            .get("openrouter_enterprise")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Go `ChannelOtherSettings.ClaudeBetaQuery`。
+    pub fn claude_beta_query_channel_setting(&self) -> bool {
+        self.channel_other_settings()
+            .get("claude_beta_query")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
 }
 

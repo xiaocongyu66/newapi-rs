@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 pub mod adaptor;
+pub mod adaptor_common;
+pub mod adaptors;
 pub mod channel_prompt;
 pub mod channel_select;
 pub mod classify_billing;
