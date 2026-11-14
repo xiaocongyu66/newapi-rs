@@ -1283,6 +1283,7 @@ pub fn gemini_text_generation_stream_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adaptor::Adaptor as _;
     use crate::adaptor_common::{OutboundRequest, OutboundResponseBody, OutboundTransport};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
@@ -1489,7 +1490,7 @@ mod tests {
     // SetupRequestHeader：x-goog-api-key。
     #[test]
     fn setup_headers() {
-        let info = gemini_info("gemini-2.5-flash");
+        let mut info = gemini_info("gemini-2.5-flash");
         info.channel_meta.as_mut().expect("meta").api_key = "goog-key".to_owned();
         let adaptor = GeminiAdaptor::new();
         let headers = adaptor

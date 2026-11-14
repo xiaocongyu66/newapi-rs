@@ -749,7 +749,7 @@ mod tests {
     // SetupRequestHeader：x-api-key / anthropic-version 缺省 / 客户端透传。
     #[test]
     fn setup_headers() {
-        let info = claude_info();
+        let mut info = claude_info();
         info.channel_meta.as_mut().expect("meta").api_key = "sk-ant".to_owned();
         let adaptor = ClaudeAdaptor::new();
         let headers = adaptor.setup_request_header(&info, &[]).expect("headers");
