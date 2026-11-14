@@ -585,11 +585,14 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn selector_passes_attempt_and_exclusions_to_lookup() {
-        let seen = std::sync::Mutex::new(Vec::<(String, i32, Vec<i64>)>::new());
+        // Arc 共享观测缓冲：dyn 强转要求 'static 借用（E0597 面）。
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<(String, i32, Vec<i64>)>::new()));
+        let seen_for_lookup = Arc::clone(&seen);
         let lookup =
-            |group: &str, model: &str, path: &str, attempt: i32, excluded: &ExclusionSet| {
-                seen.lock().unwrap().push((
+            move |group: &str, model: &str, path: &str, attempt: i32, excluded: &ExclusionSet| {
+                seen_for_lookup.lock().unwrap().push((
                     format!("{group}|{model}|{path}"),
                     attempt,
                     excluded.ids(),
@@ -603,7 +606,7 @@ mod tests {
         let selection = selector.select_channel(&request).unwrap();
         assert_eq!(selection.channel_id, 9);
         assert_eq!(selection.selected_group, "auto");
-        let observed = seen.into_inner().unwrap();
+        let observed = seen.lock().unwrap().clone();
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0].0, "auto|gpt-4|/v1/chat/completions");
         assert_eq!(observed[0].1, 2);
