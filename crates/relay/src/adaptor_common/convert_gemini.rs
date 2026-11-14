@@ -167,10 +167,14 @@ pub fn usage_from_gemini_metadata(
         if fallback_prompt_tokens <= 0 {
             return None;
         }
-        let mut usage = Usage::default();
-        usage.prompt_tokens = fallback_prompt_tokens;
-        usage.prompt_tokens_details.text_tokens = fallback_prompt_tokens;
-        return Some(usage);
+        return Some(Usage {
+            prompt_tokens: fallback_prompt_tokens,
+            prompt_tokens_details: crate::adaptor_common::usage::InputTokenDetails {
+                text_tokens: fallback_prompt_tokens,
+                ..crate::adaptor_common::usage::InputTokenDetails::default()
+            },
+            ..Usage::default()
+        });
     };
 
     let mut prompt_tokens = metadata.prompt_token_count + metadata.tool_use_prompt_token_count;

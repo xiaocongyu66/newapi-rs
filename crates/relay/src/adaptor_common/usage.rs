@@ -373,11 +373,13 @@ pub fn response_text_2_usage(
     prompt_tokens: i64,
 ) -> Usage {
     sink.set_context("local_count_tokens", serde_json::Value::Bool(true));
-    let mut usage = Usage::default();
-    usage.prompt_tokens = prompt_tokens;
-    usage.completion_tokens = estimate_token_by_model(model_name, response_text);
-    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-    usage
+    let completion_tokens = estimate_token_by_model(model_name, response_text);
+    Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+        ..Usage::default()
+    }
 }
 
 /// Go `relaycommon.ResponseText2Usage` 的无上下文变体（纯计算）。
@@ -386,11 +388,13 @@ pub fn response_text_2_usage_pure(
     model_name: &str,
     prompt_tokens: i64,
 ) -> Usage {
-    let mut usage = Usage::default();
-    usage.prompt_tokens = prompt_tokens;
-    usage.completion_tokens = estimate_token_by_model(model_name, response_text);
-    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-    usage
+    let completion_tokens = estimate_token_by_model(model_name, response_text);
+    Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+        ..Usage::default()
+    }
 }
 
 /// Go `common.Provider`（estimate_tokens.go:13-18）。

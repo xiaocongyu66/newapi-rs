@@ -2227,9 +2227,12 @@ pub fn openai_tts_handler(
     sink: &mut dyn ClientSink,
     response_format: &str,
 ) -> Usage {
-    let mut usage = Usage::default();
-    usage.prompt_tokens = info.get_estimate_prompt_tokens();
-    usage.total_tokens = info.get_estimate_prompt_tokens();
+    let prompt_tokens = info.get_estimate_prompt_tokens();
+    let mut usage = Usage {
+        prompt_tokens,
+        total_tokens: prompt_tokens,
+        ..Usage::default()
+    };
 
     // 上游 header 透传（ShouldCopyUpstreamHeader 策略由装配层实现）。
     for (key, value) in &response.headers {
@@ -2320,11 +2323,12 @@ pub fn openai_stt_handler(
         return Ok(usage);
     }
 
-    let mut usage = Usage::default();
-    usage.prompt_tokens = info.get_estimate_prompt_tokens();
-    usage.completion_tokens = 0;
-    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-    Ok(usage)
+    let prompt_tokens = info.get_estimate_prompt_tokens();
+    Ok(Usage {
+        prompt_tokens,
+        total_tokens: prompt_tokens,
+        ..Usage::default()
+    })
 }
 
 // ---- image（relay_image.go） ------------------------------------------------

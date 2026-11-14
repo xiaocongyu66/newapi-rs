@@ -1168,10 +1168,11 @@ pub fn gemini_image_handler(
         .and_then(|d| d.as_array())
         .map(|a| a.len() as i64)
         .unwrap_or(0);
-    let mut usage = Usage::default();
-    usage.prompt_tokens = IMAGE_TOKENS * generated_images;
-    usage.completion_tokens = 0;
-    usage.total_tokens = IMAGE_TOKENS * generated_images;
+    let usage = Usage {
+        prompt_tokens: IMAGE_TOKENS * generated_images,
+        total_tokens: IMAGE_TOKENS * generated_images,
+        ..Usage::default()
+    };
     DoResponseOutcome::ok(usage)
 }
 
