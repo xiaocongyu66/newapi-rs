@@ -195,7 +195,7 @@ struct AIProxyUserOverviewResponse {
     data: AIProxyOverviewData,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct AIProxyOverviewData {
     #[serde(default, rename = "totalPoints")]
     total_points: f64,
@@ -222,7 +222,7 @@ struct SiliconFlowUsageResponse {
     data: SiliconFlowData,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct SiliconFlowData {
     #[serde(default)]
     total_balance: String,
@@ -246,7 +246,7 @@ struct OpenRouterCreditResponse {
     data: OpenRouterCreditData,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct OpenRouterCreditData {
     #[serde(default)]
     total_credits: f64,
@@ -264,7 +264,7 @@ struct MoonshotBalanceResponse {
     data: MoonshotBalanceData,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct MoonshotBalanceData {
     #[serde(default)]
     available_balance: f64,
