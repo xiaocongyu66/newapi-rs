@@ -171,14 +171,16 @@ pub fn setup_api_request_header(
         return Vec::new();
     }
     let content_type = header_value(client_headers, "content-type");
-    let mut accept = header_value(client_headers, "accept");
+    let accept = header_value(client_headers, "accept");
     let mut headers = Vec::new();
     if !content_type.is_empty() {
         headers.push(("Content-Type".to_owned(), content_type));
     }
-    if accept.is_empty() && info.is_stream {
-        accept = "text/event-stream".to_owned();
-    }
+    let accept = if accept.is_empty() && info.is_stream {
+        "text/event-stream"
+    } else {
+        accept
+    };
     if !accept.is_empty() {
         headers.push(("Accept".to_owned(), accept));
     }
@@ -451,7 +453,7 @@ impl OutboundResponse {
                     match chunk {
                         Ok(bytes) => buffer.extend_from_slice(&bytes),
                         Err(err) => {
-                            return Err(new_error(err, error_code::READ_RESPONSE_BODY_FAILED, 500));
+                            return Err(new_error(err, error_code::READ_RESPONSE_BODY_FAILED));
                         }
                     }
                 }
@@ -905,7 +907,7 @@ mod tests {
         assert_eq!(estimate_token(Provider::OpenAI, "你好界"), 3);
         assert_eq!(
             estimate_token(Provider::Gemini, "你好界"),
-            (0.68 * 3.0).ceil() as i64
+            (0.68_f64 * 3.0).ceil() as i64
         ); // ceil(2.04)=3
         assert_eq!(
             estimate_token_by_model("gemini-2.5-flash", "abc"),

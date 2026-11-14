@@ -367,6 +367,7 @@ pub fn response_claude_2_openai(
                         name: message.name.clone(),
                         arguments: args,
                     },
+                    ..ToolCallResponse::default()
                 });
             }
             "thinking" => {

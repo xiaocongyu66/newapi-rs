@@ -24,6 +24,7 @@
 //! - TTS 非 pcm 格式的音频时长解析（Go `common.GetAudioDuration`）未移植，
 //!   统一走尺寸回退分支。
 
+use crate::adaptor::Adaptor as _;
 use crate::adaptor::channel_type as ct;
 use crate::adaptor_common::convert_claude::{
     ChatCompletionsStreamResponse, SimpleResponse, ToolCallResponse,
@@ -394,7 +395,7 @@ impl crate::adaptor::Adaptor for OpenAiAdaptor {
                     .next()
                     .unwrap_or(&info.request_url_path)
                     .to_owned();
-                let mut request_url = format!("{path_without_query}?api-version={api_version}");
+                let request_url = format!("{path_without_query}?api-version={api_version}");
                 let mut task = request_url
                     .strip_prefix("/v1/")
                     .unwrap_or(&request_url)
@@ -3283,7 +3284,7 @@ mod tests {
         struct NoopWaker;
         impl Wake for NoopWaker {
             fn wake(self: Arc<Self>) {}
-            fn wake_by_ref(self: Arc<Self>) {}
+            fn wake_by_ref(self: &Arc<Self>) {}
         }
         let mut pinned = std::pin::pin!(f);
         let waker = Waker::from(Arc::new(NoopWaker));

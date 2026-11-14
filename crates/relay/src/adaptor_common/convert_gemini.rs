@@ -250,6 +250,7 @@ fn gemini_response_tool_call(part: &GeminiPart) -> Option<super::convert_claude:
             arguments: args,
             name: call.function_name.clone(),
         },
+        ..super::convert_claude::ToolCallResponse::default()
     })
 }
 

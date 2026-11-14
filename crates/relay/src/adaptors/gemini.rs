@@ -1223,7 +1223,7 @@ pub fn native_gemini_embedding_handler(
     };
     // batch / single 两种响应形态分别校验（Go 分别 Unmarshal）。
     if info.is_gemini_batch_embedding {
-        #[derive(serde::Deserialize)]
+        #[derive(Default, serde::Deserialize)]
         #[serde(default)]
         struct BatchResponse {
             #[serde(rename = "embeddings", default)]
@@ -1236,7 +1236,7 @@ pub fn native_gemini_embedding_handler(
             );
         }
     } else {
-        #[derive(serde::Deserialize)]
+        #[derive(Default, serde::Deserialize)]
         #[serde(default)]
         struct SingleResponse {
             #[serde(rename = "embedding", default)]
@@ -1626,7 +1626,7 @@ mod tests {
             struct NoopWaker;
             impl Wake for NoopWaker {
                 fn wake(self: Arc<Self>) {}
-                fn wake_by_ref(self: Arc<Self>) {}
+                fn wake_by_ref(self: &Arc<Self>) {}
             }
             let mut pinned = std::pin::pin!(future);
             let waker = Waker::from(Arc::new(NoopWaker));

@@ -14,10 +14,11 @@
 //! 已知偏差：openai→claude 的**请求**转换（Go `relayconvert.ConvertRequest`）
 //! 归转换切片 seam；本适配器原生 claude→openai **响应**/流事件转换子集已移植。
 
+use crate::adaptor::Adaptor as _;
 use crate::adaptor_common::convert_claude::{
     ClaudeResponse, ClaudeResponseInfo, build_message_delta_patch_usage,
     build_openai_style_usage_from_claude_usage, format_claude_response_info,
-    patch_claude_message_delta_usage_data, response_claude_2_openai, stop_reason_claude_to_openai,
+    patch_claude_message_delta_usage_data, response_claude_2_openai,
     stream_response_claude_2_openai,
 };
 use crate::adaptor_common::usage::{
@@ -124,7 +125,7 @@ fn common_claude_headers_operation(
             // 归并去重：现有头值 + 配置值，逗号连接。
             let mut merged: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = Default::default();
-            let mut push_value =
+            let push_value =
                 |value: &str,
                  merged: &mut Vec<String>,
                  seen: &mut std::collections::HashSet<String>| {
@@ -258,8 +259,8 @@ pub fn handle_stream_response_data(
 
         count_claude_stream_billable_tools(info, sink, &claude_response);
 
-        let _ = sink.object_data(&serde_json::to_value(&response).map_err(|e| e.to_string())?);
         // Go: logger.LogError on failure —— sink 错误面为 Result，吞掉与 Go 一致。
+        let _ = sink.object_data(&serde_json::to_value(&response).unwrap_or_default());
     }
     Ok(())
 }
@@ -813,7 +814,7 @@ mod tests {
             struct NoopWaker;
             impl Wake for NoopWaker {
                 fn wake(self: Arc<Self>) {}
-                fn wake_by_ref(self: Arc<Self>) {}
+                fn wake_by_ref(self: &Arc<Self>) {}
             }
             let mut pinned = std::pin::pin!(future);
             let waker = Waker::from(Arc::new(NoopWaker));
