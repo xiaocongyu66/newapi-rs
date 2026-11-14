@@ -835,7 +835,7 @@ pub fn gemini_chat_stream_handler(
             if info.send_response_count == 0 {
                 // send first response
                 let mut empty_response = json!({
-                    "id": id,
+                    "id": id.clone(),
                     "object": "chat.completion.chunk",
                     "created": create_at,
                     "model": info.upstream_model_name(),
@@ -885,7 +885,7 @@ pub fn gemini_chat_stream_handler(
             }
             if is_stop && info.relay_format != relay_format::CLAUDE {
                 let stop_response = json!({
-                    "id": id,
+                    "id": id.clone(),
                     "object": "chat.completion.chunk",
                     "created": create_at,
                     "model": info.upstream_model_name(),
@@ -905,7 +905,7 @@ pub fn gemini_chat_stream_handler(
         // Go: ClaudeConvertInfo 未 done 时用 stop 响应代替 final usage；该响应经
         // relayconvert 转 claude 事件（seam），openai chunk 不直接出站。
         let _stop = json!({
-            "id": id,
+            "id": id.clone(),
             "object": "chat.completion.chunk",
             "created": create_at,
             "model": info.upstream_model_name(),
@@ -916,7 +916,7 @@ pub fn gemini_chat_stream_handler(
         // openai 格式：ShouldIncludeUsage 且无 stream usage 时发 final usage 块。
         if info.should_include_usage {
             let response = json!({
-                "id": id,
+                "id": id.clone(),
                 "object": "chat.completion.chunk",
                 "created": create_at,
                 "model": info.upstream_model_name(),
