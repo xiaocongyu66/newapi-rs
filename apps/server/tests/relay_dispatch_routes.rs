@@ -246,7 +246,7 @@ const LOGS_POSTGRES: &str = r#"CREATE TABLE logs (
     username TEXT NOT NULL DEFAULT '', token_name TEXT NOT NULL DEFAULT '',
     model_name TEXT NOT NULL DEFAULT '', quota BIGINT NOT NULL DEFAULT 0,
     prompt_tokens BIGINT NOT NULL DEFAULT 0, completion_tokens BIGINT NOT NULL DEFAULT 0,
-    use_time BIGINT NOT NULL DEFAULT 0, is_stream BIGINT NOT NULL DEFAULT 0,
+    use_time BIGINT NOT NULL DEFAULT 0, is_stream BOOLEAN NOT NULL DEFAULT FALSE,
     channel_id BIGINT NOT NULL DEFAULT 0, token_id BIGINT NOT NULL DEFAULT 0,
     "group" TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '',
     request_id TEXT NOT NULL DEFAULT '', upstream_request_id TEXT NOT NULL DEFAULT '',
@@ -870,7 +870,8 @@ async fn run_contract(db: &Database) {
         body["error"]["message"]
     );
     // Claude 面：预扣费退款返还（max_tokens 16 → 预扣 516 × 倍率，失败全额退）。
-    assert_eq!(user_quota_of(db, USER_ID).await, USER_QUOTA - 15 - 15);
+    // 额度基线已在"回到普通用户"复位为 USER_QUOTA；失败面净变化为零。
+    assert_eq!(user_quota_of(db, USER_ID).await, USER_QUOTA);
 }
 
 #[tokio::test]
