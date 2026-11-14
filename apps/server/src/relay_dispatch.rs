@@ -1328,7 +1328,7 @@ pub async fn relay_chain(state: AppState, input: RelayChainInput) -> Response {
     // ── 结算 / 退款（handle_relay.go:204-213 defer 面）────────────────────
     if let (Some(outcome), Some(channel_id)) = (outcome.as_ref(), settled_channel_id) {
         let usage = usage_from_body(&outcome.body);
-        let mut summary = calculate_text_quota_summary(
+        let summary = calculate_text_quota_summary(
             &adapter,
             &mut billing_info,
             &estimate.price_data,

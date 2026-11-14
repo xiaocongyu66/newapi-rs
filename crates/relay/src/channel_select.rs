@@ -585,7 +585,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn selector_passes_attempt_and_exclusions_to_lookup() {
         // Arc 共享观测缓冲：dyn 强转要求 'static 借用（E0597 面）。
         let seen = Arc::new(std::sync::Mutex::new(Vec::<(String, i32, Vec<i64>)>::new()));

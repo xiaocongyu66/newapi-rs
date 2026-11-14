@@ -322,7 +322,9 @@ async fn reset(db: &Database) {
         "users",
     ] {
         backend!(db, pool, {
-            sqlx::query(&format!(r#"DELETE FROM "{table}""#))
+            // 表名来自测试常量表（非用户输入）：AssertSqlSafe 审计面。
+            let sql = format!(r#"DELETE FROM "{table}""#);
+            sqlx::query(sqlx::AssertSqlSafe(sql))
                 .execute(pool)
                 .await
                 .expect("reset");
@@ -887,10 +889,13 @@ async fn postgres_contract() {
             let schema = schema.clone();
             Box::pin(async move {
                 let escaped = schema.replace('"', "\"\"");
-                sqlx::query(&format!(r#"CREATE SCHEMA IF NOT EXISTS "{escaped}""#))
+                // schema 名为进程内合成值（非用户输入）：AssertSqlSafe 审计面。
+                let create = format!(r#"CREATE SCHEMA IF NOT EXISTS "{escaped}""#);
+                sqlx::query(sqlx::AssertSqlSafe(create))
                     .execute(&mut *conn)
                     .await?;
-                sqlx::query(&format!(r#"SET search_path TO "{escaped}""#))
+                let set_path = format!(r#"SET search_path TO "{escaped}""#);
+                sqlx::query(sqlx::AssertSqlSafe(set_path))
                     .execute(&mut *conn)
                     .await?;
                 Ok(())
