@@ -1036,10 +1036,7 @@ mod tests {
         let pcm = "AA=="; // 1 byte → 0 samples at /2 → 0 duration
         assert_eq!(parse_audio(pcm, "pcm16").unwrap(), 0.0);
         // g711: 1 byte per sample at 8 kHz → 8000 bytes = 1 second.
-        let mut g711_bytes = Vec::new();
-        for _ in 0..8000 {
-            g711_bytes.push(0x55u8);
-        }
+        let g711_bytes = vec![0x55u8; 8000];
         let encoded = encode_b64(&g711_bytes);
         assert!((parse_audio(&encoded, "g711_ulaw").unwrap() - 1.0).abs() < 1e-9);
         assert!((parse_audio(&encoded, "g711_alaw").unwrap() - 1.0).abs() < 1e-9);

@@ -856,7 +856,9 @@ mod tests {
         };
         let text_tokens = tokenize_text::count_text_token("hello world", "gpt-5-chat");
         let got = estimate_request_token(&mut meta, &inputs, switches, &resolver, None).unwrap();
-        assert_eq!(got, text_tokens + 2 * 8 + 3 * 3 + 1 * 3 + 3);
+        // Overhead: tools 2*8, messages 3*3, name 1*3, constant 3.
+        let (tools, messages, names) = (2i64, 3i64, 1i64);
+        assert_eq!(got, text_tokens + tools * 8 + messages * 3 + names * 3 + 3);
     }
 
     /// text_number token type counts runes (count_tokens.go:223-225).
@@ -1014,10 +1016,7 @@ mod tests {
     /// 1/60*200/0.24 = 13.88 → 13.
     #[test]
     fn audio_token_formulas() {
-        let mut g711 = Vec::new();
-        for _ in 0..8000 {
-            g711.push(0x55u8);
-        }
+        let g711 = vec![0x55u8; 8000];
         let encoded = base64_of(&g711);
         assert_eq!(count_audio_token_input(&encoded, "g711_ulaw").unwrap(), 27);
         assert_eq!(count_audio_token_output(&encoded, "g711_alaw").unwrap(), 13);

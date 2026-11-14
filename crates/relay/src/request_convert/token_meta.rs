@@ -576,8 +576,8 @@ mod tests {
             None,
         )
         .unwrap();
-        // messages_count=1 → +3, plus the constant +3.
-        assert_eq!(got, text_tokens + 1 * 3 + 3);
+        // messages_count=1 and name_count=0 → +3, plus the constant +3.
+        assert_eq!(got, text_tokens + 3 + 3);
     }
 
     fn meta_to_count_meta(meta: &CountMeta) -> crate::token_count::count_tokens::TokenCountMeta {
