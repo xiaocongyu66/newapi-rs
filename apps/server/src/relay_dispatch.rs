@@ -27,6 +27,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value};
+use sqlx::Row;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use newapi_billing::billing_session::pricing::{
@@ -34,7 +35,7 @@ use newapi_billing::billing_session::pricing::{
 };
 use newapi_billing::billing_session::quota_math::{QUOTA_PER_UNIT, quota_from_float_checked};
 use newapi_billing::billing_session::session::{
-    BillingApiError, BillingSession, RelayBillingInfo, pre_consume_billing,
+    BillingApiError, RelayBillingInfo, pre_consume_billing,
 };
 use newapi_billing::billing_session::store::BillingStore;
 use newapi_billing::billing_session::text_quota::{
@@ -1237,7 +1238,7 @@ pub async fn relay_chain(state: AppState, input: RelayChainInput) -> Response {
             terminal = Some(last_error.unwrap_or_else(|| terminal_failover_error(None, None, 0)));
             break;
         }
-        let Some(DistributedChannel { route, channel, .. }) = current.take() else {
+        let Some(DistributedChannel { route, .. }) = current.take() else {
             // 重试换道：排除已试 route unit 后重选（Go getChannel 的
             // ChannelMeta 非空分支）。无候选 → failover 终态包裹。
             match select_route_unit_db(
