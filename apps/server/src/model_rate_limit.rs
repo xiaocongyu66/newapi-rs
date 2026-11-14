@@ -60,13 +60,25 @@ pub type GroupRateLimit = [i64; 2];
 
 /// Go `rate_limit` package defaults (`rate_limit.go:10-14`): disabled,
 /// 1 minute, total 0, success 1000, empty group map.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelRateLimitSettings {
     pub enabled: bool,
     pub duration_minutes: i64,
     pub total_max_count: i64,
     pub success_max_count: i64,
     pub group: HashMap<String, GroupRateLimit>,
+}
+
+impl Default for ModelRateLimitSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duration_minutes: 1,
+            total_max_count: 0,
+            success_max_count: 1000,
+            group: HashMap::new(),
+        }
+    }
 }
 
 impl ModelRateLimitSettings {
@@ -153,11 +165,22 @@ pub struct MemoryRequestLimiter {
 
 impl MemoryRequestLimiter {
     /// Admits or rejects one request at `now` (Unix seconds). Mirrors Go's
-    /// store-miss / length / window branches exactly.
+    /// store-miss / length / window branches exactly. The clock is injected
+    /// so tests are deterministic.
     pub fn request(&self, key: &str, max_request_num: i64, duration_seconds: i64) -> bool {
+        self.request_at(key, max_request_num, duration_seconds, now_unix())
+    }
+
+    /// The clock-injected form of [`request`](Self::request).
+    pub fn request_at(
+        &self,
+        key: &str,
+        max_request_num: i64,
+        duration_seconds: i64,
+        now: i64,
+    ) -> bool {
         let mut windows = self.windows.lock().expect("mrrl memory limiter lock");
         let queue = windows.entry(key.to_owned()).or_default();
-        let now = now_unix();
         if queue.len() < max_request_num.max(0) as usize {
             queue.push_back(now);
             return true;
@@ -449,22 +472,25 @@ pub fn memory_rate_limit_handler(
     total_max_count: i64,
     success_max_count: i64,
     response_ok: Option<bool>,
+    now: i64,
 ) -> Option<Response> {
     let total_key = format!("{MODEL_REQUEST_RATE_LIMIT_COUNT_MARK}{user_id}");
     let success_key = format!("{MODEL_REQUEST_RATE_LIMIT_SUCCESS_COUNT_MARK}{user_id}");
     // 1. total check (skipped when totalMaxCount == 0).
-    if total_max_count > 0 && !limiter.request(&total_key, total_max_count, duration_seconds) {
+    if total_max_count > 0
+        && !limiter.request_at(&total_key, total_max_count, duration_seconds, now)
+    {
         return Some(StatusCode::TOO_MANY_REQUESTS.into_response());
     }
     // 2. success check via a probe key that is never the recording key.
     let check_key = format!("{success_key}_check");
-    if !limiter.request(&check_key, success_max_count, duration_seconds) {
+    if !limiter.request_at(&check_key, success_max_count, duration_seconds, now) {
         return Some(StatusCode::TOO_MANY_REQUESTS.into_response());
     }
     // 4. record success after a sub-400 response (the recording call itself
     // goes straight to the real success key in Go).
     if response_ok.unwrap_or(false) {
-        limiter.request(&success_key, success_max_count, duration_seconds);
+        limiter.request_at(&success_key, success_max_count, duration_seconds, now);
     }
     None
 }
@@ -538,6 +564,7 @@ pub async fn model_request_rate_limit(
         total_max_count,
         success_max_count,
         None,
+        now_unix(),
     ) {
         return response;
     }
@@ -582,22 +609,24 @@ mod tests {
     fn memory_limiter_reproduces_go_request_semantics() {
         let limiter = MemoryRequestLimiter::default();
         // Fresh key always admitted (Go's store-miss branch).
-        assert!(limiter.request("k", 2, 10));
-        assert!(limiter.request("k", 2, 10));
-        assert!(!limiter.request("k", 2, 10));
-        // Window elapsed: pop the oldest, admit.
-        assert!(limiter.request("k", 2, 10));
+        assert!(limiter.request_at("k", 2, 10, 1_000));
+        assert!(limiter.request_at("k", 2, 10, 1_005));
+        assert!(!limiter.request_at("k", 2, 10, 1_009));
+        // Window elapsed (1_009 - 1_000 >= 10): pop the oldest, admit.
+        assert!(limiter.request_at("k", 2, 10, 1_010));
+        // Same-second bursts never expire the window.
+        assert!(!limiter.request_at("k", 2, 10, 1_010));
     }
 
     #[test]
     fn memory_handler_rejects_total_and_success_independently() {
         let limiter = MemoryRequestLimiter::default();
         // total 0 skips the total check entirely.
-        assert!(memory_rate_limit_handler(&limiter, 1, 60, 0, 2, None).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 1, 60, 0, 2, None).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 1, 60, 0, 2, None, 1_000).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 1, 60, 0, 2, None, 1_001).is_none());
         // Third request trips the success probe (max 2), bare 429 without a
         // body — Go's c.Status(429); c.Abort().
-        let response = memory_rate_limit_handler(&limiter, 1, 60, 0, 2, None);
+        let response = memory_rate_limit_handler(&limiter, 1, 60, 0, 2, None, 1_002);
         assert!(response.is_some());
         assert_eq!(response.unwrap().status(), StatusCode::TOO_MANY_REQUESTS);
     }
@@ -607,14 +636,14 @@ mod tests {
         // successMaxCount 1: probe admits, recording fills the real key, the
         // third probe rejects.
         let limiter = MemoryRequestLimiter::default();
-        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true)).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true)).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true)).is_some());
+        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_000).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_001).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 2, 60, 0, 1, Some(true), 1_002).is_some());
         // A >=400 response records nothing: the probe still admits twice.
         let limiter = MemoryRequestLimiter::default();
-        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false)).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false)).is_none());
-        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false)).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false), 1_000).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false), 1_001).is_none());
+        assert!(memory_rate_limit_handler(&limiter, 3, 60, 0, 1, Some(false), 1_002).is_none());
     }
 
     #[test]

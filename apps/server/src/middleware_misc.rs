@@ -1075,7 +1075,7 @@ mod tests {
     fn civil_from_days_matches_known_dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(19_723), (2024, 1, 1));
-        assert_eq!(civil_from_days(20_770), (2026, 11, 14));
+        assert_eq!(civil_from_days(20_771), (2026, 11, 14));
     }
 
     #[test]
@@ -1105,8 +1105,16 @@ mod tests {
             disk_usage: 0.0,
         };
         assert_eq!(check_system_performance(config, zero), None);
+        // Go's `int(status.CPUUsage)` truncates: 90.5 becomes 90 and does
+        // not trip the strictly-greater comparison.
         let cpu = SystemStatus {
             cpu_usage: 90.5,
+            memory_usage: 0.0,
+            disk_usage: 0.0,
+        };
+        assert_eq!(check_system_performance(config, cpu), None);
+        let cpu = SystemStatus {
+            cpu_usage: 91.0,
             memory_usage: 0.0,
             disk_usage: 0.0,
         };
@@ -1114,10 +1122,9 @@ mod tests {
             check_system_performance(config, cpu),
             Some((
                 "system_cpu_overloaded",
-                "system cpu overloaded (current: 90.5%, threshold: 90%)".to_owned()
+                "system cpu overloaded (current: 91.0%, threshold: 90%)".to_owned()
             ))
         );
-        // int(status.CPUUsage) == threshold does not trip (strictly greater).
         let boundary = SystemStatus {
             cpu_usage: 90.0,
             memory_usage: 0.0,
@@ -1182,7 +1189,9 @@ mod tests {
     fn geo_block_setting_normalises_and_blocks() {
         let mut setting = GeoBlockSetting::default();
         assert!(setting.blocks_country("CN"));
-        assert!(setting.blocks_country("cn"));
+        // Go's BlocksCountry compares verbatim; the upper-casing happens in
+        // geoip.LookupCountry, so a lower-case country does not match.
+        assert!(!setting.blocks_country("cn"));
         assert!(!setting.blocks_country(""));
         assert!(!setting.blocks_country("US"));
         setting.blocked_countries = vec![" cn ", "CN", "jp", ""]
